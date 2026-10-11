@@ -64,11 +64,22 @@ export function SearchSpotlight({ spaceId }: SearchSpotlightProps) {
     }
   }, [debouncedSearchQuery, isLoading, isError]);
 
-  const resultItems = (searchResults || []).map((result) => (
+  const resultItems = (searchResults?.items || []).map((result) => (
     <SearchResultItem
       key={result.id}
       result={result}
       isAttachmentResult={filters.contentType === "attachment"}
+      showSpace={!filters.spaceId}
+    />
+  ));
+
+  // #701: semantically similar pages that do NOT match the query — shown apart
+  // from the matches and never counted as results.
+  const relatedItems = (searchResults?.related || []).map((result) => (
+    <SearchResultItem
+      key={result.id}
+      result={result}
+      isAttachmentResult={false}
       showSpace={!filters.spaceId}
     />
   ));
@@ -135,6 +146,15 @@ export function SearchSpotlight({ spaceId }: SearchSpotlightProps) {
           )}
 
           {resultItems.length > 0 && <>{resultItems}</>}
+
+          {relatedItems.length > 0 && (
+            <>
+              <Text size="xs" c="dimmed" px="sm" pt="sm" pb={4}>
+                {t("Similar pages")}
+              </Text>
+              {relatedItems}
+            </>
+          )}
         </Spotlight.ActionsList>
       </Spotlight.Root>
     </>

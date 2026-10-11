@@ -67,13 +67,16 @@ export class SearchSemanticDto {
 }
 
 // The paginated envelope (A5). `total` is the permission-filtered count of the
-// candidate UNION (lexical ∪ vector top-N, fail-closed) — a deliberate, #530
-// documented change from Phase A's exact-lexical count (on a semantic degrade it
-// falls back to exactly that lexical count). `hasMore` is true when more results
-// exist WITHIN the fusion window; `truncatedAtCap` signals the match set exceeded
+// LEXICAL matches (fail-closed, #701) — pages that actually match the query; the
+// vector arm only re-ranks them. `hasMore` is true when more results exist WITHIN
+// the fusion window; `truncatedAtCap` signals the match set exceeded
 // CANDIDATE_CAP and the tail is unreachable by pagination.
 export class SearchResponseDto {
   items: SearchResultDto[];
+  // #701 — vector-only semantic neighbours: NOT matches, never counted in
+  // `total`, permission-filtered, returned on the first page only (offset 0),
+  // at most 5.
+  related: SearchResultDto[];
   total: number;
   hasMore: boolean;
   truncatedAtCap: boolean;

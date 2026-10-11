@@ -91,6 +91,9 @@ function getVectorStatementTimeoutMs(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 2000;
 }
 
+// #701: the most vector-only neighbours returned as `related` (first page only).
+const RELATED_LIMIT = 5;
+
 @Injectable()
 export class SearchService {
   private readonly logger = new Logger(SearchService.name);
@@ -281,6 +284,7 @@ export class SearchService {
 
     const empty = (reason?: string): SearchResponseDto => ({
       items: [],
+      related: [],
       total: 0,
       hasMore: false,
       truncatedAtCap: false,
@@ -460,21 +464,23 @@ export class SearchService {
         }
       }
     }
-    // --- Ranked candidate ids (ALL matches, RRF order). -----------------------
+    // --- Ranked candidate ids (ALL candidates, RRF order). --------------------
     // Lexical branches ranked SEPARATELY (FTS by ts_rank_cd, substring by tier);
     // when a query vector is available a third VECTOR branch is fused over the
     // UNION of lexical + vector candidates. RRF: score = Σ w/(k + rank_branch).
     // Deterministic ORDER BY rrf DESC, id so pagination never dupes/skips (A4,
-    // acceptance #8). `total` is thus the union size (lexical ∪ vector top-N),
-    // post-permission-filter — a documented change from Phase A's exact lexical
-    // count (#530). On degrade the query is byte-identical to Phase A.
+    // acceptance #8). Each id carries `lexical` — whether the page actually
+    // matches the query. #701: only those are matches (`items`/`total`); the
+    // vector arm re-ranks them via RRF, while vector-only neighbours go to
+    // `related` and are never counted. On degrade the query is byte-identical to
+    // Phase A.
     //
     // The fused query is bounded by a per-statement timeout (see runRankedQuery):
     // if the brute-force vector scan is cancelled (SQLSTATE 57014) we degrade to
     // the byte-identical lexical path — search returns lexical results, never
     // hangs, never 500s. Only the timeout is caught here; any OTHER SQL error
     // propagates. The permission filter below stays outside, unchanged.
-    let orderedIds: string[];
+    let orderedIds: { id: string; lexical: boolean }[];
     try {
       orderedIds = await this.runRankedQuery(
         candidateSql,
@@ -541,14 +547,19 @@ export class SearchService {
     // permission-filtered by getPageAndDescendantsExcludingRestricted.
     if (opts.userId && scope.kind === 'spaces' && orderedIds.length > 0) {
       const accessible = await this.pagePermissionRepo.filterAccessiblePageIds({
-        pageIds: orderedIds,
+        pageIds: orderedIds.map((r) => r.id),
         userId: opts.userId,
         spaceId: searchParams.spaceId,
         workspaceId: opts.workspaceId,
       });
       const accessibleSet = new Set(accessible);
-      orderedIds = orderedIds.filter((id) => accessibleSet.has(id));
+      orderedIds = orderedIds.filter((r) => accessibleSet.has(r.id));
     }
+
+    // #701 — split the permitted ids: lexical matches vs vector-only neighbours.
+    // Both keep RRF order; for the neighbours that equals vec_distance order.
+    const matchIds = orderedIds.filter((r) => r.lexical).map((r) => r.id);
+    const relatedIds = orderedIds.filter((r) => !r.lexical).map((r) => r.id);
 
     // W1 — CANDIDATE_CAP bounds pagination REACHABILITY (JS-side), NOT query
     // compute. The `ranked` CTE deliberately has no SQL LIMIT: an exact `total`
@@ -559,16 +570,20 @@ export class SearchService {
     // reachable window afterwards (rows past it are unreachable → truncatedAtCap).
     // Accepted for the small-tenant fork target — do NOT convert `cap` into a SQL
     // LIMIT thinking it bounds compute; it does not, and doing so breaks the exact
-    // total contract (acceptance #8/#11).
-    const total = orderedIds.length;
+    // total contract (acceptance #8/#11). `total` counts the permitted LEXICAL
+    // matches only (#701) — vector-only neighbours never enter it.
+    const total = matchIds.length;
     const truncatedAtCap = total > cap;
-    const window = orderedIds.slice(0, cap);
+    const window = matchIds.slice(0, cap);
     const pageIds = window.slice(offset, offset + limit);
     const hasMore = offset + pageIds.length < window.length;
+    const relatedPageIds =
+      offset === 0 ? relatedIds.slice(0, RELATED_LIMIT) : [];
 
-    if (pageIds.length === 0) {
+    if (pageIds.length === 0 && relatedPageIds.length === 0) {
       return {
         items: [],
+        related: [],
         total,
         hasMore,
         truncatedAtCap,
@@ -578,12 +593,21 @@ export class SearchService {
       };
     }
 
-    // --- Detail fetch for the page slice only (ts_headline/snippet are costly, so
-    //     compute them ONLY for the returned rows), preserving RRF order. -------
-    const items = await this.fetchDetails(pageIds, parsed, titleOnly);
+    // --- Detail fetch for the page slice + the related neighbours only
+    //     (ts_headline/snippet are costly, so compute them ONLY for the returned
+    //     rows) in one call, preserving RRF order, then split. ---------------
+    const details = await this.fetchDetails(
+      [...pageIds, ...relatedPageIds],
+      parsed,
+      titleOnly,
+    );
+    const pageIdSet = new Set(pageIds);
+    const items = details.filter((d) => pageIdSet.has(d.id));
+    const related = details.filter((d) => !pageIdSet.has(d.id));
 
     return {
       items,
+      related,
       total,
       hasMore,
       truncatedAtCap,
@@ -594,7 +618,8 @@ export class SearchService {
   }
 
   /**
-   * Run the ranked-candidate-ids query and return the ids in RRF order (#530).
+   * Run the ranked-candidate-ids query and return the ids in RRF order (#530),
+   * each flagged `lexical` when the page actually matches the query (#701).
    *
    * When `vectorArm` is null (degrade / semantic off / no query vector) this runs
    * the BYTE-IDENTICAL Phase-A 2-branch lexical query — the semantic layer must
@@ -606,14 +631,16 @@ export class SearchService {
    * per-branch row_number; the final ORDER BY fuses the three legs with RRF,
    * adding the vector leg ONLY for rows that have a vec_distance (a lexical-only
    * hit contributes 0 to the vector leg, and vice-versa). W_VEC weights the
-   * vector leg.
+   * vector leg. A row is `lexical` when it came from the lexical arm, i.e. passed
+   * the match predicate; every row of the lexical-only path is lexical by
+   * construction.
    */
   private async runRankedQuery(
     candidateSql: RawBuilder<unknown>,
     parsed: ParsedQuery,
     titleOnly: boolean,
     vectorArm: RawBuilder<unknown> | null,
-  ): Promise<string[]> {
+  ): Promise<{ id: string; lexical: boolean }[]> {
     if (!vectorArm) {
       // Phase-A lexical path — DO NOT change (byte-identical on degrade, #529).
       const rankedRows = await sql<{ id: string }>`
@@ -637,7 +664,7 @@ export class SearchService {
           + (CASE WHEN sub_tier IS NOT NULL THEN 1.0/(${RRF_K} + rn_sub) ELSE 0 END) DESC,
           id ASC
       `.execute(this.db);
-      return rankedRows.rows.map((r) => r.id);
+      return rankedRows.rows.map((r) => ({ id: r.id, lexical: true }));
     }
 
     // #530 fused 3-branch RRF over lexical ∪ vector candidates. The lexical arm
@@ -656,7 +683,7 @@ export class SearchService {
       await sql`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`.execute(
         trx,
       );
-      const rankedRows = await sql<{ id: string }>`
+      const rankedRows = await sql<{ id: string; lexical: boolean }>`
         WITH candidates AS (
           (SELECT pages.id AS id,
                   ${this.ftsScoreExpr(parsed)} AS fts_score,
@@ -671,18 +698,23 @@ export class SearchService {
           SELECT id,
                  MAX(fts_score) AS fts_score,
                  MAX(sub_tier) AS sub_tier,
-                 MIN(vec_distance) AS vec_distance
+                 MIN(vec_distance) AS vec_distance,
+                 -- #701: only the lexical arm emits a NULL vec_distance, so this
+                 -- marks pages that passed candidateSql (the real match
+                 -- predicate) — including +required-only queries, whose
+                 -- fts_score/sub_tier stay NULL because they score positives only.
+                 bool_or(vec_distance IS NULL) AS lexical
           FROM candidates
           GROUP BY id
         ),
         ranked AS (
-          SELECT id, fts_score, sub_tier, vec_distance,
+          SELECT id, fts_score, sub_tier, vec_distance, lexical,
                  row_number() OVER (ORDER BY fts_score DESC NULLS LAST, id) AS rn_fts,
                  row_number() OVER (ORDER BY sub_tier DESC NULLS LAST, id) AS rn_sub,
                  row_number() OVER (ORDER BY vec_distance ASC NULLS LAST, id) AS rn_vec
           FROM agg
         )
-        SELECT id
+        SELECT id, lexical
         FROM ranked
         ORDER BY
           (CASE WHEN fts_score IS NOT NULL THEN 1.0/(${RRF_K} + rn_fts) ELSE 0 END)
@@ -690,7 +722,7 @@ export class SearchService {
           + (CASE WHEN vec_distance IS NOT NULL THEN ${wVec}::float/(${RRF_K} + rn_vec) ELSE 0 END) DESC,
           id ASC
       `.execute(trx);
-      return rankedRows.rows.map((r) => r.id);
+      return rankedRows.rows.map((r) => ({ id: r.id, lexical: r.lexical }));
     });
   }
 

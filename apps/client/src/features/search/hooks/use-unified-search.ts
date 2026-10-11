@@ -15,7 +15,10 @@ export interface UseUnifiedSearchParams extends IPageSearchParams {
 export function useUnifiedSearch(
   params: UseUnifiedSearchParams,
   enabled: boolean = true,
-): UseQueryResult<UnifiedSearchResult[], Error> {
+): UseQueryResult<
+  { items: UnifiedSearchResult[]; related: IPageSearch[] },
+  Error
+> {
   return useQuery({
     queryKey: ["unified-search", "page", params],
     queryFn: async () => {
