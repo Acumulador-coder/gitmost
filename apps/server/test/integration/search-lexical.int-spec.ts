@@ -18,8 +18,9 @@ import {
  * Covers every acceptance criterion of the issue: RU+EN morphology + OR default,
  * match=auto identifier routing, "phrase"/+/- operators, RRF ordering, exact
  * permission-filtered total (fail-closed) + pagination, only-negation / garbage
- * short-circuits, the A8 path fix, the response superset, and the RAG lockstep
- * config (acceptance #13).
+ * short-circuits, the A8 path fix and the response superset. (Acceptance #13,
+ * the RAG lockstep config of page_embeddings.fts, went away with the column in
+ * migration 20261011T120000.)
  *
  * The tsv column is populated by the pages_tsvector_trigger (now ru_en), so the
  * FTS branch is exercised end to end.
@@ -458,31 +459,6 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
     expect('score' in hit).toBe(true);
     // FTS hit carries a non-null rank + highlight.
     expect(hit.rank).not.toBeNull();
-  });
-
-  // 13. RAG lockstep: the page_embeddings.fts generated column is ru_en.
-  it('#13 page_embeddings.fts uses ru_en (cyrillic stemming) — RAG lockstep', async () => {
-    const pageId = await insertPage({
-      title: 'rag страница',
-      textContent: 'ресторанов много',
-    });
-    // Insert a chunk row; the generated fts column is computed by Postgres.
-    await sql`
-      INSERT INTO page_embeddings
-        (id, page_id, workspace_id, space_id, attachment_id, chunk_index,
-         chunk_start, chunk_length, content, model_name, model_dimensions, embedding)
-      VALUES
-        (${randomUUID()}, ${pageId}, ${workspaceId}, ${spaceId}, NULL, 0,
-         0, 20, ${'ресторанов москвы много'}, 'test-model', 3, '[0.1,0.2,0.3]'::vector)
-    `.execute(db);
-    // A ru_en query stems «москва» → «москв», matching the stored «москвы».
-    // Under the old `english` config the cyrillic word would not stem and this
-    // inflected-form query would miss — so this asserts the ru_en lockstep.
-    const row = await sql<{ m: boolean }>`
-      SELECT fts @@ to_tsquery('ru_en', f_unaccent('москва')) AS m
-      FROM page_embeddings WHERE page_id = ${pageId}
-    `.execute(db);
-    expect(row.rows[0].m).toBe(true);
   });
 
   // W4 — substring-tier dominance under RRF: title-exact (tier 3) > title-
