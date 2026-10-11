@@ -15,7 +15,7 @@ import {
 
 export function usePageSearchQuery(
   params: IPageSearchParams,
-): UseQueryResult<IPageSearch[], Error> {
+): UseQueryResult<{ items: IPageSearch[]; related: IPageSearch[] }, Error> {
   return useQuery({
     queryKey: ["page-search", params],
     queryFn: () => searchPage(params),

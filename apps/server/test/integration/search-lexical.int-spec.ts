@@ -716,9 +716,11 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
   // leak across tests.
   describe('#530 semantic fusion', () => {
     // 1. Vector-only hit: nearest to a page that has NO lexical match for the
-    //    query term — it appears via the vector arm, and a pure-lexical run does
-    //    not return it. Mutation (a): drop the vector arm -> this reddens.
-    it('#530-1 a vector-only hit appears; a pure-lexical run would not return it', async () => {
+    //    query term — it surfaces via the vector arm as a `related` neighbour,
+    //    NOT as a match (#701): not in items, not counted in total. A
+    //    pure-lexical run does not return it at all. Mutation (a): drop the
+    //    vector arm -> this reddens.
+    it('#530-1 a vector-only hit is a related neighbour, not a match (total 0)', async () => {
       const s = (await createSpace(db, workspaceId)).id;
       const page = await insertPage({
         title: 'нейтральный вект заголовок',
@@ -729,7 +731,9 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
 
       const svc = buildService({ embedVector: conceptVec(1), userSpaceIds: [s] });
       const res = await search(svc, { query: 'квазонимикс', spaceId: s });
-      expect(res.items.map((i: any) => i.id)).toContain(page);
+      expect(res.items.map((i: any) => i.id)).not.toContain(page);
+      expect(res.related.map((i: any) => i.id)).toContain(page);
+      expect(res.total).toBe(0);
       expect(res.semantic.available).toBe(true);
       expect(res.semantic.state).toBe('full');
 
@@ -737,6 +741,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       const lex = buildService({ userSpaceIds: [s] });
       const res2 = await search(lex, { query: 'квазонимикс', spaceId: s });
       expect(res2.items.map((i: any) => i.id)).not.toContain(page);
+      expect(res2.related.map((i: any) => i.id)).not.toContain(page);
       expect(res2.semantic.available).toBe(false);
     });
 
@@ -783,10 +788,11 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
     });
 
     // 4. Permission over the union: a restricted vector-only hit is dropped from
-    //    items AND total; with the permission filter throwing the call rejects
-    //    (fail-closed, never fail-open). Mutation (b): move filterAccessiblePageIds
-    //    inside the semantic try/catch -> the reject assertion reddens.
-    it('#530-4 permission filters a vector-only hit from items AND total (fail-closed)', async () => {
+    //    `related` (and never reaches items/total); with the permission filter
+    //    throwing the call rejects (fail-closed, never fail-open). Mutation (b):
+    //    move filterAccessiblePageIds inside the semantic try/catch -> the reject
+    //    assertion reddens.
+    it('#530-4 permission filters a vector-only hit from related, items AND total (fail-closed)', async () => {
       const s = (await createSpace(db, workspaceId)).id;
       const visibleLex = await insertPage({
         title: 'семчетмаркер видимый',
@@ -810,9 +816,19 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       const ids = res.items.map((i: any) => i.id);
       expect(ids).toContain(visibleLex);
       expect(ids).not.toContain(hiddenVec);
+      expect(res.related.map((i: any) => i.id)).not.toContain(hiddenVec);
       // The hidden vector hit does not leak into total either.
       expect(res.total).toBe(1);
       expect(ids).toHaveLength(res.total);
+
+      // Control: without the restriction the same page IS a related neighbour,
+      // so the absence above is the permission filter's doing.
+      const open = buildService({
+        embedVector: conceptVec(4),
+        userSpaceIds: [s],
+      });
+      const resOpen = await search(open, { query: 'семчетмаркер', spaceId: s });
+      expect(resOpen.related.map((i: any) => i.id)).toContain(hiddenVec);
 
       // A permission-query error PROPAGATES (never a fail-open empty result).
       const boom = buildService({
@@ -860,6 +876,8 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       const ids = res.items.map((i: any) => i.id);
       expect(ids.filter((id: string) => id === both)).toHaveLength(1);
       expect(res.total).toBe(1);
+      // #701: a real match is never also listed as a related neighbour.
+      expect(res.related.map((i: any) => i.id)).not.toContain(both);
     });
 
     // 7. Fingerprint isolation: a planted row under a DIFFERENT fingerprint is not
@@ -877,6 +895,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       const svc = buildService({ embedVector: conceptVec(7), userSpaceIds: [s] });
       const res = await search(svc, { query: 'квазонимиксseven', spaceId: s });
       expect(res.items.map((i: any) => i.id)).not.toContain(stale);
+      expect(res.related.map((i: any) => i.id)).not.toContain(stale);
     });
 
     // 8. Stale embedding space_id (moved page): a page currently in space B whose
@@ -904,8 +923,9 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
         query: 'квазонимиксeight',
         spaceId: newSpace,
       });
-      // Survives despite page_embeddings.space_id (oldSpace) != pages.space_id.
-      expect(res.items.map((i: any) => i.id)).toContain(page);
+      // Survives despite page_embeddings.space_id (oldSpace) != pages.space_id —
+      // as a related neighbour, since it does not match the query (#701).
+      expect(res.related.map((i: any) => i.id)).toContain(page);
       expect(res.semantic.available).toBe(true);
     });
 
@@ -944,6 +964,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
         const ids = res.items.map((i: any) => i.id);
         expect(ids).toContain(lexHit);
         expect(ids).not.toContain(vecOnly);
+        expect(res.related.map((i: any) => i.id)).not.toContain(vecOnly);
         expect(res.semantic.available).toBe(false);
         expect(res.semantic.reason).toBe('degraded');
         expect(warnSpy).toHaveBeenCalledWith(
@@ -1026,6 +1047,111 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       } finally {
         delete process.env.SEARCH_VECTOR_STATEMENT_TIMEOUT_MS;
       }
+    });
+
+    // #701 — search can say "not found": a nonsense query matches nothing, so
+    // items/total/hasMore report exactly that even with the semantic arm up; the
+    // nearest page rides along only as a `related` neighbour, on page 1 only.
+    it('#701 a nonsense query reports no matches; the neighbour is related on the first page only', async () => {
+      const s = (await createSpace(db, workspaceId)).id;
+      const neighbour = await insertPage({
+        title: 'нейтральный сосед заголовок',
+        textContent: 'содержимое без искомого термина',
+        spaceId: s,
+      });
+      await plantEmbedding(neighbour, conceptVec(12), ACTIVE_FP, s);
+
+      const svc = buildService({ embedVector: conceptVec(12), userSpaceIds: [s] });
+      const res = await search(svc, { query: 'зюквалфорпыщ', spaceId: s });
+      expect(res.semantic.available).toBe(true);
+      expect(res.items).toEqual([]);
+      expect(res.total).toBe(0);
+      expect(res.hasMore).toBe(false);
+      expect(res.related.map((i: any) => i.id)).toContain(neighbour);
+
+      // Past the first page there are no neighbours at all.
+      const next = await search(svc, {
+        query: 'зюквалфорпыщ',
+        spaceId: s,
+        offset: 1,
+      });
+      expect(next.related).toEqual([]);
+    });
+
+    // #701 — a lexical hit plus a vector-only neighbour: `total` counts the
+    // match only, `items` holds only the match, the neighbour is in `related`.
+    it('#701 a lexical hit + a vector-only neighbour: total counts the hit only', async () => {
+      const s = (await createSpace(db, workspaceId)).id;
+      const hit = await insertPage({
+        title: 'семтринадцатьмаркер лексический',
+        textContent: 'обычный текст',
+        spaceId: s,
+      });
+      const neighbour = await insertPage({
+        title: 'нейтральный тринадцать заголовок',
+        textContent: 'без искомого термина',
+        spaceId: s,
+      });
+      await plantEmbedding(neighbour, conceptVec(13), ACTIVE_FP, s);
+
+      const svc = buildService({ embedVector: conceptVec(13), userSpaceIds: [s] });
+      const res = await search(svc, { query: 'семтринадцатьмаркер', spaceId: s });
+      expect(res.semantic.available).toBe(true);
+      expect(res.total).toBe(1);
+      expect(res.items.map((i: any) => i.id)).toEqual([hit]);
+      expect(res.related.map((i: any) => i.id)).toContain(neighbour);
+    });
+
+    // #701 — a +required-only query scores no positives (fts_score/sub_tier stay
+    // NULL), yet its matches are still matches with the semantic arm up: the
+    // lexical flag comes from the arm a row came from, not from its scores.
+    it('#701 a +required-only query keeps its matches with the semantic arm up', async () => {
+      const s = (await createSpace(db, workspaceId)).id;
+      const hit = await insertPage({
+        title: 'семчетырнадцатьмаркер лексический',
+        textContent: 'обычный текст',
+        spaceId: s,
+      });
+      const neighbour = await insertPage({
+        title: 'нейтральный четырнадцать заголовок',
+        textContent: 'без искомого термина',
+        spaceId: s,
+      });
+      await plantEmbedding(neighbour, conceptVec(14), ACTIVE_FP, s);
+
+      const svc = buildService({ embedVector: conceptVec(14), userSpaceIds: [s] });
+      const res = await search(svc, { query: '+семчетырнадцатьмаркер', spaceId: s });
+      expect(res.semantic.available).toBe(true);
+      expect(res.items.map((i: any) => i.id)).toEqual([hit]);
+      expect(res.total).toBe(1);
+      expect(res.related.map((i: any) => i.id)).toContain(neighbour);
+    });
+
+    // #701 — `related` is budgeted: six vector-only neighbours, five returned,
+    // nearest first (the vector arm returns all six; the cut is the service's).
+    it('#701 related is capped at 5, nearest neighbour first', async () => {
+      const s = (await createSpace(db, workspaceId)).id;
+      const nearest = await insertPage({
+        title: 'нейтральный пятнадцать ближайший',
+        textContent: 'без искомого термина',
+        spaceId: s,
+      });
+      await plantEmbedding(nearest, conceptVec(15), ACTIVE_FP, s);
+      // Five farther neighbours: orthogonal concepts, cosine distance 1.
+      for (let c = 16; c < 21; c++) {
+        const far = await insertPage({
+          title: `нейтральный дальний ${c}`,
+          textContent: 'без искомого термина',
+          spaceId: s,
+        });
+        await plantEmbedding(far, conceptVec(c), ACTIVE_FP, s);
+      }
+
+      const svc = buildService({ embedVector: conceptVec(15), userSpaceIds: [s] });
+      const res = await search(svc, { query: 'зюквалпятнадцать', spaceId: s });
+      expect(res.total).toBe(0);
+      expect(res.related).toHaveLength(5);
+      expect(res.related[0].id).toBe(nearest);
     });
   });
 });

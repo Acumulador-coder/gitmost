@@ -466,7 +466,12 @@ server.registerTool(
       "`total` (exact, permission-filtered), `hasMore` and `truncatedAtCap`. " +
       "NOTE: results past the relevance cap (~500) are unreachable by " +
       "pagination — narrow the query (add terms / +required / a spaceId) " +
-      "instead when `truncatedAtCap` is true.",
+      "instead when `truncatedAtCap` is true. `items`/`total` hold only pages " +
+      "that actually match (`total: 0` = nothing matches); `related` lists " +
+      "semantically similar pages that do NOT match the query (operators are " +
+      "not applied to them; they may still mention some terms) — not proof " +
+      "the topic is covered, but check them as possible duplicates before " +
+      "creating a page.",
     inputSchema: {
       query: z.string().min(1).describe("Search query (supports \"phrase\", +require, -exclude)"),
       spaceId: z

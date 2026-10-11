@@ -825,6 +825,9 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
       const envelope = Array.isArray(data) ? undefined : data;
       return {
         items: filteredItems,
+        related: (Array.isArray(envelope?.related) ? envelope.related : []).map(
+          filterSearchResult,
+        ),
         total: envelope?.total,
         hasMore: envelope?.hasMore,
         truncatedAtCap: envelope?.truncatedAtCap,
