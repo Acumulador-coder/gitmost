@@ -38,7 +38,7 @@ import { AiEmbeddingNotConfiguredException } from './ai-embedding-not-configured
  * owns the pointer). Old generations are reclaimed by an idempotent generational
  * GC capped at 2 live generations.
  *
- * Everything here is workspace-scoped and driver-agnostic (SEARCH_DRIVER=database).
+ * Everything here is workspace-scoped.
  */
 
 /**

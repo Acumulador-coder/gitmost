@@ -31,8 +31,6 @@ export enum QueueJob {
   IMPORT_TASK = 'import-task',
   EXPORT_TASK = 'export-task',
 
-  TYPESENSE_FLUSH = 'typesense-flush',
-
   PAGE_CREATED = 'page-created',
   PAGE_CONTENT_UPDATED = 'page-content-updated',
   PAGE_MOVED_TO_SPACE = 'page-moved-to-space',

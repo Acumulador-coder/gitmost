@@ -145,7 +145,7 @@ export class EmbeddingIndexerService {
 
     // Prefer heading-breadcrumb chunks: each chunk is prefixed with its heading
     // path ("Page Title > H1 > H2") so the breadcrumb is embedded AND stored in
-    // `content` (feeding the fts column and the agent's snippet). Walk the
+    // `content`. Walk the
     // ProseMirror JSON — NOT the markdown text — so a `#` inside a fenced code
     // block is never mistaken for a heading. Degrades to the plain-text path on
     // any error / unknown structure (returns null).

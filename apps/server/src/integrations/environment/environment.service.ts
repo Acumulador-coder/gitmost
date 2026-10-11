@@ -409,28 +409,6 @@ export class EnvironmentService {
     return this.configService.get<string>('POSTHOG_KEY');
   }
 
-  getSearchDriver(): string {
-    return this.configService
-      .get<string>('SEARCH_DRIVER', 'database')
-      .toLowerCase();
-  }
-
-  getTypesenseUrl(): string {
-    return this.configService
-      .get<string>('TYPESENSE_URL', 'http://localhost:8108')
-      .toLowerCase();
-  }
-
-  getTypesenseApiKey(): string {
-    return this.configService.get<string>('TYPESENSE_API_KEY');
-  }
-
-  getTypesenseLocale(): string {
-    return this.configService
-      .get<string>('TYPESENSE_LOCALE', 'en')
-      .toLowerCase();
-  }
-
   // NOTE: AI_*/OPENAI_*/GEMINI_*/OLLAMA_* env getters were removed (D8/§14[M3]):
   // provider/model/key config now lives solely in workspace settings +
   // ai_provider_credentials, with no env fallback. APP_SECRET stays (getAppSecret).
