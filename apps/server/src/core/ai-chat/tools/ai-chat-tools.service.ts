@@ -1,14 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { tool, type Tool, type ToolCallOptions } from 'ai';
 import { z } from 'zod';
 import { User } from '@docmost/db/types/entity.types';
 import { TokenService } from '../../auth/services/token.service';
 import { AiService } from '../../../integrations/ai/ai.service';
-import { EmbeddingGenerationService } from '../../../integrations/ai/embedding-generation.service';
-import { AiEmbeddingNotConfiguredException } from '../../../integrations/ai/ai-embedding-not-configured.exception';
-import { PageEmbeddingRepo } from '@docmost/db/repos/ai-chat/page-embedding.repo';
-import { SpaceMemberRepo } from '@docmost/db/repos/space/space-member.repo';
-import { PagePermissionRepo } from '@docmost/db/repos/page/page-permission.repo';
+import { SearchService } from '../../search/search.service';
+import { SearchDTO } from '../../search/dto/search.dto';
+import type { SearchResultDto } from '../../search/dto/search-response.dto';
 import {
   loadDocmostMcp,
   type DocmostClientLike,
@@ -56,7 +54,6 @@ function __assertClientCallContract(client: DocmostClientLike): void {
   const align = undefined as 'left' | 'center' | 'right' | undefined;
 
   // --- read ---
-  void client.search(s, undefined, n);
   void client.getPage(s);
   void client.getPageRaw(s);
   void client.getWorkspace();
@@ -590,20 +587,14 @@ export async function runViewImage(
 
 @Injectable()
 export class AiChatToolsService {
-  private readonly logger = new Logger(AiChatToolsService.name);
-
   constructor(
     private readonly tokenService: TokenService,
     private readonly aiService: AiService,
-    private readonly pageEmbeddingRepo: PageEmbeddingRepo,
-    private readonly spaceMemberRepo: SpaceMemberRepo,
-    private readonly pagePermissionRepo: PagePermissionRepo,
+    // The shared search engine backing the searchPages tool (same engine as the
+    // web search and the MCP `search`).
+    private readonly searchService: SearchService,
     // Shared singleton in-RAM blob store backing the stash tool.
     private readonly sandboxStore: SandboxStore,
-    // #599: resolves the ACTIVE embedding generation, so the RAG read stays in
-    // lockstep with SearchService's vector arm (both serve the active fingerprint,
-    // never a half-built target one).
-    private readonly embeddingGeneration: EmbeddingGenerationService,
     // #629: mirrors DRAWIO_RASTER_ENABLED. Gates only the loud "no raster yet"
     // remediation in viewImage's drawio branch — with generation ON the advice is
     // actionable, so a captionless resvg fallback is refused; with generation OFF
@@ -784,28 +775,36 @@ export class AiChatToolsService {
       });
 
     // The in-app toolset. It starts with the tools kept INLINE here for a
-    // documented per-layer reason: an intentional behaviour/schema divergence from
-    // the standalone MCP surface (searchPages' hybrid RRF,
-    // transformPage's guardrailed shorter schema), a name clash the shared
+    // documented per-layer reason: an intentional schema divergence from the
+    // standalone MCP surface (searchPages' tuned 1-20 limit and
+    // results/related/total shape, transformPage's guardrailed shorter schema),
+    // a name clash the shared
     // registry forbids (in-app `getTable` verb-first vs the MCP noun-first
     // `tableGet` — the registry requires mcpName === inAppKey), per-request
     // state the registry loop cannot provide
-    // (getCurrentPage reads the resolved openedPage; searchPages closes over the
-    // per-request user/embedding deps), or a tool with no MCP twin
+    // (getCurrentPage reads the resolved openedPage; searchPages calls the
+    // in-process SearchService as the requesting user), or a tool with no MCP twin
     // (listSidebarPages/getComment/getPageHistory). Every SHARED tool is then added
     // by the registry loop below (see it), so there is exactly one arg-mapping per
     // shared tool and it can never drift from the MCP host again (#445).
     const tools: Record<string, Tool> = {
-      // INTENTIONAL per-transport divergence (not in the shared registry): this
-      // in-app search runs a semantic + keyword hybrid (RRF) with in-process
-      // access control and a tuned schema (limit 1-20); the standalone MCP
-      // `search` is a plain REST full-text search (limit up to 100). Different
-      // behaviour AND schema, so kept per-layer.
+      // Not in the shared registry: this in-app search runs the SAME engine as
+      // the web search and the MCP `search` (the in-process SearchService,
+      // called as the requesting user, which scopes it to the user's spaces and
+      // applies the page-permission filter), but with a tuned schema (limit
+      // 1-20) and a compact { results, related, total } output; the standalone
+      // MCP `search` exposes the full envelope (limit up to 50, pagination).
+      // Different schema, so kept per-layer.
       searchPages: tool({
         description:
-          'Search the wiki for pages relevant to a query. Combines exact ' +
-          'keyword/identifier matching with semantic meaning and returns the ' +
-          'most relevant pages with a short snippet, best match first. ' +
+          'Search the wiki for pages that match a query. `results` holds ONLY ' +
+          'pages that actually match, best match first, each with a short ' +
+          'snippet; `total` is the number of matching pages. `total: 0` means ' +
+          'nothing matches — no page exists under these terms. `related` lists ' +
+          'semantically similar pages that do NOT match the query: check them ' +
+          'as possible duplicates before creating a page, but never cite them ' +
+          'as matches. Operators: "exact phrase", +required, -excluded (e.g. ' +
+          '`+invoice -archive`). ' +
           "Rephrase the user's question into a focused search query (key terms " +
           'and entities), not a full sentence. If the first results look weak ' +
           'or incomplete, search again with different wording or synonyms ' +
@@ -822,125 +821,31 @@ export class AiChatToolsService {
         }),
         execute: async ({ query, limit }) => {
           const trimmed = (query ?? '').trim();
-          if (!trimmed) return [];
+          if (!trimmed) return { results: [], related: [], total: 0 };
 
           const cap = limit ?? 10;
 
-          // Loopback REST full-text fallback. Used when AI search is not
-          // configured, embedding fails, there are no accessible spaces, or the
-          // hybrid query returns nothing — so keyword search always works.
-          const fallback = async () => {
-            // search(query, spaceId?, limit?) -> { items, success }.
-            // Items are filterSearchResult(): { id, title, highlight, ... }.
-            const result = await client.search(trimmed, undefined, cap);
-            const items = Array.isArray(result?.items) ? result.items : [];
-            // Keep the payload token-efficient: id + title + a short snippet.
-            return items.map((raw) => {
-              const item = raw as {
-                id?: string;
-                slugId?: string;
-                title?: string;
-                highlight?: string;
-              };
-              return {
-                id: item.id ?? item.slugId,
-                title: item.title ?? '',
-                snippet: snippet(item.highlight),
-              };
-            });
-          };
-
-          // HYBRID path: fuse semantic (vector) + lexical (full-text) rankings
-          // via RRF. Over-fetch candidates so the page-permission post-filter
-          // still leaves enough results.
-          const candidates = Math.min(Math.max(cap * 5, 50), 200);
-
-          // 1) Embed the query through the SAME funnel the search subsystem uses
-          //    (#571, #599): it resolves the active provider, applies its QUERY
-          //    prefix (so the query lives in the same prefixed space as the
-          //    indexer's passage-prefixed docs), and returns the fingerprint of the
-          //    ACTIVE generation — which we thread into hybridSearch so the vector
-          //    CTE only fuses against the generation that is actually being served
-          //    (never stale cross-provider vectors, and never the half-built TARGET
-          //    generation of an in-flight reindex: during a swap the active pointer
-          //    still names the OLD generation, so RAG keeps full recall exactly like
-          //    search does). Unconfigured embeddings (or any embedding error) routes
-          //    to the REST full-text fallback instead of erroring.
-          let queryVector: number[];
-          let fingerprint: string;
-          try {
-            const embedded =
-              await this.embeddingGeneration.embedQueryForActiveGeneration(
-                workspaceId,
-                trimmed,
-              );
-            if (!embedded?.vector) return await fallback();
-            // #599 (D2): the served generation was produced by a DIFFERENT model
-            // than the one that just embedded this query. Their vectors live in two
-            // independently trained spaces, so a cosine between them is noise and the
-            // RRF fusion would rank arbitrary pages above genuine lexical hits. Fall
-            // back to the REST full-text search (lexical only) until the reindex of
-            // the new model completes and the pointer flips — exactly what
-            // SearchService does with its vector arm.
-            if (embedded.generation.modelChanged) {
-              this.logger.warn(
-                `searchPages: embedding model changed (active=${
-                  embedded.generation.activeModel ?? 'unknown'
-                } config=${embedded.generation.targetModel}); the served generation is ` +
-                  `not comparable with the new model — falling back to full-text search ` +
-                  `until the reindex completes.`,
-              );
-              return await fallback();
-            }
-            queryVector = embedded.vector;
-            fingerprint = embedded.fingerprint;
-          } catch (err) {
-            if (!(err instanceof AiEmbeddingNotConfiguredException)) {
-              // Never leak provider/key details; log generically and fall back.
-              this.logger.warn(
-                `searchPages embed failed: ${
-                  err instanceof Error ? err.message : 'unknown error'
-                }`,
-              );
-            }
-            return await fallback();
-          }
-
-          // 2) ACCESS CONTROL: the hybrid query runs IN-PROCESS (a direct
-          //    pgvector + full-text query), so unlike the loopback REST tools it
-          //    does NOT get CASL for free. Scope to the spaces the user can read
-          //    (member spaces + groups), mirroring SearchService.searchPage. No
-          //    accessible spaces => fall back to REST (which is CASL-scoped).
-          const accessibleSpaceIds =
-            await this.spaceMemberRepo.getUserSpaceIds(user.id);
-          if (accessibleSpaceIds.length === 0) return await fallback();
-
-          // 3) Hybrid RRF retrieval, scoped to the workspace AND accessible
-          //    spaces.
-          const hits = await this.pageEmbeddingRepo.hybridSearch(
-            workspaceId,
-            queryVector,
-            trimmed,
-            accessibleSpaceIds,
-            candidates,
-            fingerprint,
+          // `userId` is what makes SearchService scope the search to the user's
+          // member spaces and run the page-permission filter (restricted pages
+          // never surface), so the agent can never see more than the user.
+          const response = await this.searchService.searchPage(
+            { query: trimmed, limit: cap } as SearchDTO,
+            { userId: user.id, workspaceId },
           );
-          if (hits.length === 0) return await fallback();
-
-          // 4) Page-level permission post-filter: an accessible space does not
-          //    imply every page in it is accessible (restricted pages). Mirror
-          //    SearchService.searchPage's filterAccessiblePageIds pass.
-          const pageIds = Array.from(new Set(hits.map((h) => h.pageId)));
-          const accessibleIds =
-            await this.pagePermissionRepo.filterAccessiblePageIds({
-              pageIds,
-              userId: user.id,
-            });
-          const accessibleSet = new Set(accessibleIds);
-
-          // Keep the best (first — hits are ordered by fused score desc) chunk
-          // per page, dropping any page the user cannot access, capped to `cap`.
-          return selectAccessibleHits(hits, accessibleSet, cap);
+          // Keep the payload token-efficient: id + title + a short snippet.
+          // `highlight` (ts_headline fragments around the match) shows WHY a
+          // page matched; `snippet` is only the page's leading text, so it is
+          // the fallback for substring-only hits and `related` (no highlight).
+          const toHit = (item: SearchResultDto) => ({
+            id: item.id,
+            title: item.title ?? '',
+            snippet: snippet(item.highlight ?? item.snippet),
+          });
+          return {
+            results: response.items.map(toHit),
+            related: response.related.map(toHit),
+            total: response.total,
+          };
         },
       }),
 
@@ -1210,7 +1115,7 @@ export class AiChatToolsService {
  *  - `execute` ALWAYS returns the RAW original result. In AI SDK v6 that raw
  *    value is what streams to the UI and is persisted as the tool part's
  *    `output` (see apps/client `toolCitations`, which reads `output.id/title`
- *    and the searchPages array DIRECTLY), so `output` stays byte-identical to
+ *    and the searchPages `results` DIRECTLY), so `output` stays byte-identical to
  *    the no-signal path and citations are never lost.
  *  - the signal instead rides a SEPARATE channel the model sees but `output`
  *    consumers do not: `toModelOutput`, which the SDK invokes only when building
@@ -1365,44 +1270,6 @@ export function wrapToolsWithCommentSignal(
     } as Tool;
   }
   return wrapped;
-}
-
-/** A single hybrid-search hit: the minimal shape selectAccessibleHits needs. */
-export interface SearchHitLike {
-  pageId: string;
-  title: string | null;
-  content: string;
-}
-
-/**
- * Post-filter hybrid-search hits into the agent-facing result list. This is the
- * CASL leak guard for the in-process hybrid search: the hits come from a direct
- * pgvector + full-text query that does NOT get CASL for free, so an accessible
- * SPACE does not imply every page in it is accessible (restricted pages).
- *
- * Given `hits` (ordered by fused score desc), the `accessibleSet` of page ids
- * the user may read, and `cap`, it keeps the BEST (first) chunk per page, drops
- * any page not in `accessibleSet`, and caps the output at `cap`. Pure — no I/O.
- */
-export function selectAccessibleHits(
-  hits: readonly SearchHitLike[],
-  accessibleSet: Set<string>,
-  cap: number,
-): { id: string; title: string; snippet: string }[] {
-  const seen = new Set<string>();
-  const results: { id: string; title: string; snippet: string }[] = [];
-  for (const hit of hits) {
-    if (!accessibleSet.has(hit.pageId)) continue;
-    if (seen.has(hit.pageId)) continue;
-    seen.add(hit.pageId);
-    results.push({
-      id: hit.pageId,
-      title: hit.title ?? '',
-      snippet: snippet(hit.content),
-    });
-    if (results.length >= cap) break;
-  }
-  return results;
 }
 
 /**

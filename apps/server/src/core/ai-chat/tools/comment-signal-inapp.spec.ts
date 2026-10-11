@@ -136,16 +136,20 @@ describe('wrapToolsWithCommentSignal (in-app non-destructive delivery)', () => {
 
   it('citations SURVIVE the signal path for searchPages and createPage', async () => {
     // The regression #417 Finding 1 guarded here: with the old { result,
-    // newCommentsSignal } wrapper, searchPages (array) and createPage (output.id)
+    // newCommentsSignal } wrapper, searchPages (output.results) and createPage (output.id)
     // lost their citations. The non-destructive delivery keeps part.output raw,
     // so the REAL client `toolCitations` yields identical links on the signal
     // path as on the no-signal path.
     const line =
       '[signal] new comments: 3 on page p9 — call listComments(pageId) for details';
-    const searchOut = [
-      { id: 'pa', title: 'Alpha', snippet: 's1' },
-      { id: 'pb', title: 'Beta', snippet: 's2' },
-    ];
+    const searchOut = {
+      results: [
+        { id: 'pa', title: 'Alpha', snippet: 's1' },
+        { id: 'pb', title: 'Beta', snippet: 's2' },
+      ],
+      related: [],
+      total: 2,
+    };
     const createOut = { id: 'pc', title: 'Gamma' };
     const wrapped = wrapToolsWithCommentSignal(
       {
@@ -307,12 +311,7 @@ describe('AiChatToolsService forUser + comment signal (real tracker)', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       { asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }) } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,

@@ -51,16 +51,6 @@ export interface PageEmbeddingSearchHit {
   distance: number;
 }
 
-/** A single hybrid (RRF-fused) search hit. Higher `score` is more relevant. */
-export interface PageEmbeddingHybridHit {
-  pageId: string;
-  spaceId: string;
-  title: string | null;
-  content: string;
-  // Fused Reciprocal Rank Fusion score (sum of 1/(k+rank) across CTEs).
-  score: number;
-}
-
 @Injectable()
 export class PageEmbeddingRepo {
   private readonly logger = new Logger(PageEmbeddingRepo.name);
@@ -109,9 +99,8 @@ export class PageEmbeddingRepo {
   /**
    * #599 GENERATIONAL GC: hard-delete every embedding row of this workspace whose
    * fingerprint is NOT one of `keep` — including legacy NULL-fingerprint rows,
-   * which are simply a very old generation (nothing serves them: both the search
-   * vector arm and the RAG hybrid CTE filter `fingerprint = $active`, and NULL
-   * never equals anything).
+   * which are simply a very old generation (nothing serves them: the search
+   * vector arm filters `fingerprint = $active`, and NULL never equals anything).
    *
    * Both call sites go through EmbeddingGenerationService.gcGenerations (which
    * adds the logging + coverage-cache invalidation): the indexer calls it at the
@@ -404,121 +393,6 @@ export class PageEmbeddingRepo {
       title: row.title,
       content: row.content,
       distance: Number(row.distance),
-    }));
-  }
-
-  /**
-   * HYBRID retrieval: fuse semantic (cosine) and lexical (full-text) chunk
-   * rankings with Reciprocal Rank Fusion (RRF). Scoped to a workspace AND the
-   * set of spaces the caller may read. Returns [] when `spaceIds` is empty.
-   *
-   * Two CTEs each rank chunks independently, then a FULL OUTER JOIN on the chunk
-   * `id` fuses them. RRF combines RANKS (not raw scores), so the cosine-distance
-   * and ts_rank scales never need normalizing — that is the whole point of RRF.
-   *
-   *   score = 1/(k + rank_semantic) + 1/(k + rank_lexical)
-   *
-   * with k = 60 (Cormack et al. 2009; the default in Elasticsearch, OpenSearch
-   * and Weaviate) and equal 1.0/1.0 weights as a starting point. `candidates`
-   * is both the per-CTE over-fetch limit and the final fused LIMIT.
-   *
-   * The `model_dimensions = $dim` AND `fingerprint = $fp` filters apply ONLY on
-   * the semantic side, mirroring `vectorCandidateArm` (the search subsystem's
-   * vector arm) EXACTLY so RAG reads the SAME same-generation invariant: `<=>`
-   * only ever fuses the query against current-generation, same-dimension vectors.
-   * Without the fingerprint filter, a cross-provider embedding transition (same
-   * 384-dim, different provider, no reindex) would silently fuse the query against
-   * STALE rows of a different generation and degrade cosine quality (#571). Both
-   * `model_dimensions` (pgvector errors on a dimension mismatch) and `fingerprint`
-   * (a mismatch fuses incomparable vectors) must therefore be filtered. The active
-   * `$fp`/`$dim` come from the SAME `AiService.embedQuery` the search path uses, so
-   * the read filters against exactly the generation the query vector was produced
-   * for. The lexical side (`fts`) is generation-independent and is left unchanged.
-   * Its query config is `ru_en`,
-   * matched IN LOCKSTEP with the `page_embeddings.fts` generated column's config
-   * (#529 acceptance #13): a mismatch silently breaks Cyrillic RAG retrieval. If
-   * `websearch_to_tsquery` yields an EMPTY query (e.g. the text is all stopwords)
-   * the `@@` matches
-   * nothing and the lexical CTE is empty, so results degrade to pure-semantic —
-   * which is correct behaviour, not an error.
-   *
-   * `fts` is a generated column accessed only here via raw SQL (deliberately not
-   * in the Kysely `PageEmbeddings` type — see migration 20260618T150000).
-   */
-  async hybridSearch(
-    workspaceId: string,
-    queryEmbedding: number[],
-    queryText: string,
-    spaceIds: string[],
-    // Per-CTE over-fetch AND the final fused LIMIT.
-    candidates: number,
-    // #571: the ACTIVE embedding fingerprint (from AiService.embedQuery, the same
-    // helper the search path threads into vectorCandidateArm). The semantic CTE
-    // filters `page_embeddings.fingerprint = $fp` so the query is only fused
-    // against current-generation rows — never stale cross-provider vectors.
-    fingerprint: string,
-  ): Promise<PageEmbeddingHybridHit[]> {
-    if (spaceIds.length === 0) return [];
-
-    const queryVector = sql`${pgvector.toSql(queryEmbedding)}::vector`;
-    const queryDim = queryEmbedding.length;
-    const spaceList = sql.join(
-      spaceIds.map((s) => sql`${s}`),
-      sql`, `,
-    );
-
-    const result = await sql<{
-      pageId: string;
-      spaceId: string;
-      title: string | null;
-      content: string;
-      score: number;
-    }>`
-      WITH semantic AS (
-        SELECT pe.id, pe.page_id, pe.space_id, pe.content, p.title,
-               row_number() OVER (ORDER BY pe.embedding <=> ${queryVector}) AS rank_ix
-        FROM page_embeddings pe
-        JOIN pages p ON p.id = pe.page_id
-        WHERE pe.workspace_id = ${workspaceId}
-          AND pe.space_id IN (${spaceList})
-          AND pe.model_dimensions = ${queryDim}
-          AND pe.fingerprint = ${fingerprint}
-          AND p.deleted_at IS NULL
-        ORDER BY pe.embedding <=> ${queryVector}
-        LIMIT ${candidates}
-      ),
-      full_text AS (
-        SELECT pe.id, pe.page_id, pe.space_id, pe.content, p.title,
-               row_number() OVER (ORDER BY ts_rank(pe.fts, q.query) DESC) AS rank_ix
-        FROM page_embeddings pe
-        JOIN pages p ON p.id = pe.page_id,
-             websearch_to_tsquery('ru_en', f_unaccent(${queryText})) AS q(query)
-        WHERE pe.workspace_id = ${workspaceId}
-          AND pe.space_id IN (${spaceList})
-          AND p.deleted_at IS NULL
-          AND pe.fts @@ q.query
-        ORDER BY ts_rank(pe.fts, q.query) DESC
-        LIMIT ${candidates}
-      )
-      SELECT
-        coalesce(semantic.page_id, full_text.page_id)   AS "pageId",
-        coalesce(semantic.space_id, full_text.space_id) AS "spaceId",
-        coalesce(semantic.title, full_text.title)       AS title,
-        coalesce(semantic.content, full_text.content)   AS content,
-        coalesce(1.0/(60 + semantic.rank_ix), 0.0) * 1.0
-          + coalesce(1.0/(60 + full_text.rank_ix), 0.0) * 1.0 AS score
-      FROM semantic
-      FULL OUTER JOIN full_text ON semantic.id = full_text.id
-      ORDER BY score DESC
-      LIMIT ${candidates}
-    `.execute(this.db);
-
-    return result.rows.map((row) => ({
-      pageId: row.pageId,
-      spaceId: row.spaceId,
-      title: row.title,
-      content: row.content,
-      score: Number(row.score),
     }));
   }
 

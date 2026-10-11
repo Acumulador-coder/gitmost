@@ -470,7 +470,7 @@ describe('buildChatMarkdown (server) — structure', () => {
 describe('tool-label parity (#494)', () => {
   // In-app tool names come from the shared registry (inAppKey, excluding
   // mcpOnly specs) PLUS the inline in-app-only tools that carry a friendly label.
-  // The only labelled inline tool is the hybrid semantic search.
+  // The only labelled inline tool is searchPages.
   const INLINE_INAPP_LABELLED = new Set(['searchPages']);
 
   function validInAppToolNames(): Set<string> {

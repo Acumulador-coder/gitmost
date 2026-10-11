@@ -21,15 +21,16 @@ import { PublicShareChatToolsService } from './tools/public-share-chat-tools.ser
  *
  * AiModule supplies AiService + AiSettingsService. TokenModule supplies
  * TokenService for minting the per-user loopback access token (§15[C1]). The
- * AiChatRepo / AiChatMessageRepo / PageEmbeddingRepo / SpaceMemberRepo /
- * PagePermissionRepo come from the global DatabaseModule; the UserThrottlerGuard
- * + AI_CHAT throttler come from the global ThrottleModule registered in
- * AppModule. EmbeddingModule hosts the vector-RAG indexer + AI_QUEUE consumer
- * (§6.7 stage D); importing it here boots the processor with the app.
+ * AiChatRepo / AiChatMessageRepo come from the global DatabaseModule; the
+ * UserThrottlerGuard + AI_CHAT throttler come from the global ThrottleModule
+ * registered in AppModule. EmbeddingModule hosts the vector-RAG indexer +
+ * AI_QUEUE consumer (§6.7 stage D); importing it here boots the processor with
+ * the app.
  *
- * ShareModule (ShareService) + SearchModule (SearchService) are imported for the
- * ANONYMOUS public-share assistant (PublicShareChatController), whose read-only
- * tools scope every lookup to a single share tree.
+ * SearchModule (SearchService) backs the agent's searchPages tool and, with
+ * ShareModule (ShareService), the ANONYMOUS public-share assistant
+ * (PublicShareChatController), whose read-only tools scope every lookup to a
+ * single share tree.
  */
 @Module({
   imports: [
