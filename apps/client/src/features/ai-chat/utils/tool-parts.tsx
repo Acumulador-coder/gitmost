@@ -163,7 +163,7 @@ export function toolInputSummary(part: ToolUiPart): string | undefined {
 /**
  * Resolve the page citation(s) a tool part references, from its input/output.
  * Only output-available parts (the tool returned) yield citations. Search
- * returns an array of pages; the page-ops return a single page id. We link to
+ * returns its matching pages in `results`; the page-ops return a single page id. We link to
  * `/p/{id}` with the raw page UUID — `PageRedirect` resolves it via
  * `extractPageSlugId` (which returns a bare UUID unchanged), so the space slug
  * and a title slug are not needed here.
@@ -181,12 +181,20 @@ export function toolCitations(part: ToolUiPart): ToolCitation[] {
 
   const toolName = getToolName(part);
 
-  if (toolName === "searchPages" && Array.isArray(out)) {
-    for (const raw of out) {
-      const item = (raw ?? {}) as Record<string, unknown>;
-      push(asString(item.id), asString(item.title));
+  if (toolName === "searchPages") {
+    // Current output is { results, related, total }: cite the real matches
+    // only — `related` are non-matching semantic neighbours, never citations.
+    // Messages persisted before that shape carry a bare array of pages.
+    const results = Array.isArray(out)
+      ? out
+      : (out as { results?: unknown } | undefined)?.results;
+    if (Array.isArray(results)) {
+      for (const raw of results) {
+        const item = (raw ?? {}) as Record<string, unknown>;
+        push(asString(item.id), asString(item.title));
+      }
+      return citations;
     }
-    return citations;
   }
 
   const o = (out ?? {}) as Record<string, unknown>;

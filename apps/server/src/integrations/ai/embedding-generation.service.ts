@@ -486,8 +486,8 @@ export class EmbeddingGenerationService {
    * Embed a search/RAG query and return it together with the fingerprint the
    * candidate rows MUST be filtered by — the ACTIVE generation, not the config's.
    *
-   * This is the single funnel for every READER (SearchService's vector arm and the
-   * agent's hybrid RAG CTE). `AiService.embedQuery` stays the raw primitive: it
+   * This is the single funnel for every READER (SearchService's vector arm, which
+   * also backs the agent's searchPages). `AiService.embedQuery` stays the raw primitive: it
    * embeds with the CURRENT provider and reports the config (= target) fingerprint;
    * this wrapper overrides the filter fingerprint with the active pointer.
    *

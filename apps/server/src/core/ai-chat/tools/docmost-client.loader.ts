@@ -18,7 +18,6 @@ export type { SharedToolSpec } from '@docmost/mcp';
  */
 type DocmostClientMethod =
   // --- read ---
-  | 'search'
   | 'getPage'
   | 'getPageRaw'
   | 'getWorkspace'
