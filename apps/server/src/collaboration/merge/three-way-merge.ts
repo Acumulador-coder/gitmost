@@ -123,6 +123,7 @@ function tryMergeRegion(
   o: string[],
   a: string[],
   b: string[],
+  isIgnorable?: (key: string) => boolean,
 ): LocalPick[] | null {
   // Agreement short-circuit (review #11). When live (a) and target (b) are
   // identical, both sides converged on the SAME result — diff3 "agreement", NOT
@@ -134,8 +135,20 @@ function tryMergeRegion(
     return a.map((_v, i) => ({ src: 'live', local: i }) as LocalPick);
   }
 
-  const aHunks = buildHunks(o, a);
   const bHunks = buildHunks(o, b);
+  // A live hunk that only INSERTS ignorable blocks (empty paragraphs, which a
+  // base parsed from markdown never has between blocks) is not a human edit. When it
+  // collides with a git hunk, drop it, so git's change lands without a false
+  // same-block conflict; a non-colliding one is kept as usual.
+  const aHunks = buildHunks(o, a).filter(
+    (ah) =>
+      !(
+        isIgnorable &&
+        ah.oStart === ah.oEnd &&
+        ah.content.every((i) => isIgnorable(a[i])) &&
+        bHunks.some((bh) => hunksOverlap(ah, bh))
+      ),
+  );
 
   // Any overlap between a human hunk and a git hunk is a real conflict; bail so
   // the caller falls back to git-wins (preserving the original behavior).
@@ -221,11 +234,16 @@ export function diff3Plan(o: string[], a: string[], b: string[]): Pick[] {
  * whole region — but the human's version of those blocks is then absent from the
  * picks, so we count it so the caller can make the loss observable/recoverable
  * rather than silent (the documented conflict contract).
+ *
+ * `isIgnorable` marks block keys that are not content (the caller passes the
+ * empty-paragraph key): a live-only insert made solely of such blocks never
+ * counts as a conflict with git.
  */
 export function diff3PlanWithConflicts(
   o: string[],
   a: string[],
   b: string[],
+  isIgnorable?: (key: string) => boolean,
 ): Diff3Result {
   const oToA = matchMap(lcsPairs(o, a));
   const oToB = matchMap(lcsPairs(o, b));
@@ -253,6 +271,7 @@ export function diff3PlanWithConflicts(
       o.slice(oi, anchor),
       a.slice(ai, aEnd),
       b.slice(bi, bEnd),
+      isIgnorable,
     );
     if (merged) {
       for (const p of merged) {
