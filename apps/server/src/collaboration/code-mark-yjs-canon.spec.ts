@@ -25,8 +25,8 @@ import { tiptapExtensions } from './collaboration.util';
  * myself, ProseMirror's default) keeps the #515 behavior — code coexists with bold /
  * italic / … — on the stock Yjs representation.
  *
- * The parity test in packages/prosemirror-markdown pins the canonical mark and the
- * vendored markdown mirror; this spec pins the two things only the server can see:
+ * The markdown converter builds its schema from the same `documentExtensions`;
+ * this spec pins the two things only the server can see:
  * the assembled `tiptapExtensions` schema, and the READ-BACK of documents that were
  * already persisted with the hashed key.
  */

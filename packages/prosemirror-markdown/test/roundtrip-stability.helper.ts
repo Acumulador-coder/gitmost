@@ -53,8 +53,8 @@ export interface AttrMatrixEntry {
   /**
    * Marks the attr as a member of the EMPTY-STRING class the fix targets: a
    * string attr whose schema default is `null`/absent and whose parseHTML
-   * coerces `"" -> default` (image/drawio `alt`+`title`, video `alt` via
-   * aria-label, pdf/attachment `name`, attachment `mime`). Set true to also
+   * coerces `"" -> default` (image `alt`, video `alt` via aria-label,
+   * pdf/attachment `name`, attachment `mime`). Set true to also
    * drive the THIRD-STATE convergence case (see runConvergenceCase) for this
    * attr. Attrs whose default is NOT null (e.g. embed `provider`, default "")
    * or that are not `""`-coerced (control attrs) are left unset.

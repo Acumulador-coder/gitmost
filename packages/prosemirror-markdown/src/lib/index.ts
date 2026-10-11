@@ -44,9 +44,9 @@ export {
 // form during import (#522). A strict subset of the server's INTERNAL_LINK_REGEX.
 export { isInternalPagePath, markInternalLinks } from "./internal-links.js";
 
-// The Docmost tiptap schema mirror. Exposed so consumers (and the sync
-// engine's schema-validity regression tests) can build the exact ProseMirror
-// schema the converter targets.
+// The converter's schema extensions: editor-ext's `documentExtensions` with the
+// `OVERRIDES` from docmost-schema.ts. Exposed so consumers (and the sync engine's
+// schema-validity regression tests) can build the exact schema the converter targets.
 export { docmostExtensions } from "./docmost-schema.js";
 
 // Schema-adjacent sanitizers used by consumers (mcp) so the single canonical,

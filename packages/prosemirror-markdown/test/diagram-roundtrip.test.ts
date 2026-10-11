@@ -10,11 +10,11 @@ import {
 // content.content) walks them.
 const doc = (...nodes: any[]) => ({ type: 'doc', content: nodes });
 
-describe('diagram round-trip (docmost-schema diagramAttributes)', () => {
+describe('diagram round-trip (editor-ext drawio/excalidraw attrs)', () => {
   // SPEC case 1: drawio carrying the full numeric-attr surface
   // (data-width/data-height/data-size/data-aspect-ratio) that it shares with
   // audio/video/pdf but which no fixture exercises on a diagram node.
-  it('drawio round-trips numeric attrs, coercing number -> string via getAttribute', async () => {
+  it('drawio round-trips numeric attrs; size/aspectRatio come back as strings', async () => {
     const input = doc({
       type: 'drawio',
       attrs: {
@@ -44,23 +44,21 @@ describe('diagram round-trip (docmost-schema diagramAttributes)', () => {
     // re-materializes as the schema default on import and is omitted again.
     expect(md2).toBe(md1);
 
-    // Re-import coerces every numeric attr to a STRING because parseHTML reads
-    // them via getAttribute(). This is the gap the reviewer flagged: the
-    // number -> string coercion on a diagram node is otherwise untested.
+    // width/height parse to numbers; size/aspectRatio are read via
+    // getAttribute() and come back as STRINGS.
     const attrs2 = doc2.content[0].attrs;
-    expect(attrs2.width).toBe('640');
-    expect(attrs2.height).toBe('480');
+    expect(attrs2.width).toBe(640);
+    expect(attrs2.height).toBe(480);
     expect(attrs2.size).toBe('1234');
     expect(attrs2.aspectRatio).toBe('1.777');
-    expect(typeof attrs2.width).toBe('string');
+    expect(typeof attrs2.width).toBe('number');
     expect(typeof attrs2.aspectRatio).toBe('string');
     // String attrs pass through unchanged.
     expect(attrs2.align).toBe('center');
     expect(attrs2.attachmentId).toBe('att-1');
 
-    // Canonically NOT equal: the numeric -> string coercion survives
-    // canonicalization (only align='center' is normalized away via
-    // KNOWN_DEFAULTS.drawio), so 640 !== '640' makes the docs differ.
+    // Canonically NOT equal: the size/aspectRatio string coercion survives
+    // canonicalization, so 1234 !== '1234' makes the docs differ.
     expect(docsCanonicallyEqual(input, doc2)).toBe(false);
   });
 

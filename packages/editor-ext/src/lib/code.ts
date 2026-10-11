@@ -21,9 +21,7 @@ import { Code as TiptapCode } from "@tiptap/extension-code";
 // already de-dups identical marks in a set — so `"code"` keeps the #515 behavior
 // (code + bold/italic coexist) with the stock Yjs representation.
 //
-// This is the single source of the excludes policy for the three app schemas
-// (client `mainExtensions`, server `tiptapExtensions`, comment editor). The
-// vendored markdown-converter mirror (`docmost-schema.ts`) deliberately does NOT
-// import this at runtime (it must stay framework-free), so it sets the same
-// `excludes: "code"` locally; a parity test guards the two against drift.
+// This is the single source of the excludes policy: `documentExtensions` (the
+// server schema and the markdown converter), the client `mainExtensions` and the
+// comment editor all use this mark.
 export const Code = TiptapCode.extend({ excludes: "code" });

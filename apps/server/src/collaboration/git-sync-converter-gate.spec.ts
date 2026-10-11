@@ -29,8 +29,9 @@
  *      validation that runs on a git-sync write (issue #194 §3.3).
  *   4. assert docsCanonicallyEqual(canon(original), canon(normalized)) === true
  *
- * Any node / mark / attr that editor-ext drops (because the git-sync
- * docmost-schema named it differently, or declares a different default) makes
+ * Any node / mark / attr that the editor-ext write path drops or changes (the
+ * converter schema is editor-ext's `documentExtensions` plus the `OVERRIDES` in
+ * docmost-schema.ts, which change some parse rules and defaults) makes
  * the gate FAIL for that document — exactly the schema-divergence issue #194 §3.3 /
  * §13.1 warn about. Genuine, irreducible divergences are isolated into the
  * clearly-named `KNOWN DIVERGENCE` block at the bottom (never silently hidden).
@@ -69,7 +70,8 @@ async function runGate(original: any): Promise<{
   // 1) editor-ext JSON -> markdown (git-sync export).
   const md = convertProseMirrorToMarkdown(original);
 
-  // 2) markdown -> ProseMirror JSON (git-sync import, docmost-schema).
+  // 2) markdown -> ProseMirror JSON (git-sync import, converter schema:
+  //    documentExtensions + OVERRIDES).
   const imported = await markdownToProseMirror(md);
 
   // 3) push through the REAL editor-ext schema via the server's Yjs write path.
@@ -506,9 +508,8 @@ describe('git-sync converter §13.1 image layout attrs round-trip (align via sch
       '![](https://example.com/pic.png) <!--img {"width":"640","height":"480"}-->',
     );
 
-    // The round-tripped image keeps src + width/height. width/height are
-    // re-imported as strings (matching the video/audio/pdf string convention),
-    // so assert the values rather than the JS type.
+    // The round-tripped image keeps src + width/height. The comment carries them
+    // as strings and import parses them back to numbers, so assert the values.
     const imgAttrs = (canonNormalized as any).content[0].attrs;
     expect((canonNormalized as any).content[0].type).toBe('image');
     expect(imgAttrs.src).toBe('https://example.com/pic.png');

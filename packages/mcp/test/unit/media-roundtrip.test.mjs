@@ -139,9 +139,9 @@ test("round-trip: pdf node survives markdown export with src + name + attachment
 });
 
 // The converter emits captioned images as a raw <img data-caption="...">; for
-// the caption to survive the PM -> markdown -> PM round-trip the docmost-schema
-// Image node must parse data-caption back into the `caption` attr. Without that
-// (stock @tiptap/extension-image), the caption is silently lost — these guard
+// the caption to survive the PM -> markdown -> PM round-trip the schema's Image
+// node (editor-ext) must parse data-caption back into the `caption` attr. Without
+// that (stock @tiptap/extension-image), the caption is silently lost — these guard
 // the "lossless" claim.
 test("round-trip: image caption survives markdown export (data-caption restored)", async () => {
   const found = await roundtrip(

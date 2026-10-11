@@ -49,7 +49,7 @@ describe('#2 top-level image attrs lost', () => {
     const md = convertProseMirrorToMarkdown(d);
     expect(md).toContain('320');
     const back = await markdownToProseMirror(md);
-    expect(back.content[0].attrs.width).toBe('320');
+    expect(back.content[0].attrs.width).toBe(320);
   });
 });
 

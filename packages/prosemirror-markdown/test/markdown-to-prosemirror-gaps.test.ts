@@ -247,8 +247,8 @@ const firstMark = (node: any, markType: string): any => {
 // ---------------------------------------------------------------------------
 // Spec 1. IMPORT-side color sanitization for the highlight + textStyle marks.
 //
-// The Highlight.extend / TextStyle parseHTML run attacker-controlled colors
-// through sanitizeCssColor when generateJSON re-parses stored HTML. This is the
+// The highlight parseHTML override runs attacker-controlled colors through
+// sanitizeCssColor when generateJSON re-parses stored HTML. This is the
 // real defense that strips a crafted color on IMPORT (the export-side emission
 // is tested elsewhere; the parse path was not).
 // ---------------------------------------------------------------------------
@@ -303,6 +303,16 @@ describe('import: highlight/textStyle color sanitization (parseHTML)', () => {
     expect(mark.attrs.color).toBe('rebeccapurple');
     // It is carried on a real text node containing the span's text.
     expect(allText(doc)).toContain('y');
+  });
+
+  it('drops an unsafe text color (sanitizeCssColor -> null)', async () => {
+    // The Color extension's own parse would keep url(...); only the override drops it.
+    const doc = await markdownToProseMirror(
+      '<span style="color: url(https://evil.example/x)">y</span>',
+    );
+    const mark = firstMark(doc, 'textStyle');
+    expect(mark).not.toBeNull();
+    expect(mark.attrs.color).toBeNull();
   });
 });
 

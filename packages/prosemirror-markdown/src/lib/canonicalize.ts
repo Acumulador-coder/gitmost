@@ -4,7 +4,7 @@
  * form rather than raw bytes).
  *
  * `markdownToProseMirror` reconstructs schema DEFAULT attributes (e.g.
- * `indent: null` where the source omitted it) and regenerates per-block ids on
+ * `indent: 0` where the source omitted it) and regenerates per-block ids on
  * every import. A raw deep-equal of the source doc against the re-imported doc
  * therefore diverges even when the two are semantically identical. This module
  * normalizes a document so that two semantically-equal docs compare deep-equal
@@ -17,67 +17,29 @@
  * Known NON-NULL schema defaults that `markdownToProseMirror` materializes on
  * import, keyed by node/mark type → { attr: defaultValue }.
  *
- * Why this exists: `canonicalizeAttrs` already treats an absent attr as
- * equivalent to an explicit `null`/`undefined`. But several Docmost schema
- * attributes default to a NON-null value, so import fills them in even when the
- * source omitted them — making "attr absent" diverge from "attr at its default
- * value" under a raw deep-equal. To keep "absent ≡ explicit-default", we ALSO
- * drop any attr whose value equals its known schema default. A non-default
- * value (e.g. `orderedList.start: 5`) is NOT a default, so it is KEPT.
- *
- * Every entry below — with the single documented exception of the `link.internal`
- * marker (see its own bullet) — was read from `packages/docmost-client/src/lib/
- * docmost-schema.ts` (the line refs are the exact `default:` declarations) and
- * confirmed to be materialized by an export→import→export round-trip:
- *   - mark `link`    target / rel  — DocmostAttributes + StarterKit link.
- *       StarterKit's link extension defaults `target: "_blank"` and
- *       `rel: "noopener noreferrer nofollow"`; both materialize on import
- *       (empirically confirmed) even when the source had only `href`.
- *   - mark `link`    internal (#522) — the ONE editor-sourced, NOT-import-
- *       materialized default here. Its source is `editor-ext/src/lib/link.ts`
- *       (default `internal: false`), not docmost-schema, and import does NOT
- *       materialize it (an imported external link leaves `internal` absent/null,
- *       never `false`). It is listed so that the editor's stored `internal:false`
- *       normalizes to the same "external" canon as absent/null (`false ≡ absent`),
- *       keeping a stored external link canonically equal to its re-import. The
- *       load-bearing `internal:true` is NON-default and therefore KEPT.
- *   - mark `comment` resolved      — docmost-schema.ts L213-214 (`default: false`).
- *   - node `orderedList` start     — provided by StarterKit's orderedList
- *       (`default: 1`); materializes on import (empirically confirmed).
- *   - node `drawio`/`excalidraw`/`video`/`youtube`/`embed` align — the diagram
- *       attribute set and the media nodes declare `align: { default: "center" }`
- *       (docmost-schema.ts L745-750 diagramAttributes; L564 video; L626 youtube;
- *       L667 embed). The diagram `align` is the one the round-trip materializes
- *       (docmost-schema.ts L745); the media/embed entries normalize the SAME
- *       `align` default for consistency. Note: this only normalizes `align` —
- *       full canonical stability of `embed` is separately limited by the
- *       converter coercing numeric `width`/`height` to strings, which is outside
- *       canonicalize's scope.
- *
- * NOTE: `image` align now defaults to `"center"` — unified with editor-ext
- * (#293 canon #4). It is listed below so a canonical image drops `align` when
- * it equals "center" (absent ≡ default), exactly like the diagram/media nodes.
- * A null align is likewise dropped by the null-drop rule and re-imports as the
- * "center" default, so bare `![](src)` images stay canonically clean.
+ * `canonicalizeAttrs` already treats an absent attr as equivalent to an explicit
+ * `null`/`undefined`, but these attributes default to a NON-null value, so import
+ * fills them in even when the source omitted them. Dropping a value equal to its
+ * default keeps "absent ≡ explicit default"; a non-default value (e.g.
+ * `orderedList.start: 5`) is kept. The values are the editor-ext schema defaults.
  */
 const KNOWN_DEFAULTS: Record<string, Record<string, unknown>> = {
   // mark types
   link: {
     target: "_blank",
     rel: "noopener noreferrer nofollow",
-    // Editor-authored EXTERNAL links store `internal: false` (editor-ext link
-    // default `packages/editor-ext/src/lib/link.ts`), while an imported external
-    // link leaves `internal` absent/null. Both mean "external", so `internal:
-    // false` must normalize away exactly like `null`/absent — otherwise a stored
-    // `internal:false` link diverges from its re-import under
-    // `docsCanonicallyEqual` (false !== null). The internal marker `internal:true`
-    // is NON-default, so it is KEPT and survives canonicalization (#522 §11).
     internal: false,
   },
   comment: {
     resolved: false,
   },
   // node types
+  paragraph: {
+    indent: 0,
+  },
+  heading: {
+    indent: 0,
+  },
   orderedList: {
     start: 1,
   },
@@ -94,7 +56,7 @@ const KNOWN_DEFAULTS: Record<string, Record<string, unknown>> = {
     align: "center",
   },
   youtube: {
-    align: "center",
+    start: 0,
   },
   embed: {
     align: "center",

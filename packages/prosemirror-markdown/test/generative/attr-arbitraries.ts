@@ -64,10 +64,9 @@
  *         `details.open`, `subpages.recursive`, `orderedList.start`). If left
  *         `absent` they re-materialize as a non-canonical default and diverge
  *         under P1. We mark them `always` so they are authored explicitly.
- *       - The documented numeric→string coercion set (`width height size
- *         aspectRatio`) is generated as STRINGS for the media family (a stored
- *         number re-parses as a string), EXCEPT `embed.width/height` which the
- *         embed schema keeps numeric — handled per-attr.
+ *       - Media `width`/`height` parse back as NUMBERS, so they are generated as
+ *         numbers; `size`/`aspectRatio` and `embed.width/height` parse back as
+ *         strings (getAttribute), so they are generated as numeric STRINGS.
  *
  * The two former PINNED-BUG attrs (`column.width` P2 churn, `orderedList.start`
  * P1 loss) are now FIXED and value-fuzzed; `ordered-list-start.json` in
@@ -126,10 +125,10 @@ interface AttrPolicy {
 
 const num = (...xs: number[]) => fc.constantFrom(...xs);
 const str = (...xs: string[]) => fc.constantFrom(...xs);
-const widthStr = str('120', '320', '640');
-// Media `aspectRatio`/`size` are stringified numerics too (converter emits
+const widthNum = num(120, 320, 640);
+// Media `aspectRatio`/`size` are stringified numerics (converter emits
 // String(value)); the schema parseHTML reads them back as strings. Fuzz as
-// plausible numeric strings so they round-trip byte-stably like widthStr.
+// plausible numeric strings so they round-trip byte-stably.
 const aspectRatioStr = str('1.5', '0.75', '1');
 const sizeStr = str('320', '640');
 
@@ -154,24 +153,23 @@ const OVERRIDES: Record<string, AttrPolicy> = {
   'taskItem.checked': { always: true, arb: fc.constant(true) }, // boolean, default false
   // ── codeBlock ────────────────────────────────────────────────────────────
   'codeBlock.language': { arb: str('js', 'ts', 'python', 'go', 'rust', 'bash') },
-  // ── image / media (numeric→string width family) ──────────────────────────
+  // ── image / media ────────────────────────────────────────────────────────
   'image.src': { noDefault: true, arb: urlArb, degen: '' },
   'image.align': { arb: str('left', 'right') },
   'image.alt': { arb: letterPhraseArb, degen: '' },
-  'image.title': { arb: letterPhraseArb },
-  'image.width': { arb: widthStr, degen: '' },
-  'image.height': { arb: widthStr, degen: '' },
+  'image.width': { arb: widthNum, degen: 0 },
+  'image.height': { arb: widthNum, degen: 0 },
   // #351 (this PR): media sizing/family attrs ride in the `<!--img {…}-->`
-  // comment JSON via String(value); parseHTML reads them back as strings, so a
-  // numeric string round-trips byte-stably (mirrors image.width).
+  // comment JSON via String(value); parseHTML reads size/aspectRatio back as
+  // strings, so a numeric string round-trips byte-stably.
   'image.size': { arb: sizeStr, degen: '' },
   'image.aspectRatio': { arb: aspectRatioStr },
   // caption is text carried verbatim in the comment JSON (mirrors image.alt).
   'image.caption': { arb: letterPhraseArb, degen: '' },
   'video.src': { noDefault: true, arb: urlArb, degen: '' },
   'video.alt': { arb: letterPhraseArb },
-  'video.width': { arb: widthStr },
-  'video.height': { arb: widthStr },
+  'video.width': { arb: widthNum },
+  'video.height': { arb: widthNum },
   // #351 (this PR): video sizing/align ride in the `<!--video {…}-->` comment.
   'video.size': { arb: sizeStr },
   'video.aspectRatio': { arb: aspectRatioStr },
@@ -179,24 +177,22 @@ const OVERRIDES: Record<string, AttrPolicy> = {
   'video.align': { arb: str('left', 'right') },
   'audio.src': { noDefault: true, arb: urlArb, degen: '' },
   'youtube.src': { noDefault: true, arb: urlArb },
-  // #351 (this PR): youtube width/height/align ride in the `<!--youtube {…}-->`
-  // comment JSON (String()-coerced dimensions, non-center align only).
-  'youtube.width': { arb: widthStr },
-  'youtube.height': { arb: widthStr },
-  'youtube.align': { arb: str('left', 'right') },
+  // #351 (this PR): youtube width/height ride in the `<!--youtube {…}-->`
+  // comment JSON.
+  'youtube.width': { arb: widthNum },
+  'youtube.height': { arb: widthNum },
   'pdf.src': { noDefault: true, arb: urlArb },
   'pdf.name': { arb: phraseArb },
-  // #351 (this PR): pdf size/width/height ride in the `<!--pdf {…}-->` comment
-  // (String()-coerced dimensions, read back as strings).
+  // #351 (this PR): pdf size/width/height ride in the `<!--pdf {…}-->` comment.
   'pdf.size': { arb: sizeStr },
-  'pdf.width': { arb: widthStr },
-  'pdf.height': { arb: widthStr },
+  'pdf.width': { arb: widthNum },
+  'pdf.height': { arb: widthNum },
   'drawio.src': { noDefault: true, arb: urlArb },
   // #351 (this PR): drawio family attrs ride in the `<!--drawio {…}-->` comment.
-  // Dimensions/size/aspectRatio are String()-coerced numeric strings; title/alt
-  // are text carried verbatim; align fuzzed non-center only.
-  'drawio.width': { arb: widthStr },
-  'drawio.height': { arb: widthStr },
+  // Dimensions are numbers, size/aspectRatio numeric strings; title/alt are text
+  // carried verbatim; align fuzzed non-center only.
+  'drawio.width': { arb: widthNum },
+  'drawio.height': { arb: widthNum },
   'drawio.size': { arb: sizeStr },
   'drawio.aspectRatio': { arb: aspectRatioStr },
   'drawio.align': { arb: str('left', 'right') },
@@ -205,8 +201,8 @@ const OVERRIDES: Record<string, AttrPolicy> = {
   'excalidraw.src': { noDefault: true, arb: urlArb },
   // #351 (this PR): excalidraw family attrs ride in the `<!--excalidraw {…}-->`
   // comment (same shape as the drawio family above).
-  'excalidraw.width': { arb: widthStr },
-  'excalidraw.height': { arb: widthStr },
+  'excalidraw.width': { arb: widthNum },
+  'excalidraw.height': { arb: widthNum },
   'excalidraw.size': { arb: sizeStr },
   'excalidraw.aspectRatio': { arb: aspectRatioStr },
   'excalidraw.align': { arb: str('left', 'right') },

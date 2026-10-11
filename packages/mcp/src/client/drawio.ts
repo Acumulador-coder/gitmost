@@ -224,8 +224,8 @@ export function DrawioMixin<TBase extends GConstructor<DocmostClientContext>>(Ba
       "image/svg+xml",
     );
 
-    // NOTE: no `id` attribute is set here. The vendored `drawio` node schema
-    // (diagramAttributes) declares no `id`, so any block id would be silently
+    // NOTE: no `id` attribute is set here. The editor-ext `drawio` node
+    // declares no `id`, so any block id would be silently
     // dropped by PMNode.fromJSON on save and the returned handle would fail to
     // resolve. The addressable handle is the node's "#<index>" (like image/table
     // nodes), computed after the insert below.

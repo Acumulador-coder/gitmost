@@ -38,7 +38,7 @@ function compressedSvgFor(model) {
   return `<svg xmlns="http://www.w3.org/2000/svg" content="${content}"><image href="x"/></svg>`;
 }
 
-// The vendored `drawio` node schema (diagramAttributes) declares ONLY these
+// The editor-ext `drawio` node declares ONLY these
 // attributes; PMNode.fromJSON drops anything else on save. Mirror that here so
 // the mock write path behaves like the real one — in particular, a block `id`
 // set on a drawio node does NOT survive the save, so a handle keyed on it is

@@ -26,7 +26,7 @@ async function roundTrip(node: any): Promise<{ md1: string; doc2: any; md2: stri
 // ---------------------------------------------------------------------------
 // 1. pageBreak DATA LOSS (markdown-converter.ts has NO `case "pageBreak"`).
 //
-// The schema declares a `pageBreak` block atom (docmost-schema.ts ~L1009), so a
+// The schema declares a `pageBreak` block atom, so a
 // real document CAN legally contain one. The converter's switch has no branch
 // for it, so it falls through to `default`, which renders only the node's
 // children — and a pageBreak atom has NONE. It therefore exports to "" and the
@@ -142,7 +142,7 @@ describe('column.width number<->string drift (schema parseFloat — SPEC §11)',
 // ---------------------------------------------------------------------------
 // 5b. EMPTY detailsContent (`case "details"` with an empty body).
 //
-// detailsContent's schema content is `block*` (docmost-schema.ts ~L474), so an
+// detailsContent's schema content is `block*`, so an
 // empty details body is legal. The converter must handle a `detailsContent`
 // with no children without crashing and without emitting invalid output that
 // breaks the round-trip. This pins that an empty details body exports cleanly
@@ -431,7 +431,7 @@ describe('converter gap coverage — emission branches (specs 1–11)', () => {
   });
 });
 
-describe('converter gap coverage — formerly-lossy round-trips, now closed (specs 12–14)', () => {
+describe('converter gap coverage — formerly-lossy round-trips, now closed (specs 12–13)', () => {
   // 12. A 3-backtick fence inside a codeBlock body is now lengthened: the outer
   //     fence widens to (longest inner run + 1) backticks per CommonMark, so the
   //     inner ``` is treated as content and the block survives as ONE node.
@@ -478,26 +478,6 @@ describe('converter gap coverage — formerly-lossy round-trips, now closed (spe
       type: 'text',
       text: '1. not a list', // the escape decodes back to the literal text
     });
-    expect(docsCanonicallyEqual(d, doc2)).toBe(true);
-  });
-
-  // 14. #293 canon #4: the image title now round-trips via the attached
-  //     `<!--img {…}-->` comment (previously silently dropped).
-  it('an image title attribute round-trips via the attached img-comment', async () => {
-    const d = doc({
-      type: 'image',
-      attrs: { src: '/i.png', alt: 'a', title: 't"q' },
-    });
-    const md1 = convertProseMirrorToMarkdown(d);
-    // The quote in the title is JSON-escaped inside the comment payload.
-    expect(md1).toBe('![a](/i.png) <!--img {"title":"t\\"q"}-->');
-
-    const doc2 = await markdownToProseMirror(md1);
-    const img = (doc2.content || []).find((n: any) => n.type === 'image');
-    expect(img).toBeTruthy();
-    expect(img.attrs?.title).toBe('t"q'); // restored byte-exact
-    expect(img.attrs?.src).toBe('/i.png');
-    expect(img.attrs?.alt).toBe('a');
     expect(docsCanonicallyEqual(d, doc2)).toBe(true);
   });
 });

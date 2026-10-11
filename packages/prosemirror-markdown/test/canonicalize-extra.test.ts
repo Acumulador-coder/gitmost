@@ -6,7 +6,7 @@ import { canonicalizeContent, docsCanonicallyEqual } from 'docmost-client';
 
 // ---------------------------------------------------------------------------
 // Gaps NOT covered by canonicalize.test.ts (test-strategy report §2 diff):
-//   - the *.align family (drawio/excalidraw/video/youtube/embed AND image, whose
+//   - the *.align family (drawio/excalidraw/video/embed AND image, whose
 //     align default is unified to "center" per #293 canon #4): a "center"
 //     default is dropped, a non-default value is kept;
 //   - comment.resolved: TRUE is PRESERVED (only resolved:false is normalized);
@@ -19,7 +19,7 @@ import { canonicalizeContent, docsCanonicallyEqual } from 'docmost-client';
 
 describe('canonicalizeContent — *.align default family', () => {
   // Every diagram/media node whose schema `align` defaults to "center".
-  const alignTypes = ['drawio', 'excalidraw', 'video', 'youtube', 'embed'];
+  const alignTypes = ['drawio', 'excalidraw', 'video', 'embed'];
 
   for (const type of alignTypes) {
     it(`${type}: align "center" (the schema default) is dropped`, () => {

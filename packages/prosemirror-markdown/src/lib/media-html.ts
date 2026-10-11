@@ -17,10 +17,8 @@
  *
  * Keeping these builders in ONE module means the serializer's raw-HTML path and
  * the importer's materialization can never drift: both call the same function.
- * Each builder reproduces BYTE-FOR-BYTE the schema HTML the top-level
- * `processNode` cases previously returned (so existing columns/raw-HTML goldens
- * stay green), and each output round-trips through the matching schema parseHTML
- * in docmost-schema.ts.
+ * Each output round-trips through the matching node's parseHTML in the converter
+ * schema (the editor-ext extension, or its `OVERRIDES` entry in docmost-schema.ts).
  */
 
 /**
@@ -82,7 +80,7 @@ export function audioToHtml(attrs: Record<string, any>): string {
 }
 
 /**
- * draw.io / excalidraw diagram (shared diagramAttributes). Emits
+ * draw.io / excalidraw diagram (same attrs in editor-ext). Emits
  * `div[data-type="drawio"|"excalidraw"]` carrying src/title/alt/width/height/
  * size/aspectRatio/align/attachmentId as data-*.
  */

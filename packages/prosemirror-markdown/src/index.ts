@@ -1,8 +1,9 @@
 /**
  * Public surface of `@docmost/prosemirror-markdown`.
  *
- * A headless, framework-free ProseMirror <-> Markdown converter plus the
- * Docmost schema mirror. Everything lives under `lib/` (the converter core);
+ * A headless ProseMirror <-> Markdown converter over the Docmost schema
+ * (editor-ext's `documentExtensions` plus the converter's `OVERRIDES`).
+ * Everything lives under `lib/` (the converter core);
  * this top-level barrel simply re-exports that surface so the package entry is
  * the converter surface.
  */

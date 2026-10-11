@@ -222,7 +222,7 @@ describe('markdown import (full converter) — #522 acceptance', () => {
       rel: null,
     });
     expect(external.attrs).toMatchObject({
-      internal: null,
+      internal: false,
       target: '_blank',
       rel: 'noopener noreferrer nofollow',
     });
@@ -231,7 +231,7 @@ describe('markdown import (full converter) — #522 acceptance', () => {
   it('does NOT promote the space-less /p/<slug> form (documented limit)', () => {
     const doc = markdownToProseMirrorSync('[t](/p/abc123)');
     const m = linkMarks(doc)[0];
-    expect(m.attrs.internal).toBeNull();
+    expect(m.attrs.internal).toBe(false);
     expect(m.attrs.target).toBe('_blank');
   });
 
@@ -257,7 +257,8 @@ describe('markdown import (full converter) — #522 acceptance', () => {
 
 describe('canonicalize — internal:false ≡ external (#522 §11)', () => {
   it('drops editor-authored internal:false so external stays canonically equal', () => {
-    // Editor stores external links with internal:false; import leaves it absent.
+    // Editor and import store external links with internal:false; a null
+    // internal must canonicalize to the same external link.
     const stored = {
       type: 'doc',
       content: [
@@ -297,7 +298,7 @@ describe('canonicalize — internal:false ≡ external (#522 §11)', () => {
                   type: 'link',
                   attrs: {
                     href: 'https://example.com',
-                    internal: null, // import default
+                    internal: null, // null ≡ absent ≡ false
                     target: '_blank',
                     rel: 'noopener noreferrer nofollow',
                   },

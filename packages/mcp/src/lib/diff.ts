@@ -38,21 +38,9 @@
 
 import { Node } from "@tiptap/pm/model";
 import { ChangeSet, simplifyChanges } from "@tiptap/pm/changeset";
-// SUBPATH import, deliberately NOT the "@docmost/editor-ext" barrel. The barrel
-// re-exports the whole editor extension set, which drags @tiptap/react ->
-// prosemirror-view -> React + react-dom into this dependency-light EXTERNAL MCP
-// server: measured 216 modules (incl. prosemirror-view, react, react-dom) vs 38 via
-// the subpath (whose only external requires are @tiptap/pm/*, diff, rfc6902).
-//
-// It is not merely heavy — the barrel CRASHES this server on Node < 21. collaboration.ts
-// sets `global.document` from JSDOM but deliberately leaves `global.navigator` unset;
-// prosemirror-view's CJS module top-level then computes `webkit` from `document` and,
-// when it is truthy, reads a BARE `navigator.userAgent` (dist/index.cjs:174, unguarded
-// unlike the `nav` reads above it) -> `ReferenceError: navigator is not defined`. Node
-// >= 21 happens to define a global `navigator`, which is the only reason this ever
-// looked fine. Whether it fired depended purely on import ORDER, and it DID fire: the
-// mcp unit suite was red on Node 20 (collab-session + save-page-version) before this
-// switch. The subpath pulls the SAME recreateTransform and never loads prosemirror-view.
+// Subpath import of recreateTransform. The editor-ext barrel (React, react-dom,
+// prosemirror-view) is loaded anyway through the schema from
+// @docmost/prosemirror-markdown; that is accepted because Docker and CI run Node 22.
 import { recreateTransform } from "@docmost/editor-ext/dist/lib/recreate-transform/index.js";
 import { docmostSchema } from "./docmost-schema.js";
 
