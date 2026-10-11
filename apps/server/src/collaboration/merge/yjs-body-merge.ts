@@ -215,6 +215,25 @@ export function serializeXmlNode(node: unknown): unknown {
 const key = (node: unknown): string => JSON.stringify(serializeXmlNode(node));
 
 /**
+ * Whether `k` is the key of an empty paragraph (an empty line in the editor).
+ * Markdown cannot carry one, so the base and the git body never contain one
+ * between blocks (only the trailing paragraph `inEditorShape` appends), while
+ * the live page keeps every empty line. The 3-way planner treats it as not
+ * content, so such a live-only line is not a human edit that conflicts. The key
+ * is computed once through `key` itself, so it cannot drift from the format.
+ */
+let emptyParagraphKey: string | null = null;
+function isEmptyParagraphKey(k: string): boolean {
+  if (emptyParagraphKey === null) {
+    // Insert into a doc first: reading a detached Yjs type warns.
+    const frag = new Y.Doc().getXmlFragment('default');
+    frag.insert(0, [new Y.XmlElement('paragraph')]);
+    emptyParagraphKey = key(frag.get(0));
+  }
+  return k === emptyParagraphKey;
+}
+
+/**
  * Deep-clone a detached/owned Yjs XML node into a fresh node that can be inserted
  * into ANOTHER document (Yjs types are bound to their doc, so cross-doc moves are
  * impossible — we rebuild). Preserves nodeName, attributes, text+marks (via the
@@ -368,6 +387,7 @@ export function mergeXmlFragments3WayWithStats(
     baseKeys,
     liveKeys,
     targetKeys,
+    isEmptyParagraphKey,
   );
 
   // Build the merged block sequence in a throwaway doc, cloning from whichever
