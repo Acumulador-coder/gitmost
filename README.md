@@ -34,9 +34,12 @@ The goal of the fork is a **100% open, AGPL-only build with no Enterprise-Editio
 | Change | Details |
 | --- | --- |
 | **EE code removed** | Stripped all client and server Enterprise-Edition code; ships as a clean community/AGPL build with no license checks. |
-| **Comment resolution** | Re-implemented from scratch as a community feature (resolve / re-open with Open/Resolved tabs). No EE code reused, available to anyone who can comment. |
+| **Comment resolution** | Re-implemented from scratch as a community feature (resolve / re-open with Open/Resolved tabs). No EE code reused, available to anyone who can comment. A comment can also carry a suggested replacement for the passage it is anchored to, applied with one click. |
 | **Embedded MCP server** | A community MCP server (`@docmost/mcp`, 55 tools) is served over HTTP at `/mcp` — no enterprise license required. Replaces the removed license-gated EE MCP. |
+| **API keys** | Every user can mint personal API keys (**Settings → Account → API keys**); they are the credential MCP clients use for `/mcp`. |
 | **AI agent chat** | Built-in AI agent chat over your wiki, written from scratch as a community feature — no enterprise license. The agent reads and edits pages on your behalf (scoped to your permissions), with full-text + vector (RAG) search and optional web access via external MCP servers. |
+| **Git synchronization** | Two-way sync of a space with a git repository of Markdown files: edit in the wiki or in git, and `git clone` / `git push` a space over HTTP. Off by default. |
+| **Local-first reading** | Pages open from a copy cached on the device instead of waiting for the server; when the server is unreachable you get that copy read-only with an "offline" banner instead of an error screen. A device that has not confirmed its session with the server for longer than `OFFLINE_GRACE` (default: the session lifetime) erases its cached copy. |
 | **Rebranding** | App logo / name changed from *Docmost* to *Gitmost*. |
 | **Compact page tree** | Default page-tree indentation reduced from 16px to 8px per nesting level. |
 | **Persistent page-tree state** | The sidebar page tree remembers which nodes you expanded/collapsed across reloads — saved in the browser (localStorage), scoped per workspace + user so accounts sharing a browser don't clash. Upstream Docmost forgets the tree on every reload. |
@@ -49,9 +52,11 @@ a fork of [MrMartiniMo/docmost-mcp](https://github.com/MrMartiniMo/docmost-mcp) 
 have substantially extended — **built directly into the app** and served at `/mcp`. It exposes
 **55 agent-native tools**: surgical per-block edits (patch / insert / delete by id),
 structure-preserving find/replace, scripted `(doc) => doc` transforms with a dry-run diff,
-structured table editing, version history with diff / restore, comments, images and share
-links — all applied through Docmost's real-time-collaboration layer, so a write never
-clobbers a concurrent human edit.
+structured table editing, version history with diff / restore, comments, images, draw.io
+diagrams, file upload / download and share links — all applied through Docmost's
+real-time-collaboration layer, so a write never clobbers a concurrent human edit. A
+whole-page overwrite is accepted only if the page still matches the version the agent read
+(`baseHash`); otherwise it is rejected and nothing is written.
 
 **Better than Docmost's own MCP.** Docmost's built-in MCP is an enterprise feature, and its
 tools are coarse — read a page as Markdown, create / move / delete pages, replace a whole
@@ -71,8 +76,11 @@ every little fix. And it needs no enterprise license.
 **Same server as standalone docmost-mcp — just bundled.** This is the exact
 [docmost-mcp](https://github.com/vvzvlad/docmost-mcp) you can also run on its own; embedding
 it doesn't make it more capable, you simply don't have to install and run a separate
-process. An admin flips one toggle in **Workspace settings → AI** and any MCP client
-points at `${APP_URL}/mcp`.
+process. An admin flips one toggle in **Workspace settings → AI**; then any MCP client
+points at `${APP_URL}/mcp` with a personal API key (**Settings → Account → API keys**) in the
+`Authorization: Bearer <api_key>` header. The agent acts with that key owner's permissions,
+and revoking the key cuts it off immediately; no other credential is accepted. If `MCP_TOKEN`
+is set on the server, every request must also carry it in the `X-MCP-Token` header.
 
 ### AI agent chat
 
@@ -87,10 +95,19 @@ community feature, with no enterprise license. Open it from the page header; the
 - **Safe by design.** The agent is given only **reversible** operations (page history +
   trash); permanent deletion is never exposed. Agent edits are marked in page history with an
   "AI agent" badge linking back to the chat.
+- **Suggestions you accept with one click.** The agent can leave a comment that proposes a
+  replacement for the passage it is anchored to; **Apply** swaps the text in and removes the
+  comment.
+- **Runs keep going without the tab.** Each turn runs on the server: closing the tab or losing
+  the connection does not stop the agent, a reopened tab picks the running turn back up, and
+  only **Stop** ends it. A queued message can interrupt the current turn and be sent right away.
+- **Agent roles.** Admins define assistant personas with their own instructions and model, and
+  can import ready-made roles from a multilingual catalog.
 - **Search over your content.** Full-text search plus optional vector (RAG) semantic search
-  across pages.
-- **Web access via external MCP.** Admins can connect external MCP servers (e.g. Tavily) to
-  give the agent web search / internet access.
+  across pages. The agent can also look at the images on a page.
+- **Web access via external MCP.** Admins can connect external MCP servers (e.g. Tavily) for
+  the whole workspace, and every member can add personal ones under
+  **Settings → Account → My MCP servers**.
 - **Bring your own model.** Configure an OpenAI-compatible endpoint — OpenAI, OpenRouter, a
   local Ollama, or any self-hosted server — plus the model and API key in
   **Workspace settings → AI**. The key is encrypted and never leaves the server.
@@ -106,11 +123,9 @@ community feature, with no enterprise license. Open it from the page header; the
 - ✅ **Page templates** — flag a page as a template and embed its whole content live into other pages; edits to the template propagate to every place it is inserted (whole-page transclusion on top of the existing synced blocks).
 - ✅ **Public-share AI assistant** — anonymous visitors of a shared page can ask the AI agent, scoped strictly to that share's page tree (read-only, share-scoped search), behind a workspace toggle.
 - ✅ **Footnotes** — academic-style footnotes: a numbered superscript reference inline (read it in place via a hover popover), with the note text living as a real, editable block at the bottom of the page; auto-numbered, collaboration-safe, and round-trips through Markdown export/import and the AI agent / MCP.
-- ✅ **Temporary notes** — create a note as temporary and it auto-moves to Trash after a configurable per-workspace lifetime (default 24h) unless made permanent first; create one in a click from the Home screen, any space overview.
-
-### In progress
-
-- 🚧 **Git synchronization** — two-way sync of pages with a Git repository.
+- ✅ **Temporary notes** — create a note as temporary and it auto-moves to Trash after a configurable per-workspace lifetime (default 24h) unless made permanent first; create one in a click from the Home screen, any space overview or the space sidebar.
+- ✅ **Git synchronization** — two-way sync of a space with a Git repository of Markdown files, with `git clone` / `git push` over HTTP (see [Git synchronization](#git-synchronization)).
+- ✅ **Offline reading** — pages open from the copy cached on the device, and stay readable (read-only) while the server is unreachable.
 
 ### Planned
 
@@ -118,7 +133,7 @@ community feature, with no enterprise license. Open it from the page header; the
 - 🔭 **Password-protected pages** — protect individual pages / shares with a password.
 - 🔭 **Windows / Linux app** — native desktop app for Windows and Linux.
 - 🔭 **Mobile app** — mobile apps (iOS first, Android to follow), reusing the existing responsive web UI and editor via a Capacitor wrapper, with offline planned for later.
-- 🔭 **Offline mode** — offline sync & PWA support.
+- 🔭 **Offline editing** — edit while disconnected and sync on reconnect, plus PWA support (reading offline already works).
 - 🔭 **Editor & UX improvements** — blocks inside tables (lists, to-do items), column layout, additional heading levels, highlight blocks, custom emoji in callouts, floating images, anchor links for page mentions, toggles (shared-page width, aside/sidebar, spellcheck, ligatures), sanitized space-tree export, and mentions in breadcrumbs.
 
 ## Getting started
@@ -126,6 +141,42 @@ community feature, with no enterprise license. Open it from the page header; the
 Gitmost follows the upstream Docmost setup. See the Docmost
 [documentation](https://docmost.com/docs) for self-hosting and development instructions; replace the
 `docmost/docmost` image with `ghcr.io/vvzvlad/gitmost` where applicable.
+
+**Run a single instance.** Do not scale Gitmost horizontally behind a load balancer: stopping
+an AI agent run only reaches the replica that is executing it, and git sync coordinates its
+work inside one process.
+
+### Git synchronization
+
+Git sync is off by default. To turn it on, set two variables in `.env` (all `GIT_SYNC_*`
+options are described in [.env.example](.env.example)):
+
+```env
+GIT_SYNC_ENABLED=true
+# id of the Gitmost user that changes coming from git are attributed to
+GIT_SYNC_SERVICE_USER_ID=<user id>
+```
+
+The server refuses to start with sync enabled and no service user. Then open a space's
+settings and turn on **Enable Git sync**. Each enabled space is mirrored into its own git
+repository of Markdown files and reconciled in both directions: wiki edits become commits,
+pushed commits become page edits, written through the collaboration layer so they never
+overwrite someone typing on the page. Changes from git carry a "Git sync" badge in page history.
+
+The repository is served over HTTP, authenticated with a Gitmost email and password:
+
+```bash
+git clone https://wiki.example.com/git/<space-slug>.git
+```
+
+Anyone who can read the space can clone and fetch; pushing needs permission to edit its pages.
+A push that leaves conflict markers (`<<<<<<<` / `>>>>>>>`) in a page is held back until you
+resolve the conflict in git, unless **Auto-merge conflicts on push** is enabled for the space —
+then the marker lines are stripped and both sides' text goes to the page.
+
+The repositories live in `GIT_SYNC_DATA_DIR` (default `<DATA_DIR or ./data>/git-sync`, relative
+to the server's working directory). In Docker that default is outside the `/app/data/storage`
+volume, so point `GIT_SYNC_DATA_DIR` at a persistent volume — the spaces' git history lives there.
 
 ### Reverse proxy: SSE streaming paths
 
@@ -154,11 +205,17 @@ compression middleware is applied by proxy configuration, not headers:
 
 ## Migration from Docmost
 
-Gitmost's database schema is a **strict superset** of Docmost's. Every Gitmost-specific migration
-only **adds** new tables (`page_embeddings`, `ai_chats`, `ai_chat_messages`,
-`ai_provider_credentials`, `ai_mcp_servers`) and **nullable** columns — it never drops or rewrites
-existing Docmost data. Migrations run automatically on startup, so migrating an existing Docmost
-instance is essentially **two image swaps**.
+Gitmost's database schema is a **strict superset** of Docmost's. Gitmost-specific migrations
+**add** new tables (`page_embeddings`, `ai_provider_credentials`, `ai_mcp_servers`,
+`ai_agent_roles`, `ai_chat_runs`, `share_aliases`, `page_template_references` and a few more)
+and new columns that are either nullable or have a default; they never drop Docmost tables or
+columns. Migrations run automatically on startup, so migrating an existing Docmost instance is
+essentially **two image swaps**.
+
+> ⚠️ **Page icons are reset.** Gitmost uses Lucide icons for pages instead of emoji, and one
+> migration clears every emoji page icon — those pages show the default icon until you pick a new
+> one. Apart from rebuilding the full-text search index (for Russian + English morphology), this
+> is the only change migrations make to existing Docmost data.
 
 The only hard requirement is the database image: the AI agent's RAG storage needs the
 [pgvector](https://github.com/pgvector/pgvector) extension (`CREATE EXTENSION vector`), which the
@@ -186,10 +243,12 @@ the existing data directory is reused as-is:
 start the new migrations apply on top of your existing schema (`CREATE EXTENSION vector` plus the
 `page_embeddings` and AI tables); watch the logs for `Migration "..." executed successfully`.
 
-> ⚠️ **Never change `APP_SECRET` after setup.** It does double duty: it signs JWTs *and* derives the
-> AES-256-GCM key that encrypts stored AI-provider credentials (API keys). Rotating it makes every
-> saved AI API key undecryptable (you'd have to re-enter them in AI settings) and invalidates all
-> existing sessions. Pick it once, keep it stable, and back it up together with your database.
+> ⚠️ **Never change `APP_SECRET` after setup.** It does double duty: it signs JWTs (sessions and
+> API keys) *and* derives the AES-256-GCM key that encrypts stored AI-provider credentials and the
+> auth headers of external MCP servers. Rotating it makes every saved AI API key and MCP server
+> header undecryptable (you'd have to re-enter them), invalidates all existing sessions and breaks
+> every API key, so MCP clients need new ones. Pick it once, keep it stable, and back it up together
+> with your database.
 
 ### Notes
 
@@ -345,17 +404,26 @@ curl -s https://embeddings.example.com/v1/embeddings \
 - Spaces
 - Permissions management
 - Groups
-- Comments (with resolve / re-open and hover tooltips showing the comment text)
-- Page history
-- Search
+- Comments (with resolve / re-open, hover tooltips showing the comment text, and suggested edits applied with one click)
+- Page history (save a version with `Cmd/Ctrl+S`, filter to saved versions only, time worked on a page)
+- Search (Russian + English morphology, `"exact phrase"`, `+required` and `-excluded` operators; semantically similar pages are listed separately from real matches)
 - File attachments
-- Embeds (Airtable, Loom, Miro and more)
+- Embeds (Airtable, Loom, Miro and more), plus sandboxed HTML / CSS / JS embeds behind a workspace toggle
+- Images with captions, and several images side by side in a row
+- Spoiler mark (`||text||`) that hides text behind a click-to-reveal blur
+- Page icons from the Lucide icon set with a colour palette
+- Public shares with a custom address (`/l/:alias`), an optional "publish only the saved version" mode and an AI assistant for visitors
 - Translations (10+ languages)
-- Embedded MCP server (`/mcp`)
+- Two-way Git sync of a space (Markdown files, `git clone` / `git push` over HTTP)
+- Embedded MCP server (`/mcp`) authenticated with personal API keys
 - AI agent chat over your wiki (read + write, RAG search, external MCP / web access); the chat window docks into the side menu, and the agent is told about your in-page edits between turns
+- Offline reading: the copy cached on the device stays readable when the server is unreachable
+- Open tabs pick up a new deploy on their own
+- Copy-link and trash buttons on page-tree rows (can be turned off for the workspace)
 - Code-block buttons as an overlay, with the language selector revealed on hover
 - Stress-accent button (U+0301) in the bubble menu
 - Reading scroll position restored on reload
+- The slash menu understands commands typed in the wrong keyboard layout (ЙЦУКЕН ↔ QWERTY)
 
 ### Screenshots
 
@@ -365,10 +433,16 @@ curl -s https://embeddings.example.com/v1/embeddings \
 <img alt="editor" src="https://docmost.com/screenshots/editor.png" width="70%">
 </p>
 
+### Contributing
+
+Bug reports, feature requests and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+for the development setup and how to send a change.
+
 ### License
 
 Gitmost is licensed under the open-source AGPL 3.0 license. It is a modified version of
-Docmost, forked on June 16, 2026.
+Docmost, forked on June 16, 2026. The **Source code** item in the app's user menu links to this
+repository.
 
 Unlike upstream Docmost, this fork contains **no Enterprise-Edition code** — the `apps/server/src/ee`,
 `apps/client/src/ee` and `packages/ee` directories have been removed, so there are no files governed
