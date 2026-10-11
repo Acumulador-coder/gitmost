@@ -33,9 +33,9 @@ import { envInt } from './env-int.js';
 //     frozen: their value is an opaque token carried verbatim, not a round-trip
 //     shape worth fuzzing;
 //   - ACCEPTED limitations with no md representation (indent, callout.icon,
-//     orderedList.type, table spans/bg/colwidth).
+//     orderedList.type, table spans/bg/colwidth, youtube.start).
 // The media dimension/family attrs (image/video/youtube/drawio/excalidraw/pdf/
-// embed width/height/align/size/aspectRatio/caption/title/alt) that were
+// embed width/height/align/size/aspectRatio/caption/alt) that were
 // previously "deferred to a later PR" are IMPLEMENTED (value-fuzzed) in THIS PR
 // via the OVERRIDES table in attr-arbitraries.ts — they ride in the discriminator
 // comment JSON and round-trip byte-stably, so they are no longer allowlisted.
@@ -55,6 +55,7 @@ const ATTR_VALUE_FUZZ_ALLOWLIST = new Set<string>([
   'tableHeader.backgroundColor', 'tableHeader.backgroundColorName', 'tableHeader.colspan',
   'tableHeader.colwidth', 'tableHeader.rowspan',
   'video.attachmentId', 'video.placeholder',
+  'youtube.start',
 ]);
 
 // ── MARK attribute-value coverage ───────────────────────────────────────────
@@ -82,6 +83,8 @@ const MARK_ATTR_ALLOWLIST = new Set<string>([
   'mark:link.target',
   'mark:link.rel',
   'mark:link.class',
+  // presentational palette name; the converter emits only the highlight color.
+  'mark:highlight.colorName',
 ]);
 
 // Each run does a real convert + marked + jsdom parse (~ms). Give ample headroom

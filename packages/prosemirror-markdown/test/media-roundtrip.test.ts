@@ -14,8 +14,8 @@ import {
 //   - the exact md1 byte string the converter emits,
 //   - whether md2 is byte-stable (md2 === md1) or grows by a materialized
 //     schema default on the first import,
-//   - the re-parsed doc2 attrs (NOTE: parseHTML reads via getAttribute and so
-//     returns STRINGS for numeric attrs, which is what breaks naive canonical
+//   - the re-parsed doc2 attrs (NOTE: size/aspectRatio parse via getAttribute
+//     and so come back as STRINGS, which is what breaks naive canonical
 //     equality), and
 //   - docsCanonicallyEqual(doc, doc2) where the spec asserts a specific result.
 //
@@ -69,7 +69,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
   });
 
   // 2. fully-populated video -----------------------------------------------
-  it('video with all attrs: byte-stable; numeric attrs re-parse to STRINGS; canonical equality FALSE', async () => {
+  it('video with all attrs: byte-stable; size/aspectRatio re-parse to STRINGS; canonical equality FALSE', async () => {
     const doc = mkDoc([
       {
         type: 'video',
@@ -97,15 +97,14 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     const video = findFirst(doc2, 'video');
     expect(video).not.toBeNull();
     expect(video.attrs.alt).toBe('clip');
-    // All numeric attrs come back as STRINGS via getAttribute().
-    expect(video.attrs.width).toBe('640');
-    expect(video.attrs.height).toBe('480');
+    // width/height parse to numbers; size/aspectRatio come back as STRINGS.
+    expect(video.attrs.width).toBe(640);
+    expect(video.attrs.height).toBe(480);
     expect(video.attrs.size).toBe('1234');
     expect(video.attrs.aspectRatio).toBe('1.777');
 
-    // Byte-stable export but NOT canonically equal: the numeric width/height/
-    // size/aspectRatio came back as strings, so deep-equal of the canonical
-    // forms fails (align:'center' is normalized away, the numbers are not).
+    // Byte-stable export but NOT canonically equal: size/aspectRatio came back
+    // as strings, so deep-equal of the canonical forms fails.
     expect(docsCanonicallyEqual(doc, doc2)).toBe(false);
   });
 
@@ -251,8 +250,8 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     expect(embed.attrs.height).toBe(600);
   });
 
-  // 8. youtube with src+width+height+align ---------------------------------
-  it('youtube with src+width+height+align(right): byte-stable; width/height STRINGS; canonical FALSE', async () => {
+  // 8. youtube with src+width+height ----------------------------------------
+  it('youtube with src+width+height: byte-stable; width/height NUMBERS; canonical TRUE', async () => {
     const doc = mkDoc([
       {
         type: 'youtube',
@@ -260,29 +259,24 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
           src: 'https://youtu.be/abc',
           width: 560,
           height: 315,
-          align: 'right',
         },
       },
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8 image-form: width/height/align(right) ride in the `youtube`
-    // discriminator comment (align "right" is non-default so it is kept).
+    // #293 canon #8 image-form: width/height ride in the `youtube` comment.
     expect(md1).toBe(
-      '![](https://youtu.be/abc)<!--youtube {"width":"560","height":"315","align":"right"}-->',
+      '![](https://youtu.be/abc)<!--youtube {"width":"560","height":"315"}-->',
     );
     expect(md2).toBe(md1);
 
     const yt = findFirst(doc2, 'youtube');
     expect(yt).not.toBeNull();
     expect(yt.attrs.src).toBe('https://youtu.be/abc');
-    expect(yt.attrs.align).toBe('right');
-    // data-width / data-height parseHTML -> getAttribute() -> STRINGS.
-    expect(yt.attrs.width).toBe('560');
-    expect(yt.attrs.height).toBe('315');
+    expect(yt.attrs.width).toBe(560);
+    expect(yt.attrs.height).toBe(315);
 
-    // Numeric width/height coerced to strings; align='right' is non-default so
-    // it is kept (not in KNOWN_DEFAULTS.youtube's normalization). Canonical FALSE.
-    expect(docsCanonicallyEqual(doc, doc2)).toBe(false);
+    // The materialized `start: 0` is a KNOWN_DEFAULTS entry, so canonical TRUE.
+    expect(docsCanonicallyEqual(doc, doc2)).toBe(true);
   });
 });

@@ -6,7 +6,7 @@
  * reports WHERE each match is — the container's ref (for getNode/patchNode;
  * see the SearchMatch.nodeId note for the `#<index>` caveat), the top-level
  * block index, and a short context window around the hit. It never touches the
- * network, the DB, or the schema mirror; like `comment-anchor.ts` it is
+ * network, the DB, or the ProseMirror schema; like `comment-anchor.ts` it is
  * isolated-testable.
  *
  * REGEX ENGINE: with `regex:true` the pattern is compiled with RE2 (Google's

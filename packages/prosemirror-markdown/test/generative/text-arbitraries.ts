@@ -26,7 +26,7 @@ import { docmostExtensions } from '../../src/lib/docmost-schema.js';
 //
 // ProseMirror stores a text node's marks sorted by their SCHEMA RANK, and the
 // importer therefore always hands back e.g. [bold, code] (never [code, bold]).
-// Read the rank straight from the mirror schema so the generators cannot drift
+// Read the rank straight from the converter schema so the generators cannot drift
 // from it, and sort every multi-mark run through `canonicalMarks`.
 // ---------------------------------------------------------------------------
 const MARK_RANK: Record<string, number> = Object.fromEntries(

@@ -159,24 +159,26 @@ after(async () => {
   );
 });
 
-// A seed doc with two neighbour paragraphs around a target paragraph.
+// A seed doc with two neighbour paragraphs around a target paragraph. The
+// paragraphs carry the schema default `indent: 0` that the Y.Doc build stamps,
+// so the neighbour byte-identity checks compare the stored shape.
 function seed3() {
   return {
     type: "doc",
     content: [
       {
         type: "paragraph",
-        attrs: { id: "before-id" },
+        attrs: { id: "before-id", indent: 0 },
         content: [{ type: "text", text: "before" }],
       },
       {
         type: "paragraph",
-        attrs: { id: "target-id" },
+        attrs: { id: "target-id", indent: 0 },
         content: [{ type: "text", text: "old target" }],
       },
       {
         type: "paragraph",
-        attrs: { id: "after-id" },
+        attrs: { id: "after-id", indent: 0 },
         content: [{ type: "text", text: "after" }],
       },
     ],

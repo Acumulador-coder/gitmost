@@ -8,10 +8,9 @@ export const TableHeader = TiptapTableHeader.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
-      // Column alignment so GFM aligned tables (|:--|:-:|--:|) round-trip through
-      // the server-side write path; mirrors the converter's docmost-schema align
-      // (packages/prosemirror-markdown) so the authoritative editor/collab schema
-      // no longer strips it on persist (#647/#672 guarded-replace exposed the drift).
+      // Column alignment so GFM aligned tables (|:--|:-:|--:|) keep it through the
+      // markdown converter and the server-side write path, which both build their
+      // schema from this extension.
       align: {
         default: null,
         parseHTML: (element) =>

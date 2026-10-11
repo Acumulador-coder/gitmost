@@ -1,7 +1,7 @@
 # @docmost/prosemirror-markdown
 
-The single, canonical **ProseMirror ↔ Markdown converter** plus the Docmost
-schema mirror (#293/#345/#347). Headless and framework-free: no React. There is
+The single, canonical **ProseMirror ↔ Markdown converter** over the Docmost
+document schema from `@docmost/editor-ext` (#293/#345/#347). Headless. There is
 exactly ONE copy of this converter in the repo, consumed by:
 
 - `packages/mcp` (the MCP server),
@@ -27,11 +27,10 @@ DOM/`generateJSON` implementations differ (`src/lib/dom-parser.ts`). A
 `markdownToProseMirrorSync` variant exists for callers that cannot await (the
 client's synchronous chat renderer).
 
-`src/lib/docmost-schema.ts` **mirrors** the upstream Tiptap schema that lives in
-`packages/editor-ext`. The mirror is not free-floating: `serializer-contract.test.ts`
-guards the boundary — every schema node must have a converter case, so a drift
-between `editor-ext` and this package surfaces as a failing test rather than a
-silent divergence.
+`src/lib/docmost-schema.ts` builds the converter's schema from editor-ext's
+`documentExtensions` plus a short `OVERRIDES` list (parse rules and defaults the
+markdown round trip needs). `serializer-contract.test.ts` fails when a schema node
+has no converter case.
 
 ## Why byte-stability matters
 

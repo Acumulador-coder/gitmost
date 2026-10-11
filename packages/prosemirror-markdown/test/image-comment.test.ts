@@ -106,13 +106,13 @@ describe('#293 canon #4 — image serialization + attached img-comment', () => {
   it('width alone emits a single-key comment and round-trips', async () => {
     const { md, img } = await roundTrip(image({ width: '420' }));
     expect(md).toBe('![](/i.png) <!--img {"width":"420"}-->');
-    expect(img.attrs.width).toBe('420');
+    expect(img.attrs.width).toBe(420);
   });
 
   it('height alone emits a single-key comment and round-trips', async () => {
     const { md, img } = await roundTrip(image({ height: '300' }));
     expect(md).toBe('![](/i.png) <!--img {"height":"300"}-->');
-    expect(img.attrs.height).toBe('300');
+    expect(img.attrs.height).toBe(300);
   });
 
   it('size alone emits a single-key comment and round-trips', async () => {
@@ -139,12 +139,6 @@ describe('#293 canon #4 — image serialization + attached img-comment', () => {
     expect(img.attrs.caption).toBe('Рис. 1');
   });
 
-  it('title rides in the comment and round-trips', async () => {
-    const { md, img } = await roundTrip(image({ title: 'a tooltip' }));
-    expect(md).toBe('![](/i.png) <!--img {"title":"a tooltip"}-->');
-    expect(img.attrs.title).toBe('a tooltip');
-  });
-
   it('multiple attrs at once appear in the stable key order and round-trip', async () => {
     const { md, img } = await roundTrip(
       image({
@@ -163,14 +157,13 @@ describe('#293 canon #4 — image serialization + attached img-comment', () => {
     expect(md).toBe(
       '![схема](/i.png) <!--img {"width":"420","height":"300","align":"left","size":"48","aspectRatio":"1.5","attachmentId":"att-1","caption":"Рис. 1","title":"tip"}-->',
     );
-    expect(img.attrs.width).toBe('420');
-    expect(img.attrs.height).toBe('300');
+    expect(img.attrs.width).toBe(420);
+    expect(img.attrs.height).toBe(300);
     expect(img.attrs.align).toBe('left');
     expect(img.attrs.size).toBe('48');
     expect(img.attrs.aspectRatio).toBe('1.5');
     expect(img.attrs.attachmentId).toBe('att-1');
     expect(img.attrs.caption).toBe('Рис. 1');
-    expect(img.attrs.title).toBe('tip');
   });
 
   // MANDATORY (#293 canon #4): a caption containing the comment-closing `-->`
@@ -218,7 +211,7 @@ describe('#293 canon #4 — image serialization + attached img-comment', () => {
     const back = await markdownToProseMirror(md);
     const img = findImage(back);
     expect(img).toBeTruthy();
-    expect(img.attrs.width).toBe('320');
+    expect(img.attrs.width).toBe(320);
     expect(img.attrs.align).toBe('left');
     expect(img.attrs.attachmentId).toBe('att-9');
   });

@@ -72,13 +72,11 @@ const VOLATILE_KEY_ATTRS = new Set(['id']);
  * `TiptapTransformer.toYdoc(pm, 'default', tiptapExtensions)`, which STAMPS every
  * schema-default attribute onto every node and mark — `indent: 0` on every
  * paragraph/heading, `image.align: "center"`, the link mark's `internal: false`,
- * `highlight.colorName: null`, and so on for youtube/pdf/any future node. A body
- * re-imported from git comes through the engine's `markdownToProseMirror`, whose
- * schema declares those attrs with DIFFERENT (usually null) defaults; the
- * resulting null/absent element attrs are then DROPPED by `y-prosemirror`'s
- * toYdoc. So the SAME block carries materialized defaults on the live side and
- * nothing on the git side, its key diverges, the three-way merge anchors on
- * NOTHING, and the whole body is RE-APPENDED every reconcile cycle — an unbounded
+ * a pdf's `width: 800`, and so on. A body re-imported from git can carry null
+ * instead (the converter defaults pdf and youtube sizes to null), and null attrs
+ * are DROPPED by `y-prosemirror`'s toYdoc. Unnormalized, the same block would key
+ * differently on the two sides, the three-way merge would anchor on NOTHING, and
+ * the whole body would be RE-APPENDED every reconcile cycle — an unbounded
  * duplication loop with no client connected.
  *
  * Deriving the defaults from the actual schema normalizes ALL such attributes
@@ -121,8 +119,8 @@ function isDefaultAttr(
   if (value === null || value === undefined) return true;
   const spec = attrSpecs?.[attrName];
   if (!spec) return false;
-  // A numeric default also matches its string form: the markdown round-trip
-  // brings a pdf's default `width: 800` back from git as "800".
+  // A numeric default also matches its string form, so a default size stored
+  // as a string (a pdf's `width: "800"`) is dropped from the key too.
   return (
     spec.default === value ||
     (typeof spec.default === 'number' && String(spec.default) === value)
@@ -192,10 +190,9 @@ export function serializeXmlNode(node: unknown): unknown {
     for (const k of Object.keys(attrs).sort()) {
       if (VOLATILE_KEY_ATTRS.has(k)) continue;
       if (isDefaultAttr(attrSpecs, k, attrs[k])) continue;
-      // The markdown round-trip writes numeric attrs as strings (an image's
-      // `width: 652` comes back from git as "652"), so a number compares by its
-      // string form — otherwise no live image ever matches its git twin and the
-      // merge loses its anchors.
+      // A number compares by its string form, so the same size stored as 652 on
+      // one side and "652" on the other still matches — otherwise the live image
+      // never matches its git twin and the merge loses its anchors.
       sorted[k] = typeof attrs[k] === 'number' ? String(attrs[k]) : attrs[k];
     }
     return {

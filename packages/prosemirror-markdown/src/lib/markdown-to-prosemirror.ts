@@ -35,8 +35,8 @@ import {
  * #293 canon #7: `==text==` (Obsidian/GFM highlight) inline syntax.
  *
  * `==` is NOT standard markdown, so we teach the parser to turn `==text==` into
- * `<mark>text</mark>`, which the schema's Highlight extension parses back into a
- * color-less `highlight` mark (see docmost-schema.ts). This mirrors the
+ * `<mark>text</mark>`, which the schema's Highlight extension (editor-ext) parses
+ * back into a color-less `highlight` mark. This mirrors the
  * serializer's no-color highlight form, so a plain highlight round-trips.
  *
  * This is an INLINE extension (mid-line, must respect token precedence so it
@@ -669,12 +669,12 @@ function bridgeTaskLists(html: string): string {
  *   - ATTACHED comments (#9 `attrs`): a comment sitting INSIDE a `<p>`/`<hN>`
  *     (same rendered line as visible content). The only handled key is
  *     `textAlign`, re-expressed as an inline `text-align` style on the parent,
- *     which the docmost-schema textAlign global attribute reads back.
+ *     which the schema's TextAlign global attribute reads back.
  *   - ATTACHED image comments (#4 `img`): a comment bound to an `<img>` (its
  *     previous element sibling), e.g. `![](src) <!--img {"align":"left"}-->`
  *     rendered as `<p><img> <!--img …--></p>`. Each decoded key is written as
  *     the DOM attribute the image schema's parseHTML reads back (align/width/
- *     height/data-size/data-aspect-ratio/data-attachment-id/data-caption/title).
+ *     height/data-size/data-aspect-ratio/data-attachment-id/data-caption).
  *     An `img` comment with no adjacent <img> is INERT.
  *   - STANDALONE machinery comments (#5 `subpages`/`pagebreak`): a lone comment
  *     line, which `marked` renders as an HTML block so jsdom makes it a DIRECT
@@ -917,7 +917,8 @@ function applyCommentDirectives(html: string): string {
           : null;
       if (!target) continue; // no adjacent <img> -> inert
       // Re-express each decoded key as the DOM attribute the schema's image
-      // parseHTML reads back (docmost-schema.ts image attrs). Unknown keys are
+      // parseHTML reads back (editor-ext image attrs; `align=` via the OVERRIDES).
+      // `title` has no schema attr and is dropped by the parse. Unknown keys are
       // ignored (fail-open); a bad JSON body already returned null above.
       const a = parsed.attrs;
       if (typeof a.align === "string" && a.align)

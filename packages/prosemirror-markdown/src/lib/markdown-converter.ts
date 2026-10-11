@@ -1050,13 +1050,10 @@ export function convertProseMirrorToMarkdown(
         // STABLE key order so the output is deterministic. An attr equal to its
         // schema default is NOT emitted (predicate over the canonicalized attrs).
         const json: Record<string, unknown> = {};
-        // Numeric sizing attrs are coerced to string in the payload: the import
-        // side (applyCommentDirectives) writes them as DOM attributes and the
-        // schema's parseHTML reads them back as strings, so a numeric value would
-        // otherwise round-trip as `420 -> "420"` and produce a one-time spurious
-        // git diff. Emitting the string form up front keeps the round-trip
-        // byte-stable whether the source attr was a number or a string (mirrors
-        // the legacy imageToHtml, which stringified via `width="…"`).
+        // Sizing attrs are stringified so the payload is the same whether the
+        // source value was a number or a string; on import the image schema
+        // parses width/height back to numbers (a "%" width stays a string) and keeps
+        // size/aspectRatio as strings.
         if (imgAttrs.width != null) json.width = String(imgAttrs.width);
         if (imgAttrs.height != null) json.height = String(imgAttrs.height);
         // align default is unified to "center" (#293 canon #4): treat BOTH null

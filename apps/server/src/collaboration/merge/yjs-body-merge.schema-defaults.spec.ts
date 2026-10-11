@@ -5,23 +5,16 @@ import { tiptapExtensions } from '../collaboration.util';
 import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
 
 /**
- * Regression for the BUG CLASS behind the runaway whole-body duplication: the
- * point-fix (7a7b840e) only normalized `indent: 0`, but the SAME divergence
- * recurs for every attribute whose editor-ext (server) schema default the live
- * Yjs doc MATERIALIZES while the git round-trip — which comes through the engine
- * schema (different, usually null, defaults) plus `y-prosemirror`'s null-attr
- * dropping — does NOT carry. Confirmed triggers beyond `indent`:
+ * Regression for the BUG CLASS behind the runaway whole-body duplication: a
+ * block must key the same whether an attribute carries its editor-ext schema
+ * default (the live Yjs doc materializes `indent: 0`, `image.align: "center"`,
+ * link `internal: false`) or nothing at all (a raw Y fragment, or a body from
+ * git where the converter defaults pdf/youtube sizes to null and
+ * `y-prosemirror` drops null attrs). Element attrs and MARK attrs are both
+ * covered — marks are serialized raw in the XmlText delta.
  *
- *   - `image.align`   : editor-ext default "center" (materialized) vs engine
- *                       default null (dropped) -> element-attr divergence.
- *   - link mark `internal`: editor-ext default false (materialized) vs engine
- *                       default null -> MARK-attr divergence (the prior denylist
- *                       could not reach marks at all — they are serialized raw in
- *                       the XmlText delta).
- *
- * `highlight.colorName` is normalized too (defense-in-depth); it is NOT a strong
- * real-world trigger because BOTH schemas default it to null, but the schema-
- * derived normalization handles it for free and stays idempotent.
+ * `highlight.colorName` defaults to null, so it is normalized for free; the
+ * schema-derived normalization stays idempotent.
  *
  * The fix derives the defaults from the ACTUAL ProseMirror schema (getSchema of
  * the server tiptapExtensions) and drops any element- OR mark-attribute equal to

@@ -30,6 +30,8 @@ jest.mock('@hocuspocus/transformer', () => {
 // it imports so loading its module does not pull in the React graph either.
 jest.mock('@docmost/editor-ext', () => ({
   markdownToHtml: jest.fn(),
+  // The converter maps this list when its schema module loads.
+  documentExtensions: [],
 }));
 // The service loads `parseDocmostMarkdown` / `markdownToProseMirror` at runtime
 // via the `loadGitSync()` bridge (the ESM `@docmost/git-sync` package cannot be

@@ -174,7 +174,7 @@ test("export emits comment anchors and they round-trip back to a comment mark", 
 
 test("export emits a spoiler span and it round-trips back to a spoiler mark", () => {
   // A small ProseMirror doc with a text run carrying a `spoiler` mark. The MCP
-  // schema mirrors the editor-ext mark, so a spoiler must survive json -> md ->
+  // schema includes the editor-ext mark, so a spoiler must survive json -> md ->
   // json instead of being silently dropped as an unrecognized mark.
   const doc = {
     type: "doc",

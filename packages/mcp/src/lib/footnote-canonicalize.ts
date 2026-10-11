@@ -3,13 +3,11 @@
  *
  * `canonicalizeFootnotes(doc)` is a pure ProseMirror-JSON port of the editor's
  * `footnoteSyncPlugin` end-state, identical in behaviour to
- * `@docmost/editor-ext`'s `canonicalizeFootnotes`. It is mirrored here — rather
- * than imported from editor-ext — for the SAME reason the `docmost-schema.ts`
- * nodes are mirrored: the MCP package is deliberately
- * decoupled from the browser/React-heavy editor barrel and operates on plain
- * JSON. The editor-ext copy owns the golden test against the live plugin; this
- * copy must stay behaviourally identical (a SHARED golden corpus, exercised by
- * both test suites, pins that — see `test/unit/footnote-corpus.mjs`).
+ * `@docmost/editor-ext`'s `canonicalizeFootnotes`, kept here as a separate copy
+ * over plain JSON rather than imported from editor-ext. The editor-ext copy owns
+ * the golden test against the live plugin; this copy must stay behaviourally
+ * identical (a SHARED golden corpus, exercised by both test suites, pins that —
+ * see `test/unit/footnote-corpus.mjs`).
  *
  * This module is the pure MIRROR only. The inline-authoring helpers
  * (`footnoteContentKey`, `makeFootnoteDefinition`, `generateFootnoteId`) used by

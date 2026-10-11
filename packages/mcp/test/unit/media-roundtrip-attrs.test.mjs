@@ -75,16 +75,15 @@ test("round-trip: drawio diagram survives with src, title, dimensions, align, at
 // existing file checks only src/provider/name/attachmentId, so a dropped
 // width/height/align would pass there but fail here.
 // ---------------------------------------------------------------------------
-test("round-trip: youtube preserves width/height/align (data-* attrs)", async () => {
+test("round-trip: youtube preserves width/height (data-* attrs)", async () => {
   const { found } = await roundtrip(
-    { type: "youtube", attrs: { src: "https://youtube.com/watch?v=x", width: 560, height: 315, align: "left" } },
+    { type: "youtube", attrs: { src: "https://youtube.com/watch?v=x", width: 560, height: 315 } },
     "youtube",
   );
   assert.equal(found.length, 1);
   const a = found[0].attrs;
   assert.equal(String(a.width), "560");
   assert.equal(String(a.height), "315");
-  assert.equal(a.align, "left");
 });
 
 test("round-trip: embed preserves provider, width/height and align", async () => {

@@ -27,7 +27,7 @@ describe('round-trip idempotency (SPEC §11)', () => {
 
     // The property git actually needs: a second export reproduces the first
     // byte-for-byte. We intentionally do NOT deep-equal doc vs doc2 — the
-    // converter reconstructs schema default attrs (e.g. indent:null), a known
+    // converter reconstructs schema default attrs (e.g. indent: 0), a known
     // SPEC §11 divergence that does not affect markdown stability.
     expect(md2).toBe(md1);
   });

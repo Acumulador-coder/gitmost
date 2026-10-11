@@ -1119,6 +1119,9 @@ importers:
 
   packages/prosemirror-markdown:
     dependencies:
+      '@docmost/editor-ext':
+        specifier: workspace:*
+        version: link:../editor-ext
       '@tiptap/core':
         specifier: 3.20.4
         version: 3.20.4(@tiptap/pm@3.20.4)
@@ -1165,9 +1168,6 @@ importers:
         specifier: 4.3.6
         version: 4.3.6
     devDependencies:
-      '@docmost/editor-ext':
-        specifier: workspace:*
-        version: link:../editor-ext
       '@types/jsdom':
         specifier: ^21.1.7
         version: 21.1.7

@@ -364,7 +364,7 @@ export function noteItem(inlineNodes: any[]): any {
 /**
  * Wrap inline ProseMirror nodes in a real footnoteDefinition node keyed by id:
  *   { type:"footnoteDefinition", attrs:{id}, content:[{ type:"paragraph", content }] }
- * (mirrors the editor-ext / docmost-schema FootnoteDefinition node).
+ * (the shape of the editor-ext FootnoteDefinition node).
  *
  * Built on the shared `makeFootnoteDefinition` factory (`@docmost/prosemirror-markdown`);
  * the only extra is a fresh block id on the inner paragraph (Docmost stamps one,

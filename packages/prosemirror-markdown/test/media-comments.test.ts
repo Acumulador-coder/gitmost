@@ -73,19 +73,18 @@ const inColumn = (node: any) =>
 describe('#293 #8 IMAGE-FORM: youtube', () => {
   it('representative node -> exact md + lossless byte-stable round-trip', async () => {
     const doc = mkDoc([
-      { type: 'youtube', attrs: { src: 'https://youtu.be/abc', width: 560, height: 315, align: 'right' } },
+      { type: 'youtube', attrs: { src: 'https://youtu.be/abc', width: 560, height: 315 } },
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
     expect(md1).toBe(
-      '![](https://youtu.be/abc)<!--youtube {"width":"560","height":"315","align":"right"}-->',
+      '![](https://youtu.be/abc)<!--youtube {"width":"560","height":"315"}-->',
     );
     expect(md2).toBe(md1);
     const yt = findFirst(doc2, 'youtube');
     expect(yt).not.toBeNull();
     expect(yt.attrs.src).toBe('https://youtu.be/abc');
-    expect(yt.attrs.width).toBe('560');
-    expect(yt.attrs.height).toBe('315');
-    expect(yt.attrs.align).toBe('right');
+    expect(yt.attrs.width).toBe(560);
+    expect(yt.attrs.height).toBe(315);
   });
 
   it('minimal node -> discriminator STILL emitted; round-trips to youtube (NOT image)', async () => {
@@ -461,7 +460,7 @@ describe('#293 #8 fail-open', () => {
     const doc2 = await markdownToProseMirror('![](/y)<!--youtube {"unknownKey":1,"width":"560"}-->');
     const yt = findFirst(doc2, 'youtube');
     expect(yt).not.toBeNull();
-    expect(yt.attrs.width).toBe('560');
+    expect(yt.attrs.width).toBe(560);
     expect(yt.attrs).not.toHaveProperty('unknownKey');
   });
 
