@@ -28,15 +28,27 @@ export const ID_KEY = "gitmost_id";
 /** Leading YAML frontmatter block: `---\n…\n---` at the very start of the file. */
 const FRONTMATTER_RE = /^﻿?---\n([\s\S]*?)\n---\n?/;
 
-/** The top-level `<ID_KEY>: <value>` line inside the frontmatter (quotes optional). */
+/**
+ * The top-level `<ID_KEY>: <value>` line inside the frontmatter (quotes optional).
+ *
+ * Parsed by prefix + trim, never by a backtracking regex: the former
+ * `^gitmost_id:\s*(.+?)\s*$` took quadratic time on a long whitespace run inside
+ * the value (a 40k-space line blocked the event loop for most of a second, and
+ * every tracked file is parsed on every sync cycle). The result is the same as
+ * that regex's: a line counts only when its value holds a character a regex `.`
+ * matches, and that value may not span a line terminator (`\r`, U+2028,
+ * U+2029); a whitespace-only value reads as no id.
+ */
 function readIdFromYaml(yaml: string): string | null {
-  const re = new RegExp(`^${ID_KEY}:\\s*(.+?)\\s*$`);
+  const prefix = `${ID_KEY}:`;
   for (const line of yaml.split("\n")) {
-    const m = line.match(re);
-    if (m) {
-      const v = m[1].trim().replace(/^["']|["']$/g, "");
-      return v === "" ? null : v;
-    }
+    if (!line.startsWith(prefix)) continue;
+    const rest = line.slice(prefix.length);
+    if (/^[\r\u2028\u2029]*$/.test(rest)) continue;
+    const value = rest.trim();
+    if (/[\r\u2028\u2029]/.test(value)) continue;
+    const v = value.replace(/^["']|["']$/g, "");
+    return v === "" ? null : v;
   }
   return null;
 }

@@ -115,9 +115,14 @@ export function parseDocmostMarkdown(full: string): {
   let bodyEnd = normalized.length;
   if (lastOpenStart !== -1) {
     const rest = normalized.slice(lastOpenEnd);
-    const close = rest.match(/\r?\n-->[ \t]*\r?\n?\s*$/); // closer must end the doc
-    if (close) {
-      const jsonText = rest.slice(0, close.index);
+    // The closer `\r?\n-->` must end the doc (only whitespace may follow it).
+    // A linear scan instead of the former `/\r?\n-->[ \t]*\r?\n?\s*$/`, which
+    // backtracked quadratically on long whitespace runs (hostile import input).
+    const trimmed = rest.trimEnd();
+    if (trimmed.endsWith("\n-->")) {
+      let closeIndex = trimmed.length - "\n-->".length;
+      if (trimmed[closeIndex - 1] === "\r") closeIndex--;
+      const jsonText = rest.slice(0, closeIndex);
       try {
         comments = JSON.parse(jsonText);
       } catch (e) {

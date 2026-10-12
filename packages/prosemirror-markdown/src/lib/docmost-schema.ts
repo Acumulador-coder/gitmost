@@ -8,6 +8,7 @@ import {
   documentExtensions,
   encodeHtmlEmbedSource,
   decodeHtmlEmbedSource,
+  validCalloutTypes,
 } from "@docmost/editor-ext";
 
 export { encodeHtmlEmbedSource, decodeHtmlEmbedSource };
@@ -35,8 +36,6 @@ function getStyleProperty(element: HTMLElement, propertyName: string): string | 
   return null;
 }
 
-// The editor's callout types (`getValidCalloutType` in editor-ext callout/utils.ts).
-const CALLOUT_TYPES = ["default", "info", "note", "success", "warning", "danger"];
 // GitHub/Obsidian alert names that are not schema types, mapped to the closest banner.
 const CALLOUT_TYPE_ALIASES: Record<string, string> = {
   tip: "success",
@@ -47,7 +46,7 @@ export const clampCalloutType = (value: string | null | undefined): string => {
   if (!value) return "info";
   const lower = value.toLowerCase();
   // A real schema type round-trips to itself (idempotent).
-  if (CALLOUT_TYPES.includes(lower)) return lower;
+  if (validCalloutTypes.includes(lower)) return lower;
   // A known GitHub/Obsidian alias maps to the editor's closest banner.
   if (CALLOUT_TYPE_ALIASES[lower]) return CALLOUT_TYPE_ALIASES[lower];
   // Anything else is collapsed to the safe default (matches the editor).
@@ -158,6 +157,10 @@ const OVERRIDES: Record<string, (ext: any) => any> = {
       },
     }),
 };
+
+// The extension names the converter patches; each must name an extension in
+// editor-ext's `documentExtensions` (pinned by docmost-schema-parity.test.ts).
+export const OVERRIDE_EXTENSION_NAMES = Object.keys(OVERRIDES);
 
 export const docmostExtensions = (documentExtensions as any[]).map(
   (ext) => OVERRIDES[ext.name]?.(ext) ?? ext,

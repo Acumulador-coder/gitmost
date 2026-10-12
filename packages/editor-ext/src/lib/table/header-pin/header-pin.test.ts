@@ -1034,3 +1034,383 @@ describe('TablePinController oscillation latch', () => {
     expect(wrapper.classList.contains(PINNED)).toBe(false);
   });
 });
+
+// A stand-in for the EditorView: the controller only ever touches
+// `view.domObserver`, which it stops around its writes (writeUnobserved).
+function fakeView() {
+  const domObserver = { stop: vi.fn(), start: vi.fn() };
+  return { view: { domObserver } as any, domObserver };
+}
+
+// Wraps `obj[method]` so each call appends `entry` to `log`, then calls through.
+function logCalls(obj: any, method: string, entry: string, log: string[]) {
+  const original = obj[method].bind(obj);
+  vi.spyOn(obj, method).mockImplementation((...args: unknown[]) => {
+    log.push(entry);
+    return original(...args);
+  });
+}
+
+// Geometry stub that records the read.
+function loggedRect(name: string, rect: Partial<DOMRect>, log: string[]) {
+  return () => {
+    log.push(`read:${name}`);
+    return rect as DOMRect;
+  };
+}
+
+/**
+ * The shared animation frame: every controller is measured first (computePinTop
+ * once, then measureFallbackOffset per table), then every write runs with the
+ * editors' DOMObservers stopped. These pin the cross-controller properties: one
+ * controller's teardown must not cancel another's pending evaluation, the
+ * observer bracket is balanced (also when a write throws, and never touched by
+ * destroy()), and no geometry read lands after a write in the same frame.
+ */
+describe('TablePinController shared frame', () => {
+  let originalIO: unknown;
+  let originalRO: unknown;
+  let originalRaf: unknown;
+  let originalCaf: unknown;
+  let rafSeq: number;
+  let rafQueue: Map<number, FrameRequestCallback>;
+  let cancelSpy: ReturnType<typeof vi.fn>;
+  // Every IntersectionObserver callback by its root (the wrapper). Unlike
+  // installObserverStubs(), which keeps only the last one, this lets several
+  // controllers be fed independently inside one frame.
+  let ioCallbacks: Map<Element, (entries: any[]) => void>;
+  const live: TablePinController[] = [];
+
+  const flushFrames = () => {
+    const pending = [...rafQueue.values()];
+    rafQueue.clear();
+    for (const cb of pending) cb(0);
+  };
+
+  const emitFor = (wrapper: HTMLElement, isIntersecting: boolean) => {
+    const cb = ioCallbacks.get(wrapper);
+    expect(cb).toBeDefined();
+    cb!([
+      {
+        isIntersecting,
+        boundingClientRect: { width: 400, height: 120 } as DOMRectReadOnly,
+      },
+    ]);
+  };
+
+  const track = (ctrl: TablePinController) => {
+    live.push(ctrl);
+    return ctrl;
+  };
+
+  beforeEach(() => {
+    originalIO = (globalThis as any).IntersectionObserver;
+    originalRO = (globalThis as any).ResizeObserver;
+    originalRaf = (globalThis as any).requestAnimationFrame;
+    originalCaf = (globalThis as any).cancelAnimationFrame;
+
+    rafSeq = 0;
+    rafQueue = new Map();
+    (globalThis as any).requestAnimationFrame = (cb: FrameRequestCallback) => {
+      const handle = ++rafSeq;
+      rafQueue.set(handle, cb);
+      return handle;
+    };
+    cancelSpy = vi.fn((handle: number) => {
+      rafQueue.delete(handle);
+    });
+    (globalThis as any).cancelAnimationFrame = cancelSpy;
+
+    ioCallbacks = new Map();
+    (globalThis as any).IntersectionObserver = class {
+      constructor(
+        cb: (entries: any[]) => void,
+        options: IntersectionObserverInit,
+      ) {
+        ioCallbacks.set(options.root as Element, cb);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    (globalThis as any).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  });
+
+  afterEach(() => {
+    // Destroy first, while the rAF stubs are still installed: destroy() is what
+    // cancels a still-pending shared frame and resets the module-level frame,
+    // scroll-listener and pinOffsetWatcher bookkeeping for the next test.
+    while (live.length) live.pop()!.destroy();
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+    (globalThis as any).IntersectionObserver = originalIO;
+    (globalThis as any).ResizeObserver = originalRO;
+    (globalThis as any).requestAnimationFrame = originalRaf;
+    (globalThis as any).cancelAnimationFrame = originalCaf;
+  });
+
+  it('destroying one of two queued controllers keeps the frame for the other', () => {
+    const a = buildFixture();
+    const b = buildFixture();
+    const ctrlA = track(new TablePinController(a.wrapper, a.table));
+    track(new TablePinController(b.wrapper, b.table));
+    const measureA = vi.spyOn(ctrlA, 'measureFallbackOffset');
+    const rectA = vi.spyOn(a.table, 'getBoundingClientRect');
+
+    emitFor(a.wrapper, true);
+    emitFor(b.wrapper, true);
+    expect(rafQueue.size).toBe(1);
+
+    ctrlA.destroy();
+    // B still has an evaluation pending, so the shared frame must survive.
+    expect(cancelSpy).not.toHaveBeenCalled();
+    expect(rafQueue.size).toBe(1);
+
+    const aMutations = new MutationObserver(() => {});
+    aMutations.observe(a.wrapper, { attributes: true });
+    flushFrames();
+
+    expect(b.wrapper.classList.contains(PINNED)).toBe(true);
+    expect(b.wrapper.classList.contains(NO_OVERFLOW)).toBe(true);
+    // The destroyed controller is neither measured nor written.
+    expect(measureA).not.toHaveBeenCalled();
+    expect(rectA).not.toHaveBeenCalled();
+    expect(aMutations.takeRecords()).toHaveLength(0);
+    expect(a.wrapper.classList.contains(PINNED)).toBe(false);
+    aMutations.disconnect();
+  });
+
+  it('stops the DOMObserver exactly once around the writes and restarts it after', () => {
+    const { wrapper, table } = buildFixture();
+    const { view, domObserver } = fakeView();
+    track(new TablePinController(wrapper, table, view));
+    const seen: string[] = [];
+    domObserver.stop.mockImplementation(() => {
+      seen.push(`stop pinned=${wrapper.classList.contains(PINNED)}`);
+    });
+    domObserver.start.mockImplementation(() => {
+      seen.push(`start pinned=${wrapper.classList.contains(PINNED)}`);
+    });
+
+    emitFor(wrapper, true);
+    // Nothing is written from inside the observer callback itself.
+    expect(domObserver.stop).not.toHaveBeenCalled();
+    flushFrames();
+
+    expect(domObserver.stop).toHaveBeenCalledTimes(1);
+    expect(domObserver.start).toHaveBeenCalledTimes(1);
+    expect(domObserver.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      domObserver.start.mock.invocationCallOrder[0],
+    );
+    // The class writes landed strictly between the two.
+    expect(seen).toEqual(['stop pinned=false', 'start pinned=true']);
+  });
+
+  it('stops a DOMObserver shared by several tables only once per frame', () => {
+    const a = buildFixture();
+    const b = buildFixture();
+    const { view, domObserver } = fakeView();
+    track(new TablePinController(a.wrapper, a.table, view));
+    track(new TablePinController(b.wrapper, b.table, view));
+
+    emitFor(a.wrapper, true); // -> native
+    emitFor(b.wrapper, false); // -> fallback
+    flushFrames();
+
+    expect(domObserver.stop).toHaveBeenCalledTimes(1);
+    expect(domObserver.start).toHaveBeenCalledTimes(1);
+    expect(a.wrapper.classList.contains(NO_OVERFLOW)).toBe(true);
+    expect(b.wrapper.classList.contains(PINNED)).toBe(true);
+    expect(b.wrapper.classList.contains(NO_OVERFLOW)).toBe(false);
+  });
+
+  it('restarts the DOMObserver even when a write throws, and the frame is not wedged', () => {
+    const { wrapper, table } = buildFixture();
+    const { view, domObserver } = fakeView();
+    track(new TablePinController(wrapper, table, view));
+    vi.spyOn(wrapper.classList, 'add').mockImplementationOnce(() => {
+      throw new Error('write failed');
+    });
+
+    emitFor(wrapper, true);
+    expect(() => flushFrames()).toThrow('write failed');
+
+    expect(domObserver.stop).toHaveBeenCalledTimes(1);
+    expect(domObserver.start).toHaveBeenCalledTimes(1);
+
+    // The throw did not leave the shared frame marked as pending: the next
+    // delivery schedules a fresh one and it applies normally.
+    emitFor(wrapper, false);
+    expect(rafQueue.size).toBe(1);
+    flushFrames();
+    expect(wrapper.classList.contains(PINNED)).toBe(true);
+    expect(wrapper.classList.contains(NO_OVERFLOW)).toBe(false);
+    expect(domObserver.stop).toHaveBeenCalledTimes(2);
+    expect(domObserver.start).toHaveBeenCalledTimes(2);
+  });
+
+  it('destroy() leaves the DOMObserver alone', () => {
+    const { wrapper, table } = buildFixture();
+    const { view, domObserver } = fakeView();
+    const ctrl = track(new TablePinController(wrapper, table, view));
+
+    emitFor(wrapper, false); // fallback: the teardown has the most to undo
+    flushFrames();
+    expect(wrapper.classList.contains(PINNED)).toBe(true);
+    domObserver.stop.mockClear();
+    domObserver.start.mockClear();
+
+    // A pending evaluation and a pending scroll pass, then teardown.
+    emitFor(wrapper, true);
+    document.dispatchEvent(new Event('scroll'));
+    expect(rafQueue.size).toBe(1);
+    ctrl.destroy();
+
+    // EditorView.destroy() stops the observer before plugin views are
+    // destroyed; a start() here would revive it on a dead view.
+    expect(domObserver.stop).not.toHaveBeenCalled();
+    expect(domObserver.start).not.toHaveBeenCalled();
+    expect(wrapper.classList.contains(PINNED)).toBe(false);
+    // Nothing else was pending, so the frame was cancelled outright.
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+    expect(rafQueue.size).toBe(0);
+  });
+
+  it('reads all geometry before any write when a scroll and an intersection share a frame', () => {
+    const log: string[] = [];
+    const anchor = document.createElement('div');
+    anchor.setAttribute('data-page-header', 'true');
+    anchor.getBoundingClientRect = loggedRect(
+      'anchor',
+      { bottom: 100, height: 40 },
+      log,
+    );
+    document.body.appendChild(anchor);
+
+    const a = buildFixture(); // in fallback, i.e. on the scroll path
+    const b = buildFixture(); // gets the intersection delivery
+    const { view, domObserver } = fakeView();
+    track(new TablePinController(a.wrapper, a.table, view));
+    track(new TablePinController(b.wrapper, b.table, view));
+    // A straddles the pin line (pinTop = 100), so the scroll pass writes an offset.
+    a.table.getBoundingClientRect = loggedRect(
+      'A-table',
+      { top: 50, bottom: 1000, height: 950 },
+      log,
+    );
+    a.table.querySelector('tr')!.getBoundingClientRect = loggedRect(
+      'A-row',
+      { height: 40 },
+      log,
+    );
+    b.table.getBoundingClientRect = loggedRect(
+      'B-table',
+      { top: 500, bottom: 900, height: 400 },
+      log,
+    );
+    b.table.querySelector('tr')!.getBoundingClientRect = loggedRect(
+      'B-row',
+      { height: 40 },
+      log,
+    );
+
+    emitFor(a.wrapper, false);
+    flushFrames();
+    expect(a.wrapper.classList.contains(PINNED)).toBe(true);
+    expect(a.wrapper.classList.contains(NO_OVERFLOW)).toBe(false);
+
+    // From here on, record computePinTop's anchor lookup and every write too.
+    logCalls(document, 'querySelector', 'read:pin-anchor-query', log);
+    for (const [name, el] of [
+      ['A', a.wrapper],
+      ['B', b.wrapper],
+      ['root', document.documentElement],
+    ] as const) {
+      logCalls(el.classList, 'add', `write:${name}-class`, log);
+      logCalls(el.classList, 'remove', `write:${name}-class`, log);
+      logCalls(el.style, 'setProperty', `write:${name}-style`, log);
+      logCalls(el.style, 'removeProperty', `write:${name}-style`, log);
+    }
+    domObserver.stop.mockImplementation(() => log.push('stop'));
+    domObserver.start.mockImplementation(() => log.push('start'));
+    log.length = 0;
+
+    document.dispatchEvent(new Event('scroll'));
+    emitFor(b.wrapper, true);
+    expect(rafQueue.size).toBe(1);
+    flushFrames();
+
+    const reads = log.flatMap((e, i) => (e.startsWith('read:') ? [i] : []));
+    const writes = log.flatMap((e, i) => (e.startsWith('write:') ? [i] : []));
+    expect(log).toEqual(expect.arrayContaining(['read:A-table', 'read:B-table']));
+    expect(log.filter((e) => e === 'read:anchor')).toHaveLength(1); // pinTop once
+    expect(writes.length).toBeGreaterThan(0);
+    expect(Math.max(...reads)).toBeLessThan(Math.min(...writes));
+    // The writes sit inside one stop/start bracket.
+    expect(log.filter((e) => e === 'stop' || e === 'start')).toEqual([
+      'stop',
+      'start',
+    ]);
+    expect(log.indexOf('stop')).toBeLessThan(Math.min(...writes));
+    expect(log.indexOf('start')).toBeGreaterThan(Math.max(...writes));
+    // And they are the expected ones: B pinned natively, A got its offset.
+    expect(b.wrapper.classList.contains(NO_OVERFLOW)).toBe(true);
+    expect(a.wrapper.style.getPropertyValue('--table-pin-offset')).toBe('50px');
+  });
+
+  // KNOWN GAP (not fixed here): pinOffsetWatcher.acquire() publishes
+  // synchronously, and publish() re-measures the pin anchors. When, inside one
+  // frame's write phase, the last pinned table unpins (release() drops the
+  // refcount to 0 and writes :root) and then another table starts pinning
+  // (acquire() 0 -> 1), that anchor getBoundingClientRect() runs AFTER the
+  // first table's class writes — a forced layout the two-phase frame exists to
+  // avoid. Rare in practice: it needs an in-frame 'off' (an intersection
+  // delivery for a table that became ineligible without a refresh()) ordered
+  // before the other table's first pin.
+  it.fails('keeps reads before writes when one table unpins and another first pins in the same frame', () => {
+    const log: string[] = [];
+    const anchor = document.createElement('div');
+    anchor.setAttribute('data-page-header', 'true');
+    anchor.getBoundingClientRect = loggedRect(
+      'anchor',
+      { bottom: 100, height: 40 },
+      log,
+    );
+    document.body.appendChild(anchor);
+
+    const x = buildFixture();
+    const y = buildFixture();
+    track(new TablePinController(x.wrapper, x.table));
+    track(new TablePinController(y.wrapper, y.table));
+    emitFor(x.wrapper, true); // X holds the only pin-offset reference
+    flushFrames();
+    expect(pinOffsetWatcher.refs).toBe(1);
+
+    for (const [name, el] of [
+      ['X', x.wrapper],
+      ['Y', y.wrapper],
+      ['root', document.documentElement],
+    ] as const) {
+      logCalls(el.classList, 'add', `write:${name}-class`, log);
+      logCalls(el.classList, 'remove', `write:${name}-class`, log);
+      logCalls(el.style, 'setProperty', `write:${name}-style`, log);
+      logCalls(el.style, 'removeProperty', `write:${name}-style`, log);
+    }
+    log.length = 0;
+
+    setFirstRowCells(x.table, 'td'); // X is no longer eligible
+    emitFor(x.wrapper, true); // X evaluated first: -> off, releases to 0
+    emitFor(y.wrapper, true); // Y: off -> native, acquires 0 -> 1
+    flushFrames();
+
+    expect(x.wrapper.classList.contains(PINNED)).toBe(false);
+    expect(y.wrapper.classList.contains(PINNED)).toBe(true);
+    const reads = log.flatMap((e, i) => (e.startsWith('read:') ? [i] : []));
+    const writes = log.flatMap((e, i) => (e.startsWith('write:') ? [i] : []));
+    expect(Math.max(...reads)).toBeLessThan(Math.min(...writes));
+  });
+});
