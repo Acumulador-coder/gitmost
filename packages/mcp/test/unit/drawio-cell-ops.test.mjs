@@ -1,4 +1,4 @@
-// Unit tests for the drawioEditCells operations (issue #425, acceptance #4):
+// Unit tests for the drawioEditCells operations:
 // add / update / delete applied to the parsed model, with a cascade delete that
 // removes container children AND every connected edge.
 import { test } from "node:test";

@@ -7,12 +7,11 @@ import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
  * Docmost document schema supports. The git-sync converter exports a page body to
  * Markdown and imports it back; any node type that has no parseHTML inverse (or is
  * serialized to a literal that never re-parses) silently degrades to plain text on
- * a round trip — e.g. `subpages` used to export as the literal `{{SUBPAGES}}` and
- * came back as the visible text "{{SUBPAGES}}" instead of the embed.
+ * a round trip (e.g. a `{{SUBPAGES}}` literal would come back as visible text).
  *
  * This guards the whole class: for one representative fixture per type, the node
  * (or mark) MUST still be present after convert -> import, and the exported
- * Markdown must not contain a `{{...}}` template literal (the old lossy form).
+ * Markdown must not contain a `{{...}}` template literal.
  */
 
 const T = (t: string, marks?: any[]) =>
@@ -297,11 +296,11 @@ describe('git-sync converter: lose-prone atoms keep their VALUES across a round 
 });
 
 // ---------------------------------------------------------------------------
-// #549: hardBreak COUNT/position preservation across a pm -> md -> pm round
-// trip. The FIXTURES block above only proves a mid-paragraph hardBreak survives
-// as a node; these pin the three sub-cases whose `  \n` two-space form was
-// silently dropped on re-import (trailing / consecutive / table cell), plus a
-// mid-paragraph regression guard so the byte-stable `  \n` form is not lost.
+// hardBreak COUNT/position preservation across a pm -> md -> pm round trip.
+// The FIXTURES block above only proves a mid-paragraph hardBreak survives as a
+// node; these pin the three positions where the `  \n` two-space form would be
+// dropped on re-import (trailing / consecutive / table cell), plus the
+// mid-paragraph case that keeps the byte-stable `  \n` form.
 // ---------------------------------------------------------------------------
 describe('#549: hardBreak survives every round-trip position', () => {
   const HB = { type: 'hardBreak' };

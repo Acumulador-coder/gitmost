@@ -1,18 +1,17 @@
-// DocmostClient — thin facade assembled from domain mixins (issue #450).
+// DocmostClient — thin facade assembled from domain mixins.
 //
-// The 5206-line god-object was split into cohesive domain modules under
-// `client/`, each a mixin layered on the shared `DocmostClientContext` base
-// (which owns the axios client, auth, apiUrl, the resolvePageId cache and the
-// core HTTP/write seams). The mixins compose into ONE prototype chain, so:
-//   - every public method name/signature is UNCHANGED (the external contract —
-//     `DocmostClientLike` = `Pick<DocmostClient, ...>`, the in-app adapter, and
-//     both transports — resolves exactly as before);
+// The domain modules under `client/` are each a mixin layered on the shared
+// `DocmostClientContext` base (which owns the axios client, auth, apiUrl, the
+// resolvePageId cache and the core HTTP/write seams). The mixins compose into
+// ONE prototype chain, so:
+//   - the public method names/signatures are the external contract
+//     (`DocmostClientLike` = `Pick<DocmostClient, ...>`, the in-app adapter, and
+//     both transports);
 //   - `this.<method>` dispatches virtually across modules, so a test subclass
 //     that overrides a seam (`mutatePage`, `resolvePageId`, `getPageRaw`,
 //     `getCollabTokenWithReauth`, `uploadAttachmentBuffer`, `fetchAttachmentText`)
-//     is still seen by every caller — the load-bearing #449/#425 patterns
-//     (single held page-lock, self-resolving write seams, the no-await critical
-//     window in collab-session) are preserved byte-for-byte in their modules.
+//     is seen by every caller — the single held page-lock, self-resolving write
+//     seams and the no-await critical window in collab-session rely on this.
 //
 // This file only wires the chain and re-exports the package's public surface.
 import { DocmostClientContext } from "./client/context.js";
@@ -45,7 +44,7 @@ export type { PageId } from "./lib/page-id.js";
 
 // The full public + shared instance surface of the assembled client. Built by
 // INTERSECTING each domain mixin's public interface (each DERIVED from its class
-// and enforced by that class's `implements` clause — issue #446, no hand-mirror)
+// and enforced by that class's `implements` clause, no hand-mirror)
 // with the shared context. Named explicitly so the emitted `.d.ts` refers to
 // this type rather than the anonymous mixin-composed class (which carries the
 // base's `protected` shared state and would otherwise trip TS4094). DocValidate
@@ -56,8 +55,8 @@ export type { PageId } from "./lib/page-id.js";
 // exactly (the contract surface both hosts type-check against — `DocmostClientLike
 // = Pick<DocmostClient, ...>`, the in-app adapter). Explicit source return types
 // (e.g. `stashPage`, `exportPageMarkdown`, the drawio tools) are carried through
-// verbatim; methods that relied on inference in the monolith surface as `any`
-// return here — a deliberate, contract-safe trade-off, since the execute
+// verbatim; methods without an explicit return type surface as `any` return
+// here — a deliberate, contract-safe trade-off, since the execute
 // wrappers and the adapter consume the arguments, not the awaited return shape.
 type DocmostClientInstance = DocmostClientContext &
   IReadMixin &
@@ -96,8 +95,8 @@ const DocmostClientBase: new (...args: any[]) => DocmostClientInstance =
  * The Docmost API client used by both the standalone MCP server and the in-app
  * AI-SDK host. A thin, concrete assembly of the domain mixins above; carries no
  * logic of its own. See `client/` for the per-domain implementations. Its public
- * method surface is UNCHANGED from the original monolith, so the external
- * contract (`DocmostClientLike = Pick<DocmostClient, ...>`, the in-app adapter,
- * both transports' execute-wrappers) resolves identically.
+ * method surface is the external contract (`DocmostClientLike =
+ * Pick<DocmostClient, ...>`, the in-app adapter, both transports'
+ * execute-wrappers).
  */
 export class DocmostClient extends DocmostClientBase {}

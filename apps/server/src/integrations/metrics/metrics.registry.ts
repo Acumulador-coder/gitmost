@@ -40,7 +40,7 @@ import {
 } from './metrics.constants';
 
 /**
- * Process-wide perf-metrics registry (#355).
+ * Process-wide perf-metrics registry.
  *
  * This is a plain module singleton (NOT a Nest provider) because the collectors
  * are cross-cutting: the Kysely `log` callback (built in a DI factory), the

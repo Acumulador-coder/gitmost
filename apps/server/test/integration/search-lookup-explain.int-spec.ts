@@ -8,29 +8,25 @@ import {
 } from './db';
 
 /**
- * #443 dead-index guard — EXPLAIN on the REAL DB.
+ * Dead-index guard — EXPLAIN on the REAL DB.
  *
  * The lookup mode's substring predicates run a leading-wildcard
  * `LOWER(f_unaccent(col)) LIKE '%q%'`. Those are only fast when Postgres uses
  * the GIN trigram indexes:
- *   - idx_pages_title_trgm         on (LOWER(f_unaccent(title)))        [#348]
- *   - idx_pages_text_content_trgm  on (LOWER(f_unaccent(text_content))) [#443]
+ *   - idx_pages_title_trgm         on (LOWER(f_unaccent(title)))
+ *   - idx_pages_text_content_trgm  on (LOWER(f_unaccent(text_content)))
  *
  * Postgres uses a functional index ONLY when the query expression matches the
- * index expression EXACTLY. The original lookup query wrapped the columns in
- * `coalesce(col,'')`, which differs from the coalesce-FREE index expression and
- * silently forced a Seq Scan on pages for EVERY lookup (the MCP client always
- * sends substring:true). This test locks that in.
+ * index expression EXACTLY: wrapping the columns in `coalesce(col,'')` forces a
+ * Seq Scan on pages for EVERY lookup (the MCP client always sends
+ * substring:true).
  *
  * Discriminator: `SET enable_seqscan = off` asks the planner "CAN this predicate
- * use the index at all?" — which is exactly what the coalesce bug breaks. With
- * seqscan disabled:
- *   - the coalesce-FREE (fixed) predicate plans a Bitmap Index Scan on the trgm
- *     index (no Seq Scan on pages);
- *   - the coalesce-WRAPPED (buggy) predicate cannot use the index and falls back
- *     to a Seq Scan on pages even though seqscan is disabled.
- * We assert both to prove the fix and to keep the regression from silently
- * returning.
+ * use the index at all?". With seqscan disabled:
+ *   - the coalesce-FREE predicate plans a Bitmap Index Scan on the trgm index
+ *     (no Seq Scan on pages);
+ *   - the coalesce-WRAPPED predicate cannot use the index and falls back to a
+ *     Seq Scan on pages even though seqscan is disabled.
  */
 describe('SearchService agent-lookup EXPLAIN — trgm index is live [integration]', () => {
   let db: Kysely<any>;
@@ -109,7 +105,7 @@ describe('SearchService agent-lookup EXPLAIN — trgm index is live [integration
     expect(plan).not.toMatch(/Seq Scan on pages/i);
   });
 
-  // Negative control: the OLD coalesce-wrapped predicate must NOT be able to use
+  // Negative control: the coalesce-wrapped predicate must NOT be able to use
   // the index — even with seqscan disabled it can only Seq Scan pages. If this
   // ever stops seq-scanning, the coalesce/index expressions have re-aligned and
   // the guard above is no longer meaningful.

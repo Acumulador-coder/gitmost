@@ -8,16 +8,14 @@ import type {
 } from '../src/engine/push.js';
 import type { DocmostMdMeta } from '@docmost/prosemirror-markdown';
 
-// RED-TEAM finding #4 (two facets):
-//   (a) buildVaultLayout disambiguation is ORDER-DEPENDENT: which of two
-//       equally-titled root pages keeps the bare stem (and which gets the
-//       ` ~slugId` suffix) depends purely on input array order. The layout is
-//       supposed to be a deterministic function of the page SET, so reordering
-//       the input must not move the suffix onto a different page.
+// Two layout/title properties:
+//   (a) buildVaultLayout disambiguation is a deterministic function of the page
+//       SET: which of two equally-titled root pages keeps the bare stem (and
+//       which gets the ` ~slugId` suffix) must not depend on input order.
 //   (b) The page title derived from a DISAMBIGUATED filename ('Report ~a1.md')
-//       never strips the cosmetic ` ~slugId` suffix, so a pure disambiguation
-//       file-rename is mis-classified as a real title RENAME that would push the
-//       suffix ('Report ~a1') back into Docmost as the page's actual title.
+//       strips the cosmetic ` ~slugId` suffix, so a pure disambiguation
+//       file-rename is not mis-classified as a title RENAME that would push
+//       'Report ~a1' back into Docmost as the page's title.
 
 describe('redteam #4a — buildVaultLayout is stable under input reorder', () => {
   it('keeps the same stem for page A regardless of input order', () => {

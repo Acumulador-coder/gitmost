@@ -1,5 +1,5 @@
 /**
- * Nested whole-document generator (#351, PR 2) — "variant A": a random walk over
+ * Nested whole-document generator: a random walk over
  * the schema's ContentMatch automaton.
  *
  * Where the FLAT generator (node-generators.ts) emits `{doc:[ <one target> ]}`,

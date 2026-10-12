@@ -62,16 +62,13 @@ function numberDecoration(pos: number, nodeSize: number, num: number): Decoratio
 
 /**
  * Compute the number map, reference counts AND the decorations for `doc` in a
- * SINGLE document walk (previously three separate O(n) traversals per
- * docChanged — computeFootnoteNumbers + computeFootnoteRefCounts + a decoration
- * pass, #343 PART 5). The plugin caches the result so NodeViews can read numbers
- * without recomputing.
+ * SINGLE document walk. The plugin caches the result so NodeViews can read
+ * numbers without recomputing.
  *
  * References are numbered and decorated as they are encountered (document
  * order). Definition positions are collected during the same walk and decorated
  * afterwards from the completed number map — so a definition that appears before
- * its reference in document order still resolves to the correct number, and the
- * output is identical to the previous three-pass implementation. (Decoration
+ * its reference in document order still resolves to the correct number. (Decoration
  * insertion order does not matter: DecorationSet.create indexes by position.)
  */
 function buildFootnoteNumberingState(

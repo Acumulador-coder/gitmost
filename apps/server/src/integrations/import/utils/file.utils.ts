@@ -33,7 +33,7 @@ export function getFileTaskFolderPath(
 /**
  * Pure path-safety decision for a single ZIP entry (zip-slip / path-traversal guard).
  *
- * Reproduces exactly the inline check previously embedded in `extractZipInternal`:
+ * Checks, in order:
  *  1. Strip any leading slashes from the entry name.
  *  2. Reject names that fail `yauzl.validateFileName` (e.g. backslashes,
  *     relative `..` segments, drive letters).

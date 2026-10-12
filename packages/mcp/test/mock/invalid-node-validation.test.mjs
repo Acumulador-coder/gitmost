@@ -1,4 +1,4 @@
-// Mock regression for the FAIL-FAST invalid-node validation (#409).
+// Mock regression for the FAIL-FAST invalid-node validation.
 //
 // A structural editor (patchNode / insertNode / updatePageJson) given a doc
 // whose NESTED child has an absent/unknown `type` (the exact shape the Yjs

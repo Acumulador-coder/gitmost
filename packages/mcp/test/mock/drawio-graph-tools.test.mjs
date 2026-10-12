@@ -1,4 +1,4 @@
-// Contract tests for the stage-3 drawio client methods (issue #425):
+// Contract tests for the stage-3 drawio client methods:
 // drawioEditCells / drawioFromGraph / drawioFromMermaid. Same seam-override
 // pattern as drawio-tools.test.mjs: a DocmostClient subclass stubs the I/O seams
 // so the tool logic runs without a live Docmost / collab socket.

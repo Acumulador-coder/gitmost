@@ -25,12 +25,11 @@ const findAll = (node, type, acc = []) => {
 };
 
 // ---------------------------------------------------------------------------
-// #293 canon: atom block nodes with no NATIVE markdown syntax are preserved via
-// dedicated converter forms (they used to serialize to "" and vanish — the old
-// mcp converter's data-loss gap, now fixed by consuming the shared package):
+// Atom block nodes with no NATIVE markdown syntax are preserved via dedicated
+// converter forms:
 //   - htmlEmbed  -> a raw `<div data-type="htmlEmbed" data-source=… data-height=…>`
 //                   block (source base64-encoded so arbitrary HTML is inert);
-//   - pageBreak  -> a standalone `<!--pagebreak-->` machinery comment (#5).
+//   - pageBreak  -> a standalone `<!--pagebreak-->` machinery comment.
 // Both survive markdown export AND a full PM -> markdown -> PM round-trip.
 // ---------------------------------------------------------------------------
 test("htmlEmbed block survives markdown export (source + height preserved)", () => {

@@ -35,8 +35,8 @@ export interface McpHttpOptions {
  * `handleRequest`. One McpServer + transport is created per MCP session and
  * kept alive between requests, keyed by the `mcp-session-id` header.
  *
- * `config` is EITHER a static `DocmostMcpConfig` (back-compat: stdio + the env
- * service account, unchanged) OR a `McpConfigResolver` run once per session at
+ * `config` is EITHER a static `DocmostMcpConfig` (stdio + the env service
+ * account) OR a `McpConfigResolver` run once per session at
  * `initialize` to bind that session to the request's identity.
  */
 export function createMcpHttpHandler(

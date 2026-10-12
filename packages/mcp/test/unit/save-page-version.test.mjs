@@ -9,7 +9,7 @@ import {
 } from "../../build/lib/collab-session.js";
 import { savePageVersionRealtime } from "../../build/lib/collaboration.js";
 
-// #370 — unit coverage for the MCP client transport of the explicit save-version.
+// Unit coverage for the MCP client transport of the explicit save-version.
 // There is no collaboration server in the test env, so a fake HocuspocusProvider
 // drives the stateless round-trip: it auto-completes the connect/sync handshake on
 // a microtask (like the real provider), records sends, and either auto-broadcasts a
@@ -248,7 +248,7 @@ test("F1(b) teardown mid-wait: a disconnect rejects the wait with the connection
   provider._disconnect();
 
   await assert.rejects(p, /connection closed before the update was persisted/);
-  // The listener was removed on teardown — dropping provider.off() reds this.
+  // The listener is removed on teardown (provider.off()).
   assert.equal(
     provider.listenerCount("stateless"),
     0,

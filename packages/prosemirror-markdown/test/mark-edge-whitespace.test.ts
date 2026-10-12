@@ -14,8 +14,8 @@ import { docmostExtensions } from '../src/lib/docmost-schema.js';
 // line (where it would push a block trigger right and change the BLOCK TYPE).
 //
 // These are deterministic pins for both halves plus the two invariants they
-// lean on: the mark-type parity of the expulsion rule, and the #515
-// code-emphasis flanking guard's behaviour once edge whitespace exists.
+// lean on: the mark-type parity of the expulsion rule, and the code-emphasis
+// flanking guard's behaviour once edge whitespace exists.
 // ---------------------------------------------------------------------------
 
 const schema = getSchema(docmostExtensions);

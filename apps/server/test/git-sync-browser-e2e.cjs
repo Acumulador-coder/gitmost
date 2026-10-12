@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /*
- * git-sync BROWSER e2e — drives the real Docmost web UI with Playwright to
- * reproduce the exact user flow that previously caused data loss: pages created
- * in the browser start UNTITLED (all collapse to the `_` vault filename); typing
- * a title reshuffles that collision and used to TRASH another live page. This
- * test creates several pages via the UI, titles one, runs a sync, and asserts
- * NOTHING was moved to Trash.
+ * git-sync BROWSER e2e — drives the real Docmost web UI with Playwright through
+ * the untitled-page flow: pages created in the browser start UNTITLED (all
+ * collapse to the `_` vault filename), and typing a title reshuffles that
+ * collision. This test creates several pages via the UI, titles one, runs a
+ * sync, and asserts NOTHING was moved to Trash.
  *
  * Setup: needs Playwright + a Chromium build. The project should add
  * `@playwright/test` as a devDep (`pnpm dlx playwright install chromium`). This

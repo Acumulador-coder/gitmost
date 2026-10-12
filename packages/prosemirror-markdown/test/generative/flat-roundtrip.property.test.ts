@@ -24,7 +24,7 @@ import { envInt } from './env-int.js';
 // The node/mark completeness contract guarantees every TYPE is generated, but
 // NOT that every attribute is exercised at a NON-DEFAULT value. An attribute
 // with no `arb` in attr-arbitraries.ts is only ever tested at absent/default —
-// an INVISIBLE coverage hole (the reviewer's concern). This allowlist makes that
+// an INVISIBLE coverage hole. This allowlist makes that
 // hole EXPLICIT: it is the exact set of attrs deliberately not value-fuzzed, so
 // a NEW attribute (or a newly-frozen one) that lands in this bucket flips the
 // snapshot test red and forces a reviewer to classify it. Each belongs to one of:
@@ -34,11 +34,9 @@ import { envInt } from './env-int.js';
 //     shape worth fuzzing;
 //   - ACCEPTED limitations with no md representation (indent, callout.icon,
 //     orderedList.type, table spans/bg/colwidth, youtube.start).
-// The media dimension/family attrs (image/video/youtube/drawio/excalidraw/pdf/
-// embed width/height/align/size/aspectRatio/caption/alt) that were
-// previously "deferred to a later PR" are IMPLEMENTED (value-fuzzed) in THIS PR
-// via the OVERRIDES table in attr-arbitraries.ts — they ride in the discriminator
-// comment JSON and round-trip byte-stably, so they are no longer allowlisted.
+// The media dimension/family attrs (width/height/align/size/aspectRatio/
+// caption/alt) are value-fuzzed via the OVERRIDES table in attr-arbitraries.ts,
+// so they are not allowlisted.
 const ATTR_VALUE_FUZZ_ALLOWLIST = new Set<string>([
   'attachment.attachmentId', 'attachment.mime', 'attachment.placeholder', 'attachment.size',
   'audio.attachmentId', 'audio.placeholder', 'audio.size',
@@ -93,7 +91,7 @@ const MARK_ATTR_ALLOWLIST = new Set<string>([
 vi.setConfig({ testTimeout: 30000 });
 
 // ---------------------------------------------------------------------------
-// #351 PR 1 — GENERATIVE (property-based) round-trip over FLAT (single-node)
+// GENERATIVE (property-based) round-trip over FLAT (single-node)
 // documents at the ATTRIBUTE level.
 //
 // We assert three invariants for ANY generated valid flat document `d`
@@ -114,8 +112,8 @@ vi.setConfig({ testTimeout: 30000 });
 // ---------------------------------------------------------------------------
 
 // Fixed seed so every failure is reproducible; fast-check also prints the
-// shrunk counterexample. numRuns starts modest to keep CI under budget — the
-// issue's CI target is ~300-500 per property. Both are overridable via the
+// shrunk counterexample. numRuns stays modest (~300-500 per property) to keep
+// CI under budget. Both are overridable via the
 // PROPERTY_SEED / PROPERTY_NUM_RUNS env vars (an invalid/empty value → NaN →
 // falls back to the default below): the nightly cron
 // (.github/workflows/nightly-property.yml) cranks NUM_RUNS to ~5000 with a
@@ -262,8 +260,7 @@ describe('#351 flat generative round-trip — properties', () => {
         // indentation (dropped, or worse, an indented code block). Neither rule
         // touches a mark, a mark's identity or a block's type, so mark LOSS and
         // paragraph→list/heading/codeBlock still fail loudly — see the helper's
-        // contract. A no-op for every run without edge whitespace, i.e. for the
-        // whole pre-existing corpus.
+        // contract. A no-op for every run without edge whitespace.
         const got = canonicalizeMarkdownWhitespace(doc2);
         const want = canonicalizeMarkdownWhitespace(doc);
         if (!docsCanonicallyEqual(got, want)) {

@@ -83,7 +83,7 @@ export function filterComment(comment: any, markdownContent?: string) {
   };
 }
 
-// Map one server search hit to the MCP output contract (#443):
+// Map one server search hit to the MCP output contract:
 //   { pageId, title, path, snippet, score }
 //
 // INVARIANT: the only page identifier exposed is `pageId` (the server `id`

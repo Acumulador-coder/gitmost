@@ -27,21 +27,19 @@ export {
 } from "./markdown-to-prosemirror.js";
 export type { MarkdownImportOptions } from "./markdown-to-prosemirror.js";
 
-// Foreign-markdown normalizer (#493): the input-liberal pre-pass that rewrites
-// GFM `[^id]` reference footnotes to canonical inline `^[body]`. Two variants:
+// Foreign-markdown normalizer: the input-liberal pre-pass that rewrites GFM
+// `[^id]` reference footnotes to canonical inline `^[body]`. Two variants:
 // `normalizeForeignMarkdown` (server FILE-import boundary) ALSO strips a leading
 // YAML front-matter block; `normalizeAgentMarkdown` (canonical AGENT-WRITE path,
 // mcp `markdownToProseMirrorCanonical`) does NOT — a full-body agent rewrite must
-// not lose a leading `---…---` horizontalRule to the front-matter strip (#493
-// review). The reference-footnote rewrite is shared so agent + import stay unified
-// where it matters, without the content-losing strip on the write path.
+// not lose a leading `---…---` horizontalRule to the front-matter strip.
 export {
   normalizeForeignMarkdown,
   normalizeAgentMarkdown,
 } from "./foreign-markdown.js";
 // Pure primitive: detect the unambiguously-internal wiki-page link path
 // (`/s/<space>/p/<slug>`) and promote such link marks to their native internal
-// form during import (#522). A strict subset of the server's INTERNAL_LINK_REGEX.
+// form during import. A strict subset of the server's INTERNAL_LINK_REGEX.
 export { isInternalPagePath, markInternalLinks } from "./internal-links.js";
 
 // The converter's schema extensions: editor-ext's `documentExtensions` with the
@@ -53,7 +51,7 @@ export { docmostExtensions } from "./docmost-schema.js";
 // alias-aware / allowlist implementations live ONLY here (no drifting copies).
 export { clampCalloutType, sanitizeCssColor } from "./docmost-schema.js";
 
-// Attached-comment convention (#293 canon #9/#4/#8): the reusable primitives
+// Attached-comment convention: the reusable primitives
 // the serializer/parser use to encode attrs that have no native markdown syntax
 // as trailing `<!--name {json}-->` comments.
 export {
@@ -70,8 +68,8 @@ export {
 export { parsePageFile, serializePageFile } from "./page-file.js";
 
 // Pure, network-free helpers for manipulating a ProseMirror/TipTap document
-// tree by node id (#414: the single canonical copy, formerly forked into mcp).
-// Consumed by `@docmost/mcp` (patch/insert/delete node, table tools, outline).
+// tree by node id. Consumed by `@docmost/mcp` (patch/insert/delete node, table
+// tools, outline).
 export {
   blockPlainText,
   buildOutline,
@@ -94,12 +92,11 @@ export {
 export type { OutlineEntry } from "./node-ops.js";
 
 // Normalize a ProseMirror node arg that the model may have serialized as a JSON
-// string (#414: single copy shared by mcp and the CommonJS server app).
+// string (shared by mcp and the CommonJS server app).
 export { parseNodeArg } from "./parse-node-arg.js";
 
-// Locator markdown-stripping (#493 dedup): the single canonical copy of the
-// markdown-tolerant anchor-normalization primitives, imported by mcp's
-// text-normalize.ts instead of a forked duplicate. `stripInlineMarkdown` is the
+// Locator markdown-stripping: the markdown-tolerant anchor-normalization
+// primitives, imported by mcp's text-normalize.ts. `stripInlineMarkdown` is the
 // lenient locator normalizer (trims stray decoration); `stripWrappersAndLinks`
 // is the strict balanced-wrapper/link primitive mcp builds `stripBalancedWrappers`
 // on top of.
@@ -108,7 +105,7 @@ export {
   stripWrappersAndLinks,
 } from "./text-normalize.js";
 
-// Fold canon (#658): the single source of truth for the invisible-character /
+// Fold canon: the single source of truth for the invisible-character /
 // typography fold tables, shared by mcp editPageText, createComment anchoring
 // and footnote-normalize-merge (R3 — no more forked copies).
 export {
@@ -123,8 +120,8 @@ export {
   escapeInvisibles,
 } from "./text-normalize.js";
 
-// Inline-footnote authoring convention (#414: single copy, formerly the mcp
-// `footnote-authoring.ts` fork), shared with the importer's `assembleFootnotes`.
+// Inline-footnote authoring convention, shared with the importer's
+// `assembleFootnotes`.
 export {
   footnoteContentKey,
   makeFootnoteDefinition,

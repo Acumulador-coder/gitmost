@@ -554,7 +554,7 @@ test("suggestedText: the stored selection is the doc's RAW typographic substring
 });
 
 // -----------------------------------------------------------------------------
-// 8b) #496: the DEBOUNCED REST snapshot (pages/info) DIFFERS from the LIVE collab
+// 8b) The DEBOUNCED REST snapshot (pages/info) DIFFERS from the LIVE collab
 //     doc (mutatePage) — the doc moved on in the debounce window. The stored
 //     selection is captured from the snapshot at create time, but the mark is set
 //     in the live doc, so apply would 409 forever. After anchoring, the client

@@ -1,5 +1,5 @@
 /**
- * #293 canon #2: inline footnotes `^[text]`.
+ * Inline footnotes `^[text]`.
  *
  * Shared, side-effect-free helpers used by BOTH the serializer
  * (markdown-converter.ts) and the importer (markdown-to-prosemirror.ts) so the
@@ -13,7 +13,7 @@
  * footnote model, while identical bodies MERGE to a single definition shared by
  * every reference. Ids are assigned by the importer's assembleFootnotes pass
  * (dedup on the EXACT body text -> sequential `fn-N`), NOT derived from a hash,
- * so two DIFFERENT bodies can never collide onto one definition (F1). The id is
+ * so two DIFFERENT bodies can never collide onto one definition. The id is
  * never written to markdown (`^[body]` carries only text), so the round trip
  * stays byte-stable regardless of the concrete id.
  */
@@ -61,9 +61,8 @@ export function splitFootnoteParagraphs(encoded: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Inline-authoring helpers (#414: moved here from the mcp `footnote-authoring.ts`
-// fork so the dedup convention — content-key + definition factory + id gen —
-// has ONE home next to the importer that shares the convention). Used by the
+// Inline-authoring helpers: the dedup convention — content-key + definition
+// factory + id gen — lives next to the importer that shares it. Used by the
 // mcp author-inline tool (`insertInlineFootnote` in transforms.ts).
 // ---------------------------------------------------------------------------
 

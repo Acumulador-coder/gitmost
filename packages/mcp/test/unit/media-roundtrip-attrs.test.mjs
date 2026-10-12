@@ -1,19 +1,13 @@
-// Extra media round-trip coverage (issue #244), complementing
-// media-roundtrip.test.mjs.
-//
-// The existing media-roundtrip.test.mjs already asserts that video, youtube,
-// embed, excalidraw, audio and pdf SURVIVE a PM -> markdown -> PM round-trip and
-// keeps their identifying src / provider / name / attachmentId. It does NOT,
-// however, exercise:
+// Media round-trip coverage beyond media-roundtrip.test.mjs (which checks that
+// video, youtube, embed, excalidraw, audio and pdf survive PM -> markdown -> PM
+// with their src / provider / name / attachmentId). This file covers:
 //   * the `drawio` node (a distinct schema node that shares the excalidraw
-//     converter case) — not covered at all;
+//     converter case);
 //   * the dimension / layout attributes (width, height, align) that ride in
 //     data-* attributes — exactly where a converter<->schema mismatch silently
 //     drops a value while the node itself survives;
 //   * attribute escaping for a src containing `"` (escapeAttr) — a malformed
 //     value here would either break the round-trip or inject HTML.
-//
-// These are the gaps this file locks down.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -55,7 +49,7 @@ test("round-trip: drawio diagram survives with src, title, dimensions, align, at
     },
     "drawio",
   );
-  // #293 canon #8: the media family serializes to the markdown image form plus a
+  // The media family serializes to the markdown image form plus a
   // trailing discriminator comment carrying the non-src attrs.
   assert.match(md, /^!\[\]\(\/api\/files\/d\.drawio\)/);
   assert.match(md, /<!--drawio \{.*"attachmentId":"dz1".*\}-->/);

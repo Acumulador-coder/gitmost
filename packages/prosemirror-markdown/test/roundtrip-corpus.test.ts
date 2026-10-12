@@ -49,20 +49,9 @@ describe('round-trip corpus (SPEC §11)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// FORMER KNOWN LIMITATION — now promoted into the green corpus above.
-//
-// SPEC §11 flagged images and diagrams as high round-trip risk, and
-// `image-diagrams.json` (a paragraph + block image + drawio + excalidraw) was
-// held out here with `it.fails` because it was not byte-stable on export #1: the
-// drawio/excalidraw `align` default "center" materialized on import, so export
-// #2 grew a `data-align="center"` suffix.
-//
-// #293 canon #8 removes that divergence. The diagram family now serializes at
-// TOP LEVEL as `![](src)<!--drawio|excalidraw {…}-->`, and — exactly like the
-// image `![](src)` form — a default `align:"center"` is OMITTED from the comment
-// JSON (it re-materializes as the schema default on import, then is omitted again
-// on re-export). The block-image hoist that once left a phantom empty paragraph
-// is already absorbed by `stripEmptyParagraphs`. The fixture is therefore now
-// BOTH byte-stable AND canonically stable, so it lives in fixtures/corpus as
-// `11-image-diagrams.json` and is exercised by the green corpus loop above.
+// Images and diagrams (SPEC §11 high round-trip risk) are covered by
+// fixtures/corpus/11-image-diagrams.json in the corpus loop above: the diagram
+// family serializes as `![](src)<!--drawio|excalidraw {…}-->` with a default
+// `align:"center"` OMITTED, and `stripEmptyParagraphs` absorbs the block-image
+// hoist, so the fixture is byte-stable AND canonically stable.
 // ---------------------------------------------------------------------------

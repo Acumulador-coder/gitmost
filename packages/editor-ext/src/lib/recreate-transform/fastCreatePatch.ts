@@ -10,14 +10,13 @@ import { diffArrays } from "diff";
  * cost lives — ProseMirror `content` arrays of block nodes) and let rfc6902 handle
  * objects/scalars natively.
  *
- * The whole point of this file is issue #581: page-history version navigation
- * froze the UI for seconds because ~95% of the time was in the array diff. This
- * makes it linear while preserving the JSON-Patch semantics the consumer
- * (recreateTransform) relies on.
+ * Page-history version navigation spends most of its time in this array diff,
+ * so it must be linear; the JSON-Patch semantics the consumer (recreateTransform)
+ * relies on are preserved.
  */
 
 // ---------------------------------------------------------------------------
-// Policy constants. Start values per issue #581; each carries its justification.
+// Policy constants; each carries its justification.
 // No env knobs — this ships in the client bundle, so the values are compiled in.
 // ---------------------------------------------------------------------------
 
@@ -178,10 +177,8 @@ export function fastArrayDiff(
     // valid JSON: `JSON.stringify` of any real array element yields a value that
     // starts with `{`, `[`, `"`, a digit, `-`, `t`/`f` (true/false) or `n` (null),
     // so it can never equal this `__…__` string — collisions are impossible.
-    // (Written as a plain string on purpose: an earlier version used a literal NUL
-    // byte here, which made git treat the whole file as binary and let a stray
-    // formatter silently drop the lone NUL, turning the sentinel into the
-    // collidable string "undefined".)
+    // Keep it a plain string: a literal NUL byte makes git treat the file as
+    // binary, and a formatter can silently drop it.
     const key = JSON.stringify(el) ?? "__fastdiff_undefined_sentinel__";
     let id = ids.get(key);
     if (id === undefined) {
@@ -203,18 +200,12 @@ export function fastArrayDiff(
   //
   // The two ratio gates make this a subset of the post-Myers degenerate branch ON
   // THE RATIO AXIS, so when it fires it emits the SAME single whole-array replace
-  // and only skips the diff — correctness is unchanged. (The similarity check
-  // differs: here it samples positional pairs input[i] vs output[i], whereas the
-  // post-Myers branch samples Myers-run-aligned pairs; a contrived input can flip
-  // between them, which changes only op granularity, never the round-trip result —
-  // see the DEGENERATE_MIN_PRESERVED_RATIO doc above.) Crucially, the
-  // `shared/min(N,M)` gate is what
-  // keeps it from EVER firing on a pure insert/delete (prepend+append around a
-  // preserved middle): there the whole smaller array survives, so shared/min ≈ 1.0
-  // and the gate fails, mirroring the post-Myers branch's "there must be
-  // removed+added pairs" guard. Without it, `shared/maxLen` alone is small for
-  // BOTH insert/delete and rewrite, and the fast path would wrongly clobber the
-  // preserved middle with one replace. The multiset intersection over-estimates
+  // and only skips the diff. (The similarity sampling differs, which changes only
+  // op granularity — see the DEGENERATE_MIN_PRESERVED_RATIO doc above.) The
+  // `shared/min(N,M)` gate keeps it from EVER firing on a pure insert/delete
+  // (prepend+append around a preserved middle): there the whole smaller array
+  // survives, so shared/min ≈ 1.0 and the gate fails, mirroring the post-Myers
+  // branch's "there must be removed+added pairs" guard. The multiset intersection over-estimates
   // the LCS common length, so both ratio gates stay conservative; anything this
   // misses still gets the exact run-based treatment.
   const minLen = Math.min(N, M);

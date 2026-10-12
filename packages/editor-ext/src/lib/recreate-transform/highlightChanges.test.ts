@@ -5,7 +5,7 @@ import { ChangeSet, simplifyChanges } from "@tiptap/pm/changeset";
 import { recreateTransform } from "./recreateTransform";
 
 /**
- * Issue #581 — highlight-SEMANTICS tests. These run the EXACT pipeline the client
+ * Highlight-SEMANTICS tests. These run the EXACT pipeline the client
  * history diff (apps/client/.../history-diff.ts) uses to turn two documents into
  * highlight decorations:
  *
@@ -14,10 +14,10 @@ import { recreateTransform } from "./recreateTransform";
  *   -> simplifyChanges(changeSet.changes, new)
  *
  * and then count added/deleted change regions the same way history-diff.ts does
- * (a region with toB>fromB is an "added", toA>fromA is a "deleted"). The point is
- * to prove the new linear array-diff produces the SAME user-visible highlighting
- * shape as the old quadratic diff — granular where the edits are granular, and one
- * aggregate block only on a genuine wholesale rewrite.
+ * (a region with toB>fromB is an "added", toA>fromA is a "deleted"). The linear
+ * array diff must give the expected user-visible highlighting shape — granular
+ * where the edits are granular, and one aggregate block only on a genuine
+ * wholesale rewrite.
  */
 
 const doc = (...c: PMNode[]) => schema.node("doc", null, c);

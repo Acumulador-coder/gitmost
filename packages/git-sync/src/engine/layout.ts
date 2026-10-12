@@ -160,8 +160,8 @@ export function buildVaultLayout(pages: PageNode[]): Map<string, VaultEntry> {
     }
   }
 
-  // Final full-path uniqueness pass — a belt-and-suspenders safety net. Note
-  // that cross-bucket (orphan/root) collisions are now resolved in the name pass
+  // Final full-path uniqueness pass — a belt-and-suspenders safety net.
+  // Cross-bucket (orphan/root) collisions are resolved in the name pass
   // above (orphans share the "__root__" bucket), so ancestor names are final
   // before `segments` are built and this pass should rarely/never re-stem an
   // ancestor. It only re-stems the colliding LATER leaf via the sanitized

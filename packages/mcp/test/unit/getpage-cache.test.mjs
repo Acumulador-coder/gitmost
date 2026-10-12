@@ -1,4 +1,4 @@
-// Unit tests for the getPage content-addressed conversion cache (issue #479).
+// Unit tests for the getPage content-addressed conversion cache.
 // Exercises the GetPageConversionCache class in isolation: key composition,
 // hit/miss, LRU recency on read, and eviction by BOTH the count cap and the
 // byte cap. The getPage integration (counter emission, byte-identical output)

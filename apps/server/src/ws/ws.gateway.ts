@@ -98,9 +98,8 @@ export class WsGateway
 
   @SubscribeMessage('message')
   handleMessage(_client: Socket, _data: any): void {
-    // Inbound tree events from clients are no longer accepted: tree updates are
-    // now server-authoritative (broadcast by PageWsListener from domain events).
-    // The old client-relay path was removed to close that attack surface.
+    // Inbound tree events from clients are not accepted: tree updates are
+    // server-authoritative (broadcast by PageWsListener from domain events).
   }
 
   /*

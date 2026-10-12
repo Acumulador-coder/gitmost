@@ -9,7 +9,7 @@
  * The returned `Document` is a real browser document, so it exposes exactly the
  * same query/mutation surface the import passes use (`querySelector(All)`,
  * `createElement`, `createTreeWalker`/`NodeFilter` via `defaultView`,
- * `body.innerHTML`) as jsdom did on the Node path.
+ * `body.innerHTML`) as jsdom does on the Node path.
  */
 // @tiptap/html's default (browser) entry: its `generateJSON` uses the native
 // `window.DOMParser`, so it carries NO jsdom/happy-dom — keeping the client

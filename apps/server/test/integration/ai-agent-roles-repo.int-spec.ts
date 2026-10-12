@@ -105,9 +105,9 @@ describe('AiAgentRoleRepo isolation + partial unique index [integration]', () =>
     expect(a.id).not.toBe(b.id);
   });
 
-  // model_config jsonb round-trip (issue #173 §1): the same double-encoding bug
-  // PR #172 fixed for tool_allowlist lived in jsonbObject. A DB round-trip is the
-  // only way to observe it — the write must land as a real jsonb OBJECT, and a
+  // model_config jsonb round-trip through jsonbObject (no double encoding). A DB
+  // round-trip is the only way to observe it — the write must land as a real
+  // jsonb OBJECT, and a
   // legacy string-scalar row must self-heal on read (else the model override is
   // silently dropped and the role falls back to the default model).
   const jsonbTypeof = async (id: string): Promise<string | null> => {

@@ -1,7 +1,6 @@
-// Verified draw.io shape catalog for the `drawioShapes` tool (issue #424,
-// stage 2). This is the fix for AI-generated diagrams' #1 defect: guessed
-// `shape=mxgraph.*` names that render as EMPTY BOXES because the stencil does
-// not exist. Instead of guessing, the model queries this catalog and gets back
+// Verified draw.io shape catalog for the `drawioShapes` tool. Guessed
+// `shape=mxgraph.*` names render as EMPTY BOXES when the stencil does not
+// exist, so instead of guessing, the model queries this catalog and gets back
 // an exact, verified style-string + the stencil's default width/height.
 //
 // DATA SOURCE — the bundled index is the REAL jgraph/drawio-mcp shape index
@@ -18,8 +17,8 @@
 // The record shape and this module's search stay unchanged.
 //
 // CURATED OVERLAY — on top of the raw index this module carries a small,
-// hand-maintained overlay drawn from the issue #424 appendix (the aws-
-// architecture-diagram-skill knowledge): AWS service rebrandings whose stencil
+// hand-maintained overlay drawn from the aws-architecture-diagram-skill
+// knowledge: AWS service rebrandings whose stencil
 // name lags the product name, a BLOCKLIST of known-broken stencils mapped to
 // working replacements, the category fillColor palette, the AWS group/subnet
 // stencils, and the Azure image-style paths. The overlay is applied BEFORE the

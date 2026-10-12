@@ -16,21 +16,17 @@ import {
 } from './db';
 
 /**
- * #492 append-persist — WRITE-VOLUME regression on a LIVE Postgres, measured via
- * the `pg_current_wal_lsn()` delta around a realistic multi-step run driven through
- * the REAL repos (not a mock — a mock cannot observe MVCC/TOAST rewrite volume, the
- * whole point). Proves the core claim:
+ * Append-persist — WRITE-VOLUME check on a LIVE Postgres, measured via the
+ * `pg_current_wal_lsn()` delta around a realistic multi-step run driven through
+ * the REAL repos (a mock cannot observe MVCC/TOAST rewrite volume):
  *
  *   NEW (per-step INSERT into ai_chat_run_steps + a CHEAP step-marker UPDATE on the
  *   message row) writes O(Σ steps) of WAL — each step writes only its own bytes.
  *
- *   OLD (the pre-#492 full-row rewrite: re-persist the GROWING metadata.parts on
- *   every onStepFinish) writes O(n²) — step k rewrites the whole TOASTed jsonb of
- *   all k prior outputs.
- *
- * The OLD path here IS the reverted behavior, so this doubles as the mutation
- * check: swapping the new path back to `flushAssistant` full-row UPDATEs reddens
- * the assertion (OLD is many times larger).
+ *   OLD (full-row rewrite: re-persist the GROWING metadata.parts on every
+ *   onStepFinish via `flushAssistant`) writes O(n²) — step k rewrites the whole
+ *   TOASTed jsonb of all k prior outputs. The assertion requires OLD to be many
+ *   times larger.
  */
 type Step = {
   text: string;

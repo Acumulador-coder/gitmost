@@ -3,7 +3,7 @@ import { convertProseMirrorToMarkdown } from '../src/lib/markdown-converter.js';
 import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 
 // ---------------------------------------------------------------------------
-// #351 regression — DEGENERATE orderedList `start` normalization (DO-1).
+// DEGENERATE orderedList `start` normalization.
 //
 // Only an INTEGER >= 2 is a valid explicit start. A degenerate start (0,
 // negative, fractional, non-number) MUST collapse to the default 1 on export:
@@ -15,9 +15,8 @@ import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 //   (2) re-imports as a VALID `orderedList` (not a paragraph) with `start`
 //       defaulting, structure preserved,
 //   (3) is byte-stable (md1 === md2).
-//
-// Mutation check: revert the converter guard to `Number(raw) || 1` and this
-// test goes RED (a fractional/negative start leaks into the marker).
+// A `Number(raw) || 1` guard fails this (a fractional/negative start leaks into
+// the marker).
 // ---------------------------------------------------------------------------
 
 const makeDoc = (start: unknown) => ({

@@ -1,4 +1,4 @@
-// Guard: the GENERATED <tool_inventory> in SERVER_INSTRUCTIONS (issue #448)
+// Guard: the GENERATED <tool_inventory> in SERVER_INSTRUCTIONS
 // names every tool the server registers. The inventory is BUILT from the
 // registry (SHARED_TOOL_SPECS' mcpName/catalogLine + INLINE_MCP_INVENTORY), so
 // the shared-registry tools can never drift by construction; this test's job is
@@ -6,9 +6,7 @@
 // of sync with the inline `server.registerTool(...)` calls in index.ts.
 //
 // It also asserts the composed guide keeps its routing prose (the hand-written
-// intent hints) and is a valid non-empty string — the structural guarantees the
-// old name-scraper test (server-instructions.test.mjs, now deleted) carried,
-// minus its now-redundant per-name prose scrape.
+// intent hints) and is a valid non-empty string.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -31,7 +29,7 @@ const SRC = join(HERE, "..", "..", "src");
  * Every tool name the MCP server registers, scraped from the SOURCE:
  *  - inline `server.registerTool("name", ...)` calls in index.ts;
  *  - shared specs in tool-specs.ts (`mcpName: 'name'`), EXCEPT `inAppOnly`
- *    specs, which the registry loop in index.ts SKIPS on the MCP host (#411).
+ *    specs, which the registry loop in index.ts SKIPS on the MCP host.
  * Same two registration mechanisms the old guard covered.
  */
 function registeredToolNames() {
@@ -85,10 +83,9 @@ test("the inventory has no phantom tool (every line is a real registered tool)",
   );
 });
 
-// #411: the external MCP surface gains updatePageMarkdown and LOSES
-// importPageMarkdown (now inAppOnly). The in-app agent still keeps
-// importPageMarkdown — asserted in the server-side contract spec. (#412 renamed
-// both public MCP tool names to camelCase.)
+// The external MCP surface has updatePageMarkdown but not importPageMarkdown
+// (inAppOnly); the in-app agent keeps importPageMarkdown — asserted in the
+// server-side contract spec.
 test("updatePageMarkdown is on the MCP surface; importPageMarkdown is NOT", () => {
   const inventory = new Set(buildToolInventoryLines().map((l) => l.name));
   assert.ok(
@@ -99,7 +96,7 @@ test("updatePageMarkdown is on the MCP surface; importPageMarkdown is NOT", () =
     !inventory.has("importPageMarkdown"),
     "importPageMarkdown must be dropped from the external MCP surface (#411)",
   );
-  // And the routing prose no longer points MCP clients at it.
+  // And the routing prose does not point MCP clients at it.
   assert.ok(
     !ROUTING_PROSE.includes("importPageMarkdown"),
     "ROUTING_PROSE still mentions the removed importPageMarkdown",
@@ -137,11 +134,9 @@ test("SERVER_INSTRUCTIONS keeps the routing prose and the generated inventory", 
   }
 });
 
-// #494 — REVERSE drift-guard: every camelCase tool reference in the routing prose
-// must be a tool the MCP host actually registers. The forward direction (every
-// registered tool is listed) is guarded by the generated inventory above; this
-// closes the reverse, where the prose could previously name a nonexistent/renamed
-// tool with nothing reddening.
+// REVERSE drift-guard: every camelCase tool reference in the routing prose must
+// be a tool the MCP host actually registers. The forward direction (every
+// registered tool is listed) is guarded by the generated inventory above.
 test("#494: ROUTING_PROSE names no unregistered tool", () => {
   const dangling = unregisteredProseToolMentions();
   assert.deepEqual(
@@ -176,7 +171,7 @@ test("#494: PROSE_NON_TOOL_TERMS holds no actually-registered tool name", () => 
   }
 });
 
-// #529: the search routing prose must document the new engine contract — the
+// The search routing prose must document the new engine contract — the
 // operators, OR/morphology default, pagination fields and the relevance-CAP
 // caveat — so an agent uses the operators and understands the unreachable tail.
 test("SERVER_INSTRUCTIONS documents the #529 search operators, pagination and CAP", () => {

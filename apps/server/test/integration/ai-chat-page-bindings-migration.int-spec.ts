@@ -14,8 +14,8 @@ import {
 } from './db';
 
 /**
- * #665 migration on a LIVE Postgres: the ON DELETE CASCADE integrity (criterion
- * 18) and the backfill (criterion 19) both need real FKs and a real migration run,
+ * ai_chat_page_bindings migration on a LIVE Postgres: the ON DELETE CASCADE
+ * integrity and the backfill both need real FKs and a real migration run,
  * so they cannot be a builder-mock unit test. global-setup already migrated
  * docmost_test to latest (the table exists at start); this drives down()/up()
  * around a hand-seeded ai_chats snapshot to test the backfill honestly, and it

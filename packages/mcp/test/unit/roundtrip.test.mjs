@@ -1,6 +1,6 @@
-// Round-trip regression tests: PM -> markdown -> PM must preserve rich nodes.
-// These lock in the converter/schema fixes (math, mention, attachment, columns,
-// nested blocks, text color) and the attribute-escaping idempotency fix.
+// Round-trip tests: PM -> markdown -> PM must preserve rich nodes (math,
+// mention, attachment, columns, nested blocks, text color) and attribute
+// escaping must be idempotent.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { convertProseMirrorToMarkdown } from "../../build/lib/markdown-converter.js";
@@ -167,13 +167,10 @@ test("import: a colored mention span keeps the mention node", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// #293 STEP 5 canon safety net. These assert STRUCTURE/content preservation
-// (format-agnostic: the node/mark and its value survive PM -> markdown -> PM,
-// and the markdown is idempotent), NOT the exact markdown bytes — so they stay
-// valid regardless of the concrete canonical spelling. They cover the node/mark
-// types whose canonical markdown form changed in #293 (highlight-without-color,
-// textAlign, subpages, inline footnotes) and complement the existing math /
-// media / mention / column round-trips above.
+// Canon safety net. These assert STRUCTURE/content preservation (the node/mark
+// and its value survive PM -> markdown -> PM, and the markdown is idempotent),
+// NOT the exact markdown bytes, for highlight-without-color, textAlign, subpages
+// and inline footnotes.
 // ---------------------------------------------------------------------------
 test("round-trip: highlight WITHOUT a color survives as a highlight mark (==)", async () => {
   const input = doc(para(text("hi", [{ type: "highlight", attrs: { color: null } }])));

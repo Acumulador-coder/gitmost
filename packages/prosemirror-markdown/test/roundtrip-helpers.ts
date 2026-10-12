@@ -36,14 +36,13 @@ export function stripBlockIds(node: any): any {
  * Canonicalize the two whitespace positions markdown CANNOT represent, so the
  * P1 semantic round-trip compares what markdown can actually carry. Returns a
  * NEW tree; the input is not mutated. Both rules are applied to BOTH sides of
- * the comparison, and neither can hide a LOST MARK or a CHANGED BLOCK TYPE —
- * the two defects they exist alongside.
+ * the comparison, and neither can hide a LOST MARK or a CHANGED BLOCK TYPE.
  *
  * RULE 1 — expel whitespace at the EDGE of a text run carrying a BARE-DELIMITER
  * mark out of that mark, then merge adjacent runs that end up with identical
  * marks.
  *
- * WHY this is a legitimate canonicalization (and not a fudge that hides a bug):
+ * WHY this is a legitimate canonicalization:
  * markdown's bare emphasis delimiters (`**`, `*`, `~~`, `==`) are
  * FLANKING-SENSITIVE — `**x **` does not close, so emphasis over a run with edge
  * whitespace is INEXPRESSIBLE in CommonMark. The serializer therefore expels that
@@ -59,8 +58,7 @@ export function stripBlockIds(node: any): any {
  * representable and must stay exactly where the author put it, so those runs are
  * left untouched here and a space escaping from under a `<u>` fails P1 loudly.
  *
- * It can NEVER hide the defect it was written for: a LOST mark is not a
- * whitespace position — `bold("Модель: ")` degrading to plain text
+ * It cannot hide a LOST mark, which is not a whitespace position — `bold("Модель: ")` degrading to plain text
  * `**Модель: **` still diverges.
  *
  * RULE 2 — drop LEADING space/tab from an UNMARKED text run that starts a
@@ -69,12 +67,12 @@ export function stripBlockIds(node: any): any {
  * `&#32;` / `&#9;` / a `<span>` or `<strong>` wrapper all lose it too
  * (measured). The serializer therefore strips it (markdown-converter.ts
  * `escapeLeadingBlockTrigger`) rather than shipping a line whose block trigger
- * has been pushed right — which is what silently turned a paragraph into a
- * list / heading / quote / code block. Scoped to an UNMARKED run so a space
+ * has been pushed right (which would turn a paragraph into a list / heading /
+ * quote / code block). Scoped to an UNMARKED run so a space
  * escaping from under a self-delimiting mark is still a P1 failure, and only to
  * space/tab (CommonMark's indentation class) so a leading NBSP — which the
  * importer DOES preserve — must still survive. The BLOCK TYPE is untouched by
- * this rule, so the regression it guards (paragraph → codeBlock) stays red.
+ * this rule, so a paragraph → codeBlock change still fails.
  */
 export function canonicalizeMarkdownWhitespace(node: any): any {
   if (Array.isArray(node)) return node.map(canonicalizeMarkdownWhitespace);

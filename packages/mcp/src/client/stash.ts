@@ -1,6 +1,4 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Mixin over the shared client context (see client/context.ts).
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import {
   collectInternalFileNodes,
@@ -9,14 +7,14 @@ import {
 } from "../lib/internal-file-urls.js";
 import { extractDrawioRaster } from "../lib/drawio-xml.js";
 
-// downloadFile (#613) — base64 branch ceiling.
+// downloadFile — base64 branch ceiling.
 // The base64 branch returns the bytes base64-encoded INTO the tool result, which
 // the MCP host serializes as TEXT into the model context (jsonContent). So this
 // ceiling is a CONTEXT budget, not a transport one: 1 MiB of bytes ≈ 1.37 MiB of
 // base64 text ≈ hundreds of thousands of tokens already. Default 1 MiB; the value
 // is overridable via MCP_MAX_DOWNLOAD_BASE64_BYTES or a per-call maxBase64Bytes,
 // but ALWAYS clamped to DOWNLOAD_BASE64_HARD_CEILING so neither a bad env var nor
-// a caller can turn the base64 branch into a context bomb (review finding).
+// a caller can turn the base64 branch into a context bomb.
 const DEFAULT_MAX_DOWNLOAD_BASE64_BYTES = 1 * 1024 * 1024; // 1 MiB
 const DOWNLOAD_BASE64_HARD_CEILING = 4 * 1024 * 1024; // 4 MiB absolute clamp
 
@@ -28,7 +26,7 @@ const DOWNLOAD_BASE64_HARD_CEILING = 4 * 1024 * 1024; // 4 MiB absolute clamp
  */
 const FETCH_HARD_CEILING = 64 * 1024 * 1024; // 64 MiB
 
-// downloadFile (#613) — blob-sandbox per-blob delivery caps: FALLBACK defaults.
+// downloadFile — blob-sandbox per-blob delivery caps: FALLBACK defaults.
 // The AUTHORITATIVE caps are the sink's own (on the Docmost server they are the
 // per-deployment env vars SANDBOX_MAX_BYTES / SANDBOX_MAX_IMAGE_BYTES, read on
 // every put), and the host reports them to the package through the sandbox sink
@@ -37,7 +35,7 @@ const FETCH_HARD_CEILING = 64 * 1024 * 1024; // 64 MiB
 // its early-abort fetch bound and every size error message, so raising the env
 // on the server genuinely raises what downloadFile will deliver.
 // These two constants are used ONLY when the host reports nothing (standalone /
-// stdio, or an older binding); they are the upstream DEFAULTS of those env vars.
+// stdio); they are the upstream DEFAULTS of those env vars.
 const DEFAULT_SANDBOX_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB, non-image blob
 const DEFAULT_SANDBOX_MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MiB, image blob
 
@@ -101,7 +99,7 @@ export type DownloadFileResult =
       size: number;
     };
 
-// Public method surface of StashMixin (issue #450) — a NAMED type so the factory
+// Public method surface of StashMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements IStashMixin` fails to compile on drift.
@@ -127,12 +125,12 @@ export function StashMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
    * happens before this.client.get, so a malicious src is counted as a failed
    * mirror — it never reaches the network.
    *
-   * `maxBytes` (optional, #613) lowers the axios content-length bound BELOW the
+   * `maxBytes` (optional) lowers the axios content-length bound BELOW the
    * 64 MiB ceiling so an oversize blob aborts EARLY (before buffering 64 MiB) —
    * downloadFile passes it so a file over the requested delivery ceiling is
    * rejected without a full read. It is clamped to the hard ceiling, so it can
    * only tighten, never widen, the guard; omitted (the stashPage/viewImage path)
-   * it keeps the original 64 MiB behaviour unchanged.
+   * the bound is 64 MiB.
    */
   protected async fetchInternalFile(
     src: string,
@@ -174,7 +172,7 @@ export function StashMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
    * URLs within the TTL and one uptime. A failed image fetch never aborts the
    * doc: the original src is kept and the failure counted.
    *
-   * DIAGRAMS (issue #629 draw.io, #632 excalidraw): a `drawio`/`excalidraw` node
+   * DIAGRAMS (draw.io and excalidraw): a `drawio`/`excalidraw` node
    * is NOT mirrored as its raw `.svg` under its own type (habr does not know
    * these node types and would drop them; draw.io captions also live in a
    * browser-only `foreignObject` that renders as garbage server-side). Instead,
@@ -276,7 +274,7 @@ export function StashMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
       );
     }
 
-    // --- diagram pass (#629) -------------------------------------------------
+    // --- diagram pass ---------------------------------------------------------
     // For each drawio node: fetch its `.drawio.svg`, extract+validate the
     // browser-embedded PNG raster. If present -> stash the PNG and rewrite the
     // node IN-PLACE to an `image` node pointing at it. If absent/invalid ->
@@ -289,7 +287,7 @@ export function StashMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
     let rasterized = 0;
     let degraded = 0;
     const synthesized: Array<{ uri: string; nodes: any[] }> = [];
-    // #632: excalidraw nodes with NO usable raster do NOT degrade in place (that
+    // Excalidraw nodes with NO usable raster do NOT degrade in place (that
     // drops them from habr, which does not know the `excalidraw` type). Because
     // an excalidraw SVG is itself VALID (real `<text>`, no browser-only
     // foreignObject), we MIRROR the SVG into the sandbox and rewrite the node to
@@ -542,7 +540,7 @@ export function StashMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
 
   /**
    * Download an INTERNAL Docmost attachment's bytes and hand them back in a
-   * caller-chosen shape (#613). `src` is the internal `/api/files/<id>/<name>`
+   * caller-chosen shape. `src` is the internal `/api/files/<id>/<name>`
    * (or bare `/files/...`) URL the agent already has from getPageJson / getNode /
    * uploadFile. The reused primitive is the SAME guarded loopback fetch
    * (fetchInternalFile) stashPage/viewImage use, so the SSRF / traversal /

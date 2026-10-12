@@ -1005,10 +1005,8 @@ describe('McpService.onModuleDestroy — CollabSession teardown (#486)', () => {
 // (name, value, labels) samples through its `onMetric` sink and knows nothing
 // about prom-client. routeMcpMetric is the ONLY place those names are mapped onto
 // this app's instruments, and the mapping is CLOSED — a name with no branch is
-// silently DISCARDED and never reaches /metrics. That is a real failure mode
-// (#613 shipped mcp_download_bytes_total in the package with no branch here, so
-// the metric existed in the package's unit tests and nowhere else), hence both a
-// per-name mapping test AND a drift guard that scrapes the package source.
+// silently DISCARDED and never reaches /metrics. Hence both a per-name mapping
+// test AND a drift guard that scrapes the package source.
 describe('routeMcpMetric — the package→prom metric mapping (#402/#479/#613)', () => {
   beforeEach(() => jest.clearAllMocks());
 

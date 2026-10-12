@@ -6,12 +6,12 @@ import {
   assertYjsEncodable,
 } from "../../build/lib/collaboration.js";
 
-// Regression for issue #152: agent writes (comment anchoring especially) must
-// NOT yank the open editor's cursor to the end of the document. The cursor is a
-// Yjs RelativePosition anchored to node ids; the old write-back deleted the whole
-// fragment and rebuilt it, destroying every id, so the position no longer
-// resolved. `applyDocToFragment` uses `updateYFragment` (the editor's own diff),
-// which keeps unchanged nodes' ids — so a RelativePosition still resolves.
+// Agent writes (comment anchoring especially) must NOT yank the open editor's
+// cursor to the end of the document. The cursor is a Yjs RelativePosition
+// anchored to node ids; deleting and rebuilding the whole fragment would destroy
+// every id, so the position would no longer resolve. `applyDocToFragment` uses
+// `updateYFragment` (the editor's own diff), which keeps unchanged nodes' ids —
+// so a RelativePosition still resolves.
 
 const para = (text, marks) => ({
   type: "paragraph",
@@ -77,13 +77,13 @@ test("anchoring a comment mark keeps the cursor in the marked text (issue #152)"
   assert.notEqual(abs, null, "comment anchoring must not destroy the cursor anchor");
 });
 
-// The diagnostic catch branch of applyDocToFragment (#154 review): a doc that
+// The diagnostic catch branch of applyDocToFragment: a doc that
 // cannot be hydrated/encoded must be re-thrown wrapped with the stage label, not
 // leak the raw ProseMirror/Yjs error. An unknown node type makes
 // PMNode.fromJSON (against the docmost schema) throw — a reliable trigger
 // (sanitizeForYjs only strips `undefined`, so an undefined attr would be removed
-// before it could fail). The hydration now has its OWN try, so the label is the
-// accurate stage `fromJSON` (the earlier `updateYFragment` label was misleading).
+// before it could fail). The hydration has its OWN try, so the label is the
+// accurate stage `fromJSON`.
 test("applyDocToFragment wraps a hydration failure with the (fromJSON) diagnostic", () => {
   const ydoc = new Y.Doc();
   const bad = {
@@ -163,13 +163,11 @@ test("assertYjsEncodable rejects an un-hydratable doc at preview time (fromJSON 
   );
 });
 
-// Issue #164: `replaceImage` went through `mutateLiveContentUnlocked`, which
-// (unlike the main write path fixed in #152) still deleted the whole fragment
-// and re-applied a fresh Y.Doc — discarding every node id, so an open editor's
-// cursor jumped to the document end on an image swap. That method now uses the
-// same `applyDocToFragment`, so a sibling paragraph's cursor anchor survives an
-// image `src`/`attachmentId` replacement. These exercise that routine on the
-// image shapes `replaceImage` produces (top-level and nested in a callout).
+// `replaceImage` goes through `mutateLiveContentUnlocked`, which uses the same
+// `applyDocToFragment` as the main write path, so a sibling paragraph's cursor
+// anchor survives an image `src`/`attachmentId` replacement. These exercise that
+// routine on the image shapes `replaceImage` produces (top-level and nested in a
+// callout).
 
 const image = (attachmentId, src) => ({
   type: "image",

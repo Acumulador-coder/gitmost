@@ -80,9 +80,9 @@ test("nested-wrapper toggle (~~~~**M5Stack**~~~~ -> **M5Stack**) is refused", ()
 });
 
 // ---------------------------------------------------------------------------
-// (ii-c) REGRESSION: ordinary plain-text edits that the OLD lenient detector
-// wrongly refused (false positives) now APPLY — they land in `results`, never
-// in `failed`. Each `find` exists verbatim in the built doc.
+// (ii-c) Ordinary plain-text edits that a lenient formatting detector would
+// refuse must APPLY — they land in `results`, never in `failed`. Each `find`
+// exists verbatim in the built doc.
 // ---------------------------------------------------------------------------
 test("plain-text edits formerly mis-flagged as formatting now apply", () => {
   const cases = [
@@ -141,7 +141,7 @@ test("typo fix wrapped in markdown still applies (not refused)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (iv) #410 footnote token: a `replace` containing `^[...]` is refused into
+// (iv) Footnote token: a `replace` containing `^[...]` is refused into
 // failed[] (it would be written as a LITERAL string, never a real footnote).
 // Nothing is applied; the reason points at insertFootnote.
 // ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ test("plain find/replace is not refused", () => {
 });
 
 // ===========================================================================
-// #657 — markers in `replace` (the MIXED-edit corruption class) and the
+// Markers in `replace` (the MIXED-edit corruption class) and the
 // literal-marker exception. Bold-marked text helper.
 // ===========================================================================
 const bold = (text) => textNode(text, { marks: [{ type: "bold" }] });

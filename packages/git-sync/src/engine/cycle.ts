@@ -55,8 +55,8 @@ export interface RunCycleDeps {
    * the per-space lock: if a heartbeat refresh cannot CONFIRM the lock is still
    * held, the signal is aborted and the cycle bails at its next checkpoint
    * (before the apply and before the export) instead of writing blind after a
-   * possible lock loss. A COARSE best-effort guard; a fully fenced cross-process
-   * single-writer still needs the fencing-token redesign (follow-up).
+   * possible lock loss. A COARSE best-effort guard, not a fenced cross-process
+   * single-writer.
    */
   signal?: AbortSignal;
 }

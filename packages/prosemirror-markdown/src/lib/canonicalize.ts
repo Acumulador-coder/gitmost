@@ -1,7 +1,7 @@
 /**
  * Semantic canonicalization of ProseMirror/TipTap documents for the round-trip
- * idempotency check (SPEC §11, "Task #0", option (b): compare a CANONICALIZED
- * form rather than raw bytes).
+ * idempotency check (SPEC §11: compare a CANONICALIZED form rather than raw
+ * bytes).
  *
  * `markdownToProseMirror` reconstructs schema DEFAULT attributes (e.g.
  * `indent: 0` where the source omitted it) and regenerates per-block ids on
@@ -69,9 +69,9 @@ const KNOWN_DEFAULTS: Record<string, Record<string, unknown>> = {
  * are semantically equivalent here). Optionally also drop a node-level `id`
  * (block ids are regenerated on import, SPEC §11). ALSO drop any attr whose
  * value equals the node/mark `type`'s known NON-null schema default
- * (`KNOWN_DEFAULTS`), so "attr absent" ≡ "attr at its default value" — without
- * this, the import-materialized `link.target`/`comment.resolved`/
- * `orderedList.start`/diagram `align` defaults would be a phantom diff. Every
+ * (`KNOWN_DEFAULTS`), so "attr absent" ≡ "attr at its default value" and the
+ * import-materialized `link.target`/`comment.resolved`/`orderedList.start`/
+ * diagram `align` defaults are not a phantom diff. Every
  * non-default attribute value is KEPT (level, language, src, href, commentId,
  * width, a non-default `start`/`align`, ...).
  *

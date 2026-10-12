@@ -1,4 +1,4 @@
-// Issue #464 — prove the size guard SKIPS the recreateTransform pipeline over
+// Prove the size guard SKIPS the recreateTransform pipeline over
 // the cap, not merely that it returns "coarse". node:test's mock.module needs an
 // experimental flag the suite does not pass, so instead of a module spy we use a
 // deterministic BEHAVIORAL proxy that isolates the one variable — the guard:

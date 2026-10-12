@@ -1,4 +1,4 @@
-// Unit coverage for StashMixin.downloadFile (issue #613) — the external-MCP
+// Unit coverage for StashMixin.downloadFile — the external-MCP
 // primitive that hands an INTERNAL Docmost attachment's bytes back to the agent
 // in a caller-chosen shape. The network (fetchInternalFile), the auth
 // (ensureAuthenticated), the blob sandbox (sandboxPut) and the metrics sink
@@ -281,7 +281,7 @@ test("auto: an IMAGE exactly at the IMAGE cap -> url (mime picks the cap)", asyn
 });
 
 // ---------------------------------------------------------------------------
-// host-reported caps: downloadFile uses the sink's REAL per-blob caps (#613 F2)
+// host-reported caps: downloadFile uses the sink's REAL per-blob caps
 //
 // The server's caps are per-deployment env (SANDBOX_MAX_BYTES /
 // SANDBOX_MAX_IMAGE_BYTES), NOT source constants — so the package must take them
@@ -732,7 +732,7 @@ test("a rejected src meters NOTHING (nothing was downloaded)", async () => {
  * stubbed through the prototype, since the factory owns its DocmostClient; that
  * stub MUST stay installed while the handler runs, so it is torn down by the
  * caller's `t.after` (restoring it here would let the handler hit the real axios
- * client — which is exactly how the first draft of this helper failed).
+ * client).
  */
 async function captureDownloadFileHandler(t, downloadFileImpl) {
   const { createDocmostMcpServer } = await import("../../build/index.js");

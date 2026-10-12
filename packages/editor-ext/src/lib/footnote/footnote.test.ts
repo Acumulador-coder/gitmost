@@ -268,7 +268,7 @@ describe('scrollToReference command (occurrence selection + fallback)', () => {
     }
   });
 
-  // #185 auto-review pt 2: a NON-empty id that renders ZERO references — the real
+  // A NON-empty id that renders ZERO references — the real
   // desync where the definition still exists but its inline ref was removed from
   // the DOM. querySelectorAll returns 0 matches, so `matches[index] ?? matches[0]`
   // is undefined and the command must bail with `false` (not throw, not scroll).
@@ -737,17 +737,15 @@ describe('footnote sync plugin (orphans)', () => {
 });
 
 /**
- * Live-editor regression tests for the sync-plugin infinite loop (the hard
- * freeze when activating /footnote). These drive a REAL Tiptap editor through
- * the same plugin pipeline the browser uses — including the TrailingNode plugin,
- * which is what turned the "move list to the end" pass into an infinite
- * ping-pong (list moved last -> trailing paragraph appended after it -> list no
- * longer last -> moved again -> ...).
+ * Live-editor tests that the sync plugin terminates (activating /footnote must
+ * not freeze). These drive a REAL Tiptap editor through the same plugin pipeline
+ * the browser uses — including the TrailingNode plugin, which can ping-pong with
+ * a "move list to the end" pass (list moved last -> trailing paragraph appended
+ * after it -> list no longer last -> moved again -> ...).
  *
- * If the loop regresses, ProseMirror's appendTransaction round loop never
- * terminates and these tests HANG (the vitest timeout fails them). The
- * transaction counter additionally fails fast with a bounded iteration cap, so
- * a regression surfaces as an explicit error instead of only a slow timeout.
+ * A non-terminating appendTransaction loop makes these tests HANG (the vitest
+ * timeout fails them); the transaction counter fails fast with a bounded
+ * iteration cap, so it surfaces as an explicit error.
  */
 describe('footnote sync plugin (no infinite loop — live editor)', () => {
   // Hard cap on how many doc-changing appendTransaction rounds we tolerate for a
@@ -942,10 +940,10 @@ describe('footnote sync plugin (no infinite loop — live editor)', () => {
 });
 
 /**
- * Data-loss-window regression guard (Fix 1). A pure reference REORDER must not
- * cause the sync plugin to delete-and-recreate any definition subtree — doing so
- * (the previous behaviour) would, through Yjs, replace the CRDT subtree of every
- * definition and could lose a collaborator's in-flight characters on merge.
+ * Data-loss-window guard. A pure reference REORDER must not cause the sync
+ * plugin to delete-and-recreate any definition subtree — through Yjs that would
+ * replace the CRDT subtree of every definition and could lose a collaborator's
+ * in-flight characters on merge.
  *
  * Numbering is decoration-only (footnote-numbering.ts derives numbers from
  * reference order), so the bottom list's PHYSICAL order need not match reference
@@ -1027,7 +1025,7 @@ describe('footnote sync plugin (no rebuild on reorder — data-loss guard)', () 
     expect(numbers.get('b')).toBe(1);
     expect(numbers.get('a')).toBe(2);
 
-    // CRITICAL regression guard: both definitions still exist and are the SAME
+    // Both definitions still exist and are the SAME
     // node instances as before the edit — the plugin did NOT delete/recreate the
     // list (which would replace every definition's CRDT subtree and open the
     // concurrent-edit data-loss window). Identity equality proves the subtree

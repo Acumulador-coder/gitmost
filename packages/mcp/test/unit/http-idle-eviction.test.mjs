@@ -1,39 +1,18 @@
 // Unit tests for createMcpHttpHandler's idle-session eviction (http.ts).
 //
-// http.ts keeps one transport per MCP session alive between requests, keyed by
-// the mcp-session-id header, and runs a periodic sweep (setInterval, every 5
-// min) that closes any transport idle longer than the idle TTL
-// (MCP_SESSION_IDLE_MS, default 30 min) and drops its lastSeen + sessionIdentity
-// bookkeeping. Routing a request to an existing transport refreshes its
-// lastSeen.
+// http.ts keeps one transport per mcp-session-id and sweeps every 5 min,
+// closing transports idle longer than MCP_SESSION_IDLE_MS (default 30 min,
+// read ONCE at handler creation). A routed request refreshes lastSeen.
 //
-// We drive this DETERMINISTICALLY rather than waiting wall-clock: the env knob
-// MCP_SESSION_IDLE_MS is read ONCE when the handler is created, so we set it
-// small; and node:test's mock.timers lets us mock both `setInterval` (the sweep)
-// and `Date` (the lastSeen comparison clock) so ticking advances the clock and
-// fires the sweep on demand.
+// mock.timers mocks both `setInterval` (the sweep) and `Date` (the lastSeen
+// clock). When one tick spans several timer fires, every callback sees
+// Date.now() == the FINAL ticked time, so each test ticks EXACTLY to a sweep
+// boundary (the clock starts at 0; sweeps fire at SWEEP, 2*SWEEP, ...).
 //
-// IMPORTANT mock.timers semantics: when a tick spans MULTIPLE timer fires (or
-// overshoots a fire), the callbacks all observe Date.now() == the FINAL ticked
-// time, not their individual scheduled times. So to make the sweep's
-// `now - lastSeen` comparison meaningful we tick EXACTLY to a sweep boundary
-// (a multiple of the sweep interval): then Date.now() inside the sweep equals
-// that boundary. The mocked clock starts at 0, so sweeps fire at SWEEP, 2*SWEEP,
-// ... We pin each session's lastSeen by establishing/touching it at a known
-// pre-boundary clock, then tick the remaining delta to land exactly on the
-// boundary.
-//
-// Sessions are established over a real loopback http server (so the SDK's
-// StreamableHTTPServerTransport gets genuine Node req/res and a real
-// mcp-session-id), exactly like http-resolver.test.mjs, and the server is closed
-// in a finally.
-//
-// Eviction is asserted via its OBSERVABLE effect: once a session is evicted its
-// transport is gone from the handler's internal map, so a subsequent non-init
-// request replaying that session id is treated as unknown (400 "no valid
-// session ID") — the same response an id that was never established would get.
-// An active (recently-seen) session is retained and its subsequent request is
-// NOT a 400.
+// Sessions are established over a real loopback http server, like
+// http-resolver.test.mjs. Eviction is observed as a 400 ("no valid session ID")
+// on a later non-init request replaying the evicted session id; an active
+// session's request is NOT a 400.
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 

@@ -1,12 +1,7 @@
 /**
- * Perf-metrics contract (#355). These names/labels are FIXED by the already
- * deployed scrape+dashboard infra (VictoriaMetrics scraping docmost:9464,
- * Grafana dashboards, alerts). Do NOT rename them.
- *
- * #402 extends the #355 table with the collab-lifecycle + MCP-tool families
- * (grouped below). These are the fixed contract from #402; same "do not rename"
- * rule applies. Server-side families land in Pass 1; the MCP-tool histogram is
- * fed by the MCP callback in a later pass but its NAME is fixed here now.
+ * Perf-metrics contract. These names/labels are FIXED by the deployed
+ * scrape+dashboard infra (VictoriaMetrics scraping docmost:9464, Grafana
+ * dashboards, alerts). Do NOT rename them.
  */
 export const METRIC_HTTP_REQUEST_DURATION = 'http_request_duration_seconds';
 export const METRIC_DB_QUERY_DURATION = 'db_query_duration_seconds';
@@ -43,7 +38,7 @@ export const METRIC_MCP_GETPAGE_CACHE_MISSES_TOTAL =
 // (bounded cardinality). Same "do not rename" contract.
 export const METRIC_MCP_DOWNLOAD_BYTES_TOTAL = 'mcp_download_bytes_total';
 
-// #654 — MCP read-your-own-writes (RYOW) freshness signals emitted by the
+// MCP read-your-own-writes (RYOW) freshness signals emitted by the
 // @docmost/mcp package's onMetric sink after a structural read that requested
 // the live doc. live = got the live collab doc; dbrow = fell back to the
 // (possibly stale) DB row, labelled by the bounded fallback reason; expired =
@@ -55,18 +50,17 @@ export const METRIC_MCP_RYOW_LIVE_TOTAL = 'mcp_ryow_live_total';
 export const METRIC_MCP_RYOW_DBROW_TOTAL = 'mcp_ryow_dbrow_total';
 export const METRIC_MCP_RYOW_EXPIRED_TOTAL = 'mcp_ryow_expired_total';
 
-// #558 — api-key auth denial observability. Every DEFINITE deny in
+// API-key auth denial observability. Every DEFINITE deny in
 // ApiKeyService.validate (shared by REST jwt.strategy and the /mcp Bearer path)
-// increments this counter, labelled by the BOUNDED deny reason. It replaces the
-// visibility the deleted /mcp Basic brute-force limiter used to give: a
-// revoked/dead key hammering /mcp is otherwise totally silent (validate throws a
-// bare 401 with no log/metric). The `reason` label is a fixed, low-cardinality
+// increments this counter, labelled by the BOUNDED deny reason; without it a
+// revoked/dead key hammering /mcp is silent (validate throws a bare 401 with no
+// log/metric). The `reason` label is a fixed, low-cardinality
 // set (see ApiKeyDenyReason); the apiKeyId is NEVER a label (it goes only into
 // the rate-limited WARN, after the JWT signature is verified). Same "do not
 // rename" contract as the other families.
 export const METRIC_API_KEY_AUTH_DENIED_TOTAL = 'api_key_auth_denied_total';
 
-// #665 — page->chat binding-skip observability. Almost every "did not write the
+// Page->chat binding-skip observability. Almost every "did not write the
 // binding" outcome is a 200 (page unresolved, chat not owned, chat deleted, or a
 // best-effort birth-bind failure), indistinguishable from success in the HTTP
 // histogram. Each such skip increments this counter, labelled by its BOUNDED
@@ -76,7 +70,7 @@ export const METRIC_API_KEY_AUTH_DENIED_TOTAL = 'api_key_auth_denied_total';
 // contract as the other families.
 export const METRIC_AI_CHAT_BIND_SKIPPED_TOTAL = 'ai_chat_bind_skipped_total';
 
-// #686 — external-MCP connect-failure observability. Every enabled external MCP
+// External-MCP connect-failure observability. Every enabled external MCP
 // server that FAILS to connect (or whose auth headers are unreadable) during an
 // agent turn's toolset build increments this counter, labelled by the OWNERSHIP
 // LEVEL of the failing server: `admin` (a workspace-managed row, user_id IS NULL)
@@ -156,7 +150,7 @@ export function firstSqlToken(sql: string | undefined): string {
 }
 
 /**
- * #402 — bucket a document byte size into ONE of four fixed labels for the
+ * Bucket a document byte size into ONE of four fixed labels for the
  * collab load/store histograms' `size_bucket` label. Using the raw byte count
  * would be a continuous, unbounded label; four coarse buckets keep series
  * cardinality bounded (each of collab_doc_load / collab_store gets ×4 series).

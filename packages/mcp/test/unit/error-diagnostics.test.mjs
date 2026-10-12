@@ -1,9 +1,7 @@
-// Issue #437: central error diagnostics.
-//
-// Two surfaces are covered here:
+// Central error diagnostics. Two surfaces are covered here:
 //   1. formatDocmostAxiosError — the pure response-interceptor body that
 //      rewrites an AxiosError's `.message` into an actionable diagnostic.
-//   2. assertFullUuid — the fail-fast comment-id guard (absorbs #436) that must
+//   2. assertFullUuid — the fail-fast comment-id guard that must
 //      throw BEFORE any network call.
 // Plus an end-to-end pass over a real (offline) http server to prove the
 // interceptor is wired, that a re-login retry leaves a success untouched, and
@@ -186,7 +184,7 @@ test("no response with no code falls back to a neutral reason (raw message not l
     url: "/comments/create",
     status: undefined,
     // A raw axios network message like "connect ECONNREFUSED 127.0.0.1:3000"
-    // embeds the host; #437's invariant is that it never reaches the message.
+    // embeds the host; the invariant is that it never reaches the message.
     message: "connect ECONNREFUSED 10.0.0.5:3000",
   });
   formatDocmostAxiosError(err);

@@ -9,14 +9,13 @@ import { Node as PMNode } from '@tiptap/pm/model';
 import { LowlightPlugin } from './lowlight-plugin';
 
 /**
- * #683 `code_highlight` (AC5) — the plugin's onHighlight hook must fire ONLY on a
+ * The plugin's onHighlight hook must fire ONLY on a
  * REAL syntax-highlight decoration recompute (init + an edit that affects a code
  * block), and MUST NOT fire on a plain keystroke / cursor move OUTSIDE any code
  * block (the `decorationSet.map(...)` fast-path in `apply`).
  *
- * This drives a real ProseMirror EditorState + the real LowlightPlugin (the
- * observable-property integration test AGENTS #8 requires — a pure-helper unit
- * test would not catch a plugin that times every transaction).
+ * This drives a real ProseMirror EditorState + the real LowlightPlugin (a
+ * pure-helper unit test would not catch a plugin that times every transaction).
  *
  * NON-VACUITY: the "does NOT fire while typing outside a code block" case is the
  * guard. If the guarded `apply` branch is neutered to always call

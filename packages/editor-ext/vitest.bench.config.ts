@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// Dedicated config for the issue #581 performance bench + CI regression guard.
+// Dedicated config for the array-diff performance bench + CI guard (perf.bench.ts).
 // Kept separate from vitest.config.ts so the perf run: (a) does not drag coverage
 // instrumentation over the hot path (which would skew every measurement), and
 // (b) runs in a single fork with no parallelism, so the numbers are stable and

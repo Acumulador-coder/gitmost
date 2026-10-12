@@ -1,6 +1,6 @@
-// Unit tests for the geometry quality-warnings (issue #424, part 5). Acceptance
-// #4: every warning has a positive AND a negative case, and warnings NEVER block
-// the write (prepareModel returns them, it does not throw).
+// Unit tests for the geometry quality-warnings: every warning has a positive AND
+// a negative case, and warnings NEVER block the write (prepareModel returns them,
+// it does not throw).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { prepareModel } from "../../build/lib/drawio-xml.js";

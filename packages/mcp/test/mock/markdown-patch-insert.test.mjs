@@ -1,10 +1,10 @@
-// Mock collab tests for the #413 MARKDOWN path of patchNode / insertNode and the
+// Mock collab tests for the MARKDOWN path of patchNode / insertNode and the
 // markdown-default getNode. These stand up a real Hocuspocus collab server seeded
 // with a chosen document (mirroring ambiguous-node-id.test.mjs), let the client
 // run its real transform against a live Y.Doc, and read the persisted result back
 // to assert on the written document.
 //
-// Coverage (issue #413):
+// Coverage:
 //  - CANON CONVERGENCE: a block written via patchNode(markdown) is canonically
 //    equal to the SAME content run through a full markdown import (no "second
 //    canon" appears on the block-level path).

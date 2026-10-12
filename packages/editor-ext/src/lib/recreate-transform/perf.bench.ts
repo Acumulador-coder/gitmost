@@ -6,17 +6,17 @@ import { recreateTransform } from "./recreateTransform";
 import { fastCreatePatch } from "./fastCreatePatch";
 
 /**
- * Issue #581 performance bench + CI regression guard.
+ * Array-diff performance bench + CI guard.
  *
- * BEFORE = rfc6902's stock `createPatch` (the O(len(a)·len(b)) DP array diff that
- * froze the UI). AFTER = `fastCreatePatch` (linear Myers hook).
+ * BEFORE = rfc6902's stock `createPatch` (the O(len(a)·len(b)) DP array diff).
+ * AFTER = `fastCreatePatch` (linear Myers hook).
  *
  * NOTE ON SIZES: stock createPatch is not just slow but memory-explosive on large
  * arrays (it builds nested op arrays via Array.concat inside an N·M table), so it
  * OOMs on the multi-thousand-block forms. We therefore only run BEFORE on a
  * SCALING sweep of modest sizes — which is exactly where its quadratic growth is
  * already unmistakable — and run AFTER (plus full recreateTransform e2e) on the
- * big/pathological forms it can no longer survive.
+ * big/pathological forms it cannot survive.
  *
  * The two `it` families turn measurements into asserts: (1) after ≪ before on the
  * quadratic form, and (2) a MACHINE-INDEPENDENT scaling-ratio guard proving AFTER
@@ -215,8 +215,8 @@ describe("recreateTransform #581 performance bench", () => {
 
   // ---- CI regression guard: machine-independent SCALING ratio -------------
   // For two forms — "edit 1/10" (granular path) and "same-shape rewrite"
-  // (degenerate branch) — measure the AFTER path (fastCreatePatch: the piece #581
-  // actually rewrote) at N=100 and N=600 and assert t(600)/t(100) < 20. A stock
+  // (degenerate branch) — measure the AFTER path (fastCreatePatch) at N=100 and
+  // N=600 and assert t(600)/t(100) < 20. A stock
   // quadratic diff scales ~36x over 6x size; the linear/near-linear hook stays
   // well under 20 (measured ≈6x granular, ≈14x degenerate). Ratios (not absolute
   // ceilings) keep this independent of the CI machine's speed.

@@ -10,26 +10,20 @@ import {
 import { summarizeChange } from "./diff.js";
 
 /**
- * Live per-page collaboration session cache (issue #400).
+ * Live per-page collaboration session cache.
  *
- * The one-shot write path (collaboration.mutatePageContent /
- * client.mutateLiveContentUnlocked) used to open a NEW HocuspocusProvider, run
- * the full connect -> auth -> onLoadDocument -> initial-sync handshake, apply a
- * single edit, wait for persistence, and then `provider.destroy()` — for EVERY
- * content mutation. Disconnecting after every edit means that once the pause
- * between calls exceeds the server's write debounce, the server does a full
- * store -> unload -> reload per cell, causing 25s connect timeouts and
- * event-loop lag under a burst of edits on one page.
+ * Opening a new HocuspocusProvider per content mutation (connect -> auth ->
+ * onLoadDocument -> initial-sync, one edit, wait for persistence, destroy) means
+ * that once the pause between calls exceeds the server's write debounce, the
+ * server does a full store -> unload -> reload per edit, causing connect
+ * timeouts and event-loop lag under a burst of edits on one page.
  *
  * This module keeps ONE live provider + ydoc per (wsUrl, pageId, token) alive
  * across a SERIES of edits. While the provider stays connected the server never
  * enters store -> unload -> reload, its debounce coalesces N writes into 1-2
- * stores, and the repeated auth/load/initial-sync disappears.
- *
- * The synchronous read -> transform -> write section and the per-edit
- * persistence-ack logic are preserved VERBATIM from the one-shot machine — the
- * only change is that they run on a persistent provider instead of a throwaway
- * one. See CollabSession.mutate.
+ * stores, and the repeated auth/load/initial-sync disappears. The synchronous
+ * read -> transform -> write section and the per-edit persistence-ack logic
+ * live in CollabSession.mutate.
  */
 
 /** Time we wait for the initial handshake/sync before giving up. */
@@ -41,7 +35,7 @@ const PERSIST_TIMEOUT_MS = 20000;
  * Marker property set on the Error thrown when the Hocuspocus handshake REJECTS
  * our collab token (onAuthenticationFailed). The client wraps content writes so
  * that on this specific failure it invalidates its cached collab token and
- * retries once with a fresh one — symmetric to the HTTP-401 reauth path (#486).
+ * retries once with a fresh one — symmetric to the HTTP-401 reauth path.
  * A plain message-match would be brittle; a tagged property is unambiguous and
  * survives teardown (which rejects pending ops with this SAME error object).
  */
@@ -58,10 +52,10 @@ export function isCollabAuthFailedError(e: unknown): boolean {
 
 /**
  * Marker set on the Error a still-in-flight mutate is rejected with when its
- * session is LRU-evicted while busy (#494). Unlike a plain destroy/failure, this
+ * session is LRU-evicted while busy. Unlike a plain destroy/failure, this
  * write is INDETERMINATE: the local update may already have been sent to (and
- * persisted by) the server before the eviction, so a blind retry risks a DUPLICATE
- * write (the #435 double-apply class). A tagged property (not a message match)
+ * persisted by) the server before the eviction, so a blind retry risks a
+ * DUPLICATE write. A tagged property (not a message match)
  * lets a caller distinguish "verify before retry" from a clean failure.
  */
 const COLLAB_INDETERMINATE_MARKER = "collabIndeterminate";
@@ -91,13 +85,12 @@ function makeCollabIndeterminateError(pageId: string): Error {
 }
 
 /**
- * Tunables, read fresh from the environment on every acquire so tests (and a
- * live rollback) can change them without reloading the module. Mirrors how
- * http.ts parses MCP_SESSION_IDLE_MS.
+ * Tunables, read fresh from the environment on every acquire so tests can
+ * change them without reloading the module. Mirrors how http.ts parses
+ * MCP_SESSION_IDLE_MS.
  *   - MCP_COLLAB_SESSION_IDLE_MS: idle TTL, reset after every op. Default 60s.
  *     0 (or negative) DISABLES the cache — every op opens its own provider and
- *     destroys it after the op, i.e. the exact legacy per-op-provider behavior
- *     (the rollback path).
+ *     destroys it after the op.
  *   - MCP_COLLAB_SESSION_MAX_AGE_MS: hard lifetime checked at acquire; bounds
  *     the permission-staleness window. Default 10 min.
  *   - MCP_COLLAB_SESSION_MAX_ENTRIES: registry cap; the least-recently-used
@@ -262,7 +255,7 @@ export class CollabSession {
   }
 
   /**
-   * Shared diagnostic suffix (issue #437) appended to the connect-timeout,
+   * Shared diagnostic suffix appended to the connect-timeout,
    * persist-timeout and connection-closed error texts: names the offending
    * pageId and tells the agent this class of failure is transient (retry once)
    * vs. a persistent collab-server outage, so it can self-correct instead of
@@ -381,8 +374,7 @@ export class CollabSession {
    * INVARIANT 1 (read->write atomicity): between `TiptapTransformer.fromYdoc`
    * and `applyDocToFragment` there is NO `await`. Yjs applies remote updates
    * only when the event loop yields, so this synchronous block sees a consistent
-   * live doc and no concurrent human edit can interleave and be clobbered —
-   * exactly as in the one-shot onSynced code, just on a persistent provider.
+   * live doc and no concurrent human edit can interleave and be clobbered.
    *
    * INVARIANT 2 (per-edit ack): after the write, resolve immediately if
    * unsyncedChanges is already 0, else wait for the unsyncedChanges->0 event
@@ -507,7 +499,7 @@ export class CollabSession {
       // no-await window, and test/unit/no-await-critical-window.test.mjs scans
       // this source and FAILS if any `await` (or `for await`/`yield`) appears
       // between them. Do NOT add an await inside this block — an accidental
-      // async boundary here silently reopens the clobber-live-edits race (#152).
+      // async boundary here silently reopens the clobber-live-edits race.
       let newDoc: any;
       let beforeDoc: any;
       try {
@@ -545,7 +537,7 @@ export class CollabSession {
           return;
         }
 
-        // Structural diff into the live fragment (issue #152): preserves the Yjs
+        // Structural diff into the live fragment: preserves the Yjs
         // ids of unchanged nodes, so an open editor's cursor is not yanked to the
         // end of the document on every agent write.
         applyDocToFragment(this.ydoc, newDoc);
@@ -575,7 +567,7 @@ export class CollabSession {
    * with the FIRST reply whose parsed payload satisfies `predicate`, rejecting on
    * a bounded `timeoutMs`.
    *
-   * Used by the #370 explicit save-version path: the client sends
+   * Used by the explicit save-version path: the client sends
    * `{type:'save-version'}` and awaits the server's broadcast
    * `{type:'version.saved', historyId, kind, alreadySaved}`. The stateless channel
    * (not a REST read) is deliberate — the server versions the LIVE in-memory ydoc,
@@ -854,10 +846,10 @@ export async function acquireCollabSession(
   }
 
   // Enforce the registry cap before inserting: evict least-recently-used entries
-  // until there is room. PREFER an IDLE victim (#494): a session with an in-flight
+  // until there is room. PREFER an IDLE victim: a session with an in-flight
   // mutate may have already sent (and persisted) its update, so evicting it would
   // reject that write as a FALSE failure → a retry-prone agent re-issues it →
-  // DUPLICATE write (the #435 class). So walk LRU order and skip non-idle sessions,
+  // DUPLICATE write. So walk LRU order and skip non-idle sessions,
   // evicting the oldest IDLE one. Only when EVERY cached session is non-idle (eviction
   // unavoidable to admit this write) do we evict the LRU non-idle one — via
   // evictForCap(), which rejects an in-flight op with a tagged INDETERMINATE

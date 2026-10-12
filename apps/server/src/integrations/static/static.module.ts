@@ -50,26 +50,20 @@ export function resolveStaticAssetHeaders(
  * RFC 8615 reserves `/.well-known/` for MACHINE-readable site metadata
  * (OAuth discovery, security.txt, WebFinger, MTA-STS...). A discovery client
  * fetches such a URL and parses the body as JSON/text — it must get an honest
- * 404 when no such resource exists, never a 200 `text/html` SPA shell.
- *
- * The bug (#636): the SPA catch-all answered `GET /.well-known/oauth-protected-resource`
- * with index.html + 200, so an MCP client that (per the 2025-06-18 spec) starts
- * OAuth discovery after a 401 from /mcp died on "Failed to parse JSON" instead
- * of learning that this server has no OAuth AS at all.
+ * 404 when no such resource exists, never a 200 `text/html` SPA shell (an MCP
+ * client starts OAuth discovery at `/.well-known/oauth-protected-resource` after
+ * a 401 from /mcp, and this server has no OAuth AS).
  *
  * Feed this the DECODED path — `req.params['*']` from the catch-all route, not
  * `req.url`. Matching on the raw url is bypassable: `/%2ewell-known/x` and
  * `/.well-%6bnown/x` reach the same handler but do not literally start with
  * `/.well-known/`, so a raw-url check hands them the SPA shell.
  *
- * This predicate is SELF-SUFFICIENT about the rest: it does not rely on the router
- * having tidied the path up first, because Fastify only half does. Verified against
- * a real Fastify + @fastify/static stand, `req.params['*']` is percent-decoded, but
- * it does NOT collapse repeated leading slashes (`//.well-known/x` arrives verbatim)
- * and does NOT collapse dot-segments that were smuggled in percent-encoded:
- * `GET /a/..%2f.well-known/x` arrives as `/a/../.well-known/x`, which does not start
- * with `/.well-known/` and used to be served the SPA shell. So the normalisation the
- * check needs is done HERE, on whatever string it is handed:
+ * Fastify percent-decodes `req.params['*']` but does NOT collapse repeated leading
+ * slashes (`//.well-known/x` arrives verbatim) or dot-segments smuggled in
+ * percent-encoded (`GET /a/..%2f.well-known/x` arrives as `/a/../.well-known/x`).
+ * So the normalisation the check needs is done HERE, on whatever string it is
+ * handed:
  *   - a query string is stripped (`req.params['*']` never carries one, but a
  *     direct/unit caller may pass a raw url — a URL *fragment* needs no such strip:
  *     it is client-side only and never reaches the server);
@@ -195,7 +189,7 @@ export class StaticModule implements OnModuleInit {
       });
 
       app.get(RENDER_PATH, (req: any, res: any) => {
-        // #636 — never answer the machine-readable /.well-known/ namespace with
+        // Never answer the machine-readable /.well-known/ namespace with
         // the SPA shell. Nothing is lost by 404-ing it: the client dist ships no
         // /.well-known/ files, and @fastify/static (wildcard:false, no
         // serveDotFiles) would not serve a dot-prefixed directory anyway; ACME

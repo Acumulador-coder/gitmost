@@ -186,12 +186,12 @@ test("an unknown slug (never written/resolved) does NOT set the hint", async () 
   assert.equal(calls[0].preferLive, false);
 });
 
-// --- F1 (#654): the two write arms that route through the post-#672 write path ---
-// updatePage (now a server-side guarded replace via the guardedReplacePage seam)
-// and importPageMarkdown (now via the replacePage seam) must ARM the RYOW window
-// after a changed write. Deleting either arm previously left the suite green. These
-// tests exercise the REAL write method (stubbing ONLY the seams beneath it) and
-// assert the arm landed via shouldPreferLive, so removing the arm turns RED.
+// --- the two write arms that route through the guarded write path ---
+// updatePage (a server-side guarded replace via the guardedReplacePage seam)
+// and importPageMarkdown (via the replacePage seam) must ARM the RYOW window
+// after a changed write. These tests exercise the REAL write method (stubbing
+// ONLY the seams beneath it) and assert the arm landed via shouldPreferLive, so
+// removing the arm turns RED.
 function makeWriteClient() {
   class TestClient extends DocmostClient {
     async ensureAuthenticated() {}

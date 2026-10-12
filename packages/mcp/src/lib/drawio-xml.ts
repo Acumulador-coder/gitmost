@@ -1,4 +1,4 @@
-// draw.io (mxGraph) XML support for the MCP drawio tools (issue #423, stage 1).
+// draw.io (mxGraph) XML support for the MCP drawio tools.
 //
 // This module owns everything that is pure data-plumbing for draw.io diagrams:
 //   - the DECODE CHAIN that turns a stored `diagram.drawio.svg` attachment back
@@ -218,17 +218,17 @@ export function extractContentAttr(svg: string): string {
   throw new Error("drawio: SVG has no content= attribute to decode");
 }
 
-// --- embedded browser raster (issue #629) ----------------------------------
+// --- embedded browser raster ----------------------------------------------
 //
-// SHARED CONTRACT with apps/client (Part A produces, this consumes). draw.io's
-// `foreignObject` captions only render in a browser, so a server-side resvg
-// rasterization of a `.drawio.svg` yields garbage. Part A makes the browser
-// embed a real PNG raster of the diagram INTO the same SVG as a ROOT attribute
-// `data-raster="data:image/png;base64,<b64>"`. There is no shared package
-// between apps/client and packages/mcp, so the attribute NAME is duplicated as
-// a named constant per side (the `internal-file-urls` convention).
+// SHARED CONTRACT with apps/client (the client produces, this consumes).
+// draw.io's `foreignObject` captions only render in a browser, so a server-side
+// resvg rasterization of a `.drawio.svg` yields garbage. The client makes the
+// browser embed a real PNG raster of the diagram INTO the same SVG as a ROOT
+// attribute `data-raster="data:image/png;base64,<b64>"`. There is no shared
+// package between apps/client and packages/mcp, so the attribute NAME is
+// duplicated as a named constant per side (the `internal-file-urls` convention).
 
-/** Root SVG attribute carrying the browser-rendered PNG raster (issue #629). */
+/** Root SVG attribute carrying the browser-rendered PNG raster. */
 export const DRAWIO_RASTER_ATTR = "data-raster";
 
 /** The exact data-URI prefix a valid embedded raster must carry. A non-png mime

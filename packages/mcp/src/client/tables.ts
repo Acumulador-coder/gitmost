@@ -1,6 +1,4 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Mixin over the shared client context (see client/context.ts).
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import {
   updatePageContentRealtime,
@@ -43,7 +41,7 @@ import {
   mergeFootnoteDefinitions,
 } from "../lib/transforms.js";
 
-// Public method surface of TablesMixin (issue #450) — a NAMED type so the factory
+// Public method surface of TablesMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements ITablesMixin` fails to compile on drift.
@@ -116,21 +114,6 @@ export function TablesMixin<TBase extends GConstructor<DocmostClientContext>>(Ba
       verify: mutation.verify,
     };
   }
-
-  /**
-   * Page-locked write seam over collaboration.mutatePageContent. Production just
-   * delegates; it exists as an overridable method so the insertFootnote wrapper
-   * (transform abort-on-not-found + response shaping) can be unit-tested without
-   * standing up a live Hocuspocus collab socket.
-   *
-   * SELF-RESOLVES the pageId to the canonical UUID (issue #449, "resolve-then-
-   * lock"): every write must lock and key its CollabSession by the UUID, never a
-   * raw slugId (#260). resolvePageId is cached/idempotent, so a caller that
-   * already resolved pays no extra round-trip; centralizing it here means a
-   * caller that reaches this seam with a raw slugId still locks correctly instead
-   * of silently splitting the mutex key. withPageLock also asserts the key is a
-   * UUID as a hard backstop.
-   */
 
   /**
    * Insert a row of plain-text cells into a table on the LIVE collab document.

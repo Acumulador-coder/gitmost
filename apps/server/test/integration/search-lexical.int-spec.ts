@@ -13,16 +13,14 @@ import {
 } from './db';
 
 /**
- * #529 Phase A — the lexical overhaul, on the REAL migrated schema (ru_en config).
+ * Lexical search on the REAL migrated schema (ru_en config).
  *
- * Covers every acceptance criterion of the issue: RU+EN morphology + OR default,
- * match=auto identifier routing, "phrase"/+/- operators, RRF ordering, exact
- * permission-filtered total (fail-closed) + pagination, only-negation / garbage
- * short-circuits, the A8 path fix and the response superset. (Acceptance #13,
- * the RAG lockstep config of page_embeddings.fts, went away with the column in
- * migration 20261011T120000.)
+ * Covers RU+EN morphology + OR default, match=auto identifier routing,
+ * "phrase"/+/- operators, RRF ordering, exact permission-filtered total
+ * (fail-closed) + pagination, only-negation / garbage short-circuits, the result
+ * path and the response superset.
  *
- * The tsv column is populated by the pages_tsvector_trigger (now ru_en), so the
+ * The tsv column is populated by the pages_tsvector_trigger (ru_en), so the
  * FTS branch is exercised end to end.
  */
 describe('SearchService #529 lexical overhaul [integration]', () => {
@@ -57,7 +55,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
   // Service wired to the real DB + real PageRepo (recursive descendants) with
   // stubbed space-membership + permission repos so a test controls scope and the
   // permission filter explicitly. `accessibleIds` (when set) is the KEEP list.
-  // #530: a FAKE AiService whose embedQuery is fully controlled per test. By
+  // A FAKE AiService whose embedQuery is fully controlled per test. By
   // DEFAULT it throws AiEmbeddingNotConfiguredException, so the semantic arm is
   // omitted and every Phase-A case runs the BYTE-IDENTICAL lexical path — the
   // semantic layer must never change lexical behaviour on degrade. Semantic cases
@@ -537,11 +535,10 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
     expect(hit.matchedTerms).toContain('кофейня');
   });
 
-  // F1 — stack-depth guard: a pasted text block (thousands of FTS terms) used to
-  // nest the combined tsquery so deep that Postgres raised `stack depth limit
-  // exceeded` → HTTP 500 for the caller. The parser now caps terms at
-  // MAX_PARSED_TERMS, so a huge query returns 200 and the leading (in-cap) term
-  // still matches. Mutation: remove the cap → this reddens (500 / stack depth).
+  // Stack-depth guard: without a cap, a pasted text block (thousands of FTS terms)
+  // nests the combined tsquery so deep that Postgres raises `stack depth limit
+  // exceeded` → HTTP 500. The parser caps terms at MAX_PARSED_TERMS, so a huge
+  // query returns 200 and the leading (in-cap) term still matches.
   it('F1 a huge multi-term query returns 200, not a stack-depth 500', async () => {
     const page = await insertPage({
       title: 'qfonemarker заголовок',
@@ -980,7 +977,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       }
     });
 
-    // 11. COMMIT-path no-leak (locks is_local=true). #530-10 only covers the
+    // 11. COMMIT-path no-leak (locks is_local=true). Case 10 only covers the
     //     ROLLBACK path (a timed-out search rolls back — a plain session SET would
     //     ALSO be undone on rollback, so it would NOT catch is_local true->false).
     //     Here a NORMAL, FAST semantic search COMMITs its transaction; a leaked

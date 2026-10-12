@@ -1,11 +1,9 @@
-// Mock-HTTP regression for the body-before-title write order (#159 finding #10,
-// PR #185 review pt 3). `updatePage` / `updatePageJson` must write the page BODY
-// (collab) BEFORE the title (REST POST /pages/update), so a failed body write
-// never leaves a NEW title over the OLD body (split-brain). We point the client
-// at a mock server that serves auth + collab-token but has NO WebSocket upgrade
-// handler, so the collab body write fails fast; we then assert the title was
-// never POSTed. With the pre-fix (title-first) order, /pages/update WOULD be hit
-// before the body failed.
+// Mock-HTTP regression for the body-before-title write order. `updatePage` /
+// `updatePageJson` must write the page BODY (collab) BEFORE the title (REST
+// POST /pages/update), so a failed body write never leaves a NEW title over the
+// OLD body (split-brain). We point the client at a mock server that serves auth
+// + collab-token but has NO WebSocket upgrade handler, so the collab body write
+// fails fast; we then assert the title was never POSTed.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

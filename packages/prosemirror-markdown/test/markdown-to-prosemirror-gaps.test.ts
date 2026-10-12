@@ -161,8 +161,7 @@ describe('preprocessCallouts: nested callouts + code-fenced ":::"', () => {
   it('(c) an UNCLOSED ":::" opener is treated as a literal line, not a callout', async () => {
     // Realistic input: a hand-edited vault file with a `:::info` opener and no
     // matching closing `:::`. The fallback emits the opener as a LITERAL line
-    // rather than swallowing the rest of the document into a phantom callout —
-    // previously uncovered (markdown-to-prosemirror.ts).
+    // rather than swallowing the rest of the document into a phantom callout.
     const md = [':::info', 'orphan body line', 'another line'].join('\n');
 
     const docNode = await markdownToProseMirror(md);
@@ -249,8 +248,8 @@ const firstMark = (node: any, markType: string): any => {
 //
 // The highlight parseHTML override runs attacker-controlled colors through
 // sanitizeCssColor when generateJSON re-parses stored HTML. This is the
-// real defense that strips a crafted color on IMPORT (the export-side emission
-// is tested elsewhere; the parse path was not).
+// defense that strips a crafted color on IMPORT (the export-side emission
+// is tested elsewhere).
 // ---------------------------------------------------------------------------
 describe('import: highlight/textStyle color sanitization (parseHTML)', () => {
   it('strips the unsafe "--x:1" declaration but keeps the safe "red" background-color', async () => {
@@ -261,8 +260,7 @@ describe('import: highlight/textStyle color sanitization (parseHTML)', () => {
     // The highlight mark IS present on the text run.
     expect(mark).not.toBeNull();
     expect(allText(doc)).toContain('x');
-    // NOTE(review): Spec 1 expected attrs.color === null for this input. The
-    // ACTUAL behavior is attrs.color === 'red': the schema's Highlight.extend
+    // attrs.color is 'red', not null: the schema's Highlight.extend
     // reads the color via getStyleProperty(el, 'background-color'), which
     // isolates the `background-color: red` declaration and DROPS the separate
     // unsafe `--x:1` declaration. sanitizeCssColor('red') then accepts the bare

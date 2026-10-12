@@ -134,9 +134,9 @@ describe("recreateTransform round-trip (apply(diff) == target)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Issue #581 — fastCreatePatch (linear array diff) round-trip coverage. Same
+// fastCreatePatch (linear array diff) round-trip coverage. Same
 // `applyDiff` invariant: replaying the produced steps on `fromDoc` must exactly
-// reproduce `toDoc`. These exercise every branch of the new array-diff hook
+// reproduce `toDoc`. These exercise every branch of the array-diff hook
 // (granular pairing, cross-type type-guard, degenerate whole-array rewrite,
 // coarse snapshot runs) plus the word-diff cap.
 // ---------------------------------------------------------------------------

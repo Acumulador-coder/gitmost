@@ -21,7 +21,7 @@ const POLL_INTERVAL_MS = 15_000;
 const MAX_INFLIGHT = 10_000;
 
 /**
- * BullMQ instrumentation for #355:
+ * BullMQ instrumentation:
  *  - `bullmq_queue_depth{queue}`: polled from getJobCounts() every 15s.
  *  - `bullmq_job_duration_seconds{queue}`: wall-clock time between a job going
  *    `active` and `completed`/`failed`, observed via per-queue QueueEvents.

@@ -25,10 +25,10 @@ describe('stabilizePageFile — normalize-on-write fixpoint (SPEC §11)', () => 
   it('reaches a byte-identical fixpoint after one extra export/import/export pass', async () => {
     // A diagram inside a column is the canonical one-pass asymmetry: on the
     // raw-HTML/columns path a diagram's `align` default of "center" materializes
-    // on import, so a NAIVE export differs on the second export. (#293 canon #8
-    // made the TOP-LEVEL diagram form — `![](src)<!--drawio …-->` — byte-stable by
-    // omitting the default, so the asymmetry now lives only on the columns path
-    // where the schema `<div data-type="drawio">` form is retained.)
+    // on import, so a NAIVE export differs on the second export. (The TOP-LEVEL
+    // diagram form — `![](src)<!--drawio …-->` — omits the default and is
+    // byte-stable; the asymmetry lives only on the columns path where the schema
+    // `<div data-type="drawio">` form is retained.)
     // stabilizePageFile runs the convergence pass at write time, so the written
     // body must already be at the fixpoint: re-importing its body and
     // re-stabilizing yields the exact same bytes.

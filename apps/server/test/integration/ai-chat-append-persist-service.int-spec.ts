@@ -23,7 +23,7 @@ import {
 } from './db';
 
 /**
- * #492 append-persist — the REAL onStep WRITE path (F2) and the model-REPLAY
+ * Append-persist — the REAL onStep WRITE path (F2) and the model-REPLAY
  * hydration path (F1), driven through `AiChatService.stream` against a LIVE
  * Postgres with a REAL `AiChatRunStepRepo` INJECTED. The existing append-persist
  * int-specs hand-roll the insert+marker cycle via the repos directly and build

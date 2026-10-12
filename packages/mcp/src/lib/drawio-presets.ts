@@ -1,4 +1,4 @@
-// Semantic color/line presets for the graph tools (issue #425, stage 3). The
+// Semantic color/line presets for the graph tools. The
 // PALETTE is DATA (packages/mcp/data/drawio-presets.json), not code: a node
 // `kind` maps to a { fillColor, strokeColor, fontColor } slot and an edge `kind`
 // maps to line-style props, per named preset (`default` / `dark` /

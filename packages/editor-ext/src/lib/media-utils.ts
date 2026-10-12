@@ -33,11 +33,11 @@ export interface MediaPlaceholderOptions {
  * outcomes.
  *
  * The placeholder makes the node non-interactive (`pointer-events: none`) and
- * runs the `media-pulse` shimmer. Previously only the success event undid
- * that, so a 404/403, a deleted attachment, or a `<video preload="metadata">`
- * that never reaches `loadedmetadata` left the node pulsing forever AND
- * permanently unclickable. Now the `error` event settles it too, and the
- * failure is logged with enough context to identify the attachment.
+ * runs the `media-pulse` shimmer. The `error` event settles it as well as the
+ * success event, so a 404/403, a deleted attachment, or a `<video
+ * preload="metadata">` that never reaches `loadedmetadata` does not leave the
+ * node pulsing and unclickable; the failure is logged with enough context to
+ * identify the attachment.
  *
  * Call it right after assigning `src`, in the same synchronous task (all four
  * node views do). It is nevertheless safe to call late: an element that is

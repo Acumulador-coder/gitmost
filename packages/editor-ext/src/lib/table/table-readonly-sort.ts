@@ -255,14 +255,11 @@ export const TableReadonlySort = Extension.create({
               const docChanged = view.state.doc !== prevState.doc;
               const editableChanged = editable !== lastEditable;
               // Selection-only transactions (and every remote Yjs step that
-              // leaves the doc identity alone) must do nothing here. This used
-              // to run on EVERY transaction: a full-editor
-              // querySelectorAll('table'), then three setAttribute calls plus a
-              // `.title` write on every <th> of every table, plus a
-              // querySelector for the chevron in each. Table drag-and-drop
-              // dispatches hover meta-transactions on every mousemove, so that
-              // whole sweep ran per mouse move over a table — and again for each
-              // remote step on a busy collaborative page.
+              // leaves the doc identity alone) must do nothing here: the sweep
+              // below (querySelectorAll('table') plus attribute writes on every
+              // <th>) would otherwise run per mouse move over a table, since
+              // table drag-and-drop dispatches hover meta-transactions on every
+              // mousemove.
               if (!docChanged && !editableChanged) return;
               lastEditable = editable;
 
