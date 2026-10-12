@@ -6,6 +6,7 @@ import { UpdatePageDto } from '../dto/update-page.dto';
 import { Page, User } from '@docmost/db/types/entity.types';
 import { DEFAULT_TEMPORARY_NOTE_HOURS } from '../constants/temporary-note.constants';
 import { AuthProvenanceData } from '../../../common/decorators/auth-provenance.decorator';
+import { EventName } from '../../../common/events/event.contants';
 
 // Direct instantiation with stub deps. The Test.createTestingModule form failed
 // to resolve the @InjectKysely()/@InjectQueue() tokens at compile(), and this
@@ -188,6 +189,7 @@ describe('PageService', () => {
       pageRepo?: any;
       generalQueue?: any;
       db?: any;
+      eventEmitter?: any;
     }) =>
       new PageService(
         (overrides.pageRepo ?? {}) as any, // pageRepo
@@ -198,7 +200,7 @@ describe('PageService', () => {
         {} as any, // attachmentQueue
         {} as any, // aiQueue
         (overrides.generalQueue ?? makeGeneralQueue()) as any, // generalQueue
-        {} as any, // eventEmitter
+        (overrides.eventEmitter ?? {}) as any, // eventEmitter
         {} as any, // collaborationGateway
         {} as any, // watcherService
         {} as any, // transclusionService
@@ -381,7 +383,11 @@ describe('PageService', () => {
           updatePage: jest.fn().mockResolvedValue(undefined),
           updatePages: jest.fn().mockResolvedValue(undefined),
         };
-        const svc = makeSvc({ pageRepo, db });
+        const svc = makeSvc({
+          pageRepo,
+          db,
+          eventEmitter: { emit: jest.fn() },
+        });
         // The single-accessible-page path still runs the bulk side-effect writes
         // (attachments/watchers/ai-queue) AFTER the root updatePage we assert on;
         // stub them so the transaction completes without throwing.
@@ -421,6 +427,63 @@ describe('PageService', () => {
         );
         expect(payload).not.toHaveProperty('lastUpdatedSource');
         expect(payload).not.toHaveProperty('lastUpdatedAiChatId');
+      });
+
+      it('emits COLLAB_ACCESS_CHANGED for the moved and the orphaned pages after the commit (CO-2)', async () => {
+        const trxStub = makeChain();
+        let committed = false;
+        const db = {
+          transaction: () => ({
+            execute: async (fn: any) => {
+              const result = await fn(trxStub);
+              committed = true;
+              return result;
+            },
+          }),
+        } as any;
+        const rootPage = {
+          id: 'root',
+          spaceId: 'src-space',
+          parentPageId: null,
+          workspaceId: 'ws-1',
+        } as any;
+        const child = { id: 'child', parentPageId: 'root' } as any;
+        const orphan = { id: 'orphan', parentPageId: 'child' } as any;
+        const pageRepo = {
+          getPageAndDescendants: jest
+            .fn()
+            .mockResolvedValue([rootPage, child, orphan]),
+          updatePage: jest.fn().mockResolvedValue(undefined),
+          updatePages: jest.fn().mockResolvedValue(undefined),
+        };
+        let committedAtEmit = false;
+        const eventEmitter = {
+          emit: jest.fn(() => {
+            committedAtEmit = committed;
+          }),
+        };
+        const svc = makeSvc({ pageRepo, db, eventEmitter });
+        (svc as any).attachmentRepo = {
+          updateAttachmentsByPageId: jest.fn().mockResolvedValue(undefined),
+        };
+        (svc as any).watcherService = {
+          movePageWatchersToSpace: jest.fn().mockResolvedValue(undefined),
+        };
+        (svc as any).aiQueue = { add: jest.fn().mockResolvedValue(undefined) };
+        // The orphan is inaccessible to the mover: it stays in the source space.
+        jest
+          .spyOn(svc as any, 'filterAccessibleTreePages')
+          .mockResolvedValue([rootPage, child] as any);
+        jest.spyOn(svc, 'nextPagePosition').mockResolvedValue('a0' as any);
+
+        await svc.movePageToSpace(rootPage, 'dst-space', 'u1');
+
+        expect(eventEmitter.emit).toHaveBeenCalledTimes(1);
+        expect(eventEmitter.emit).toHaveBeenCalledWith(
+          EventName.COLLAB_ACCESS_CHANGED,
+          { workspaceId: 'ws-1', pageIds: ['root', 'child', 'orphan'] },
+        );
+        expect(committedAtEmit).toBe(true);
       });
     });
   });

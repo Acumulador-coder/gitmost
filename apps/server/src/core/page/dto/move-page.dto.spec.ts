@@ -51,7 +51,7 @@ describe('MovePageDto.position vs generateJitteredKeyBetween parity', () => {
   // FIXED: dense between-inserts produce keys longer than 12 chars, which the old
   // MaxLength(12) rejected even though they are valid ordering keys. Now accepted.
   it('accepts dense between-inserted keys longer than 12 chars', async () => {
-    let lo = generateJitteredKeyBetween(null, null);
+    const lo = generateJitteredKeyBetween(null, null);
     let hi = generateJitteredKeyBetween(lo, null);
     // Repeatedly insert just above `lo`, shrinking the gap so the key grows. The
     // generator is JITTERED (random), so use enough iterations that the longest

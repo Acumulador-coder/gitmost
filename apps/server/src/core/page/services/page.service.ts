@@ -53,6 +53,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { QueueJob, QueueName } from '../../../integrations/queue/constants';
 import { EventName } from '../../../common/events/event.contants';
+import { emitCollabAccessChanged } from '../../../common/events/collab-access-changed';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CollaborationGateway } from '../../../collaboration/collaboration.gateway';
 import {
@@ -835,6 +836,13 @@ export class PageService {
           workspaceId: rootPage.workspaceId,
         });
       }
+    });
+
+    // The moved pages now take the destination space's access, and the
+    // orphaned ones lost the restrictions of their former ancestors.
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId: rootPage.workspaceId,
+      pageIds: [...accessibleIds, ...pagesToOrphan.map((page) => page.id)],
     });
 
     return { childPageIds };

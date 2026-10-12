@@ -492,42 +492,33 @@ export class EnvironmentService {
   }
 
   /**
-   * Poll-safety interval in ms (default 15000). A NaN / non-positive value falls
-   * back to the default so a bad override can never disable or zero the poll loop.
+   * Poll-safety interval in ms (default 15000). A non-integer / non-positive
+   * value is warned about once and falls back to the default (getPositiveIntEnv),
+   * so a bad override can never disable or zero the poll loop.
    */
   getGitSyncPollIntervalMs(): number {
-    const parsed = parseInt(
-      this.configService.get<string>('GIT_SYNC_POLL_INTERVAL_MS', '15000'),
-      10,
-    );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 15000;
+    return this.getPositiveIntEnv('GIT_SYNC_POLL_INTERVAL_MS', 15000);
   }
 
   /**
-   * Spawned `git http-backend` watchdog timeout in ms (default 120000). Bounds a
-   * single smart-HTTP request so a stalled `git-receive-pack` cannot hold the
-   * per-space lock forever (the child is killed and a 500 sent on expiry). A NaN /
-   * non-positive value falls back to the default so a bad override can never
-   * disable the watchdog.
+   * Spawned `git http-backend` watchdog window in ms (default 120000): a hard cap
+   * for a `git-receive-pack` (it runs under the per-space lock, so a stalled push
+   * cannot hold the lock forever), and an idle/no-progress window for every other
+   * request. On expiry the child is killed. A non-integer / non-positive value is
+   * warned about once and falls back to the default (getPositiveIntEnv), so a bad
+   * override can never disable the watchdog.
    */
   getGitSyncBackendTimeoutMs(): number {
-    const v = parseInt(
-      this.configService.get<string>('GIT_SYNC_BACKEND_TIMEOUT_MS', '120000'),
-      10,
-    );
-    return Number.isFinite(v) && v > 0 ? v : 120000;
+    return this.getPositiveIntEnv('GIT_SYNC_BACKEND_TIMEOUT_MS', 120000);
   }
 
   /**
-   * Event debounce window in ms (default 2000). A NaN / non-positive value falls
-   * back to the default so a bad override can never disable the debounce.
+   * Event debounce window in ms (default 2000). A non-integer / non-positive
+   * value is warned about once and falls back to the default (getPositiveIntEnv),
+   * so a bad override can never disable the debounce.
    */
   getGitSyncDebounceMs(): number {
-    const parsed = parseInt(
-      this.configService.get<string>('GIT_SYNC_DEBOUNCE_MS', '2000'),
-      10,
-    );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
+    return this.getPositiveIntEnv('GIT_SYNC_DEBOUNCE_MS', 2000);
   }
 
 
