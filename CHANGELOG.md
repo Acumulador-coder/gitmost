@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-12
+
+The 1.0.0 code with release images: the `v1.0.0` tag was pushed, but a failing integration test
+stopped its images and GitHub release from being built. Use 1.0.1 for everything listed under 1.0.0.
+
+### Fixed
+
+- The share-search integration test no longer fails on the search query echoed in the response.
+
 ## [1.0.0] - 2026-10-12
 
 Git sync: a space is mirrored to a git repository of Markdown files both ways, with a built-in
@@ -505,7 +514,8 @@ the in-app AI agent chat, a RAG knowledge layer, an embedded MCP server and the 
 
 - CI builds to GHCR; the private EE submodule is dropped.
 
-[Unreleased]: https://github.com/vvzvlad/gitmost/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/vvzvlad/gitmost/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/vvzvlad/gitmost/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vvzvlad/gitmost/compare/v0.96.0...v1.0.0
 [0.96.0]: https://github.com/vvzvlad/gitmost/compare/v0.94.0...v0.96.0
 [0.94.0]: https://github.com/vvzvlad/gitmost/compare/v0.93.0...v0.94.0

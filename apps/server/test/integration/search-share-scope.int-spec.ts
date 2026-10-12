@@ -156,7 +156,10 @@ describe('SearchService anonymous share scope [integration]', () => {
       expect(res.related).toEqual([]);
       expect(res.total).toBe(0);
       expect(res.disabledReason).toBe(SHARE_SEARCH_DISABLED_APPROVED);
-      expect(JSON.stringify(res).toLowerCase()).not.toContain('zanzibar');
+      // The response echoes the query back; nothing else may carry the word.
+      expect(
+        JSON.stringify({ ...res, query: undefined }).toLowerCase(),
+      ).not.toContain('zanzibar');
     }
 
     // Control: the same draft behind a LIVE share is found — the query above
