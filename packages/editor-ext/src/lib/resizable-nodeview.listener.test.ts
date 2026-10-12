@@ -3,12 +3,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { ResizableNodeView } from './resizable-nodeview';
 
 /**
- * F4: the node view used to subscribe with `handleEditorUpdate.bind(this)` and
- * unsubscribe with a SECOND `.bind(this)` — a different function object, so
- * `off` never removed anything. Every image/video/drawio/excalidraw/pdf node
- * view ever constructed (and ProseMirror rebuilds them on redraw) left a
- * permanent `update` listener behind, so typing got monotonically slower over
- * a session.
+ * The node view must unsubscribe the SAME function object it subscribed: a
+ * second `.bind(this)` is a different function, so `off` would remove nothing
+ * and every image/video/drawio/excalidraw/pdf node view ever constructed
+ * (ProseMirror rebuilds them on redraw) would leave a permanent `update`
+ * listener behind, making typing monotonically slower over a session.
  */
 function makeEditor() {
   const listeners = new Map<string, Set<(...args: any[]) => void>>();

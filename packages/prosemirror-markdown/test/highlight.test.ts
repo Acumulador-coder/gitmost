@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { convertProseMirrorToMarkdown } from '../src/lib/markdown-converter.js';
 import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 
-// #293 canon #7: a `highlight` mark WITHOUT a color serializes as the
+// A `highlight` mark WITHOUT a color serializes as the
 // Obsidian/GFM `==text==` syntax; a highlight WITH a color KEEPS the
 // `<mark style="background-color: …">` HTML form. On the raw-HTML path
 // (columns / spanned cells) BOTH forms stay `<mark>` because markdown is not
@@ -213,7 +213,7 @@ describe('#293 #7: fail-open edges (empty / unbalanced ==)', () => {
 });
 
 describe('#293 #7: a codeBlock containing == is NOT escaped (literal code preserved)', () => {
-  // Regression: the canon #7 `==` -> `\=\=` escape lives in `case "text"`, but
+  // The `==` -> `\=\=` escape lives in `case "text"`, but
   // code-fence content is literal and marked does NOT decode `\=` inside a fence,
   // so routing code through that path would permanently stamp backslashes into a
   // `==` comparison (ubiquitous in source). codeBlock must read raw child text.

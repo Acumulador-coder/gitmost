@@ -266,7 +266,7 @@ test("insertNodeRelative tableRow by anchorText resolving to the table block app
 });
 
 // ---------------------------------------------------------------------------
-// Regression: a normal (non-structural) paragraph insert is unchanged.
+// A normal (non-structural) paragraph insert.
 // ---------------------------------------------------------------------------
 
 test("insertNodeRelative regression: normal paragraph before/after a top-level block behaves as before", () => {

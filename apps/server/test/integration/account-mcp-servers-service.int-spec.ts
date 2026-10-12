@@ -6,10 +6,10 @@ import { CreateMcpServerDto } from '../../src/core/ai-chat/external-mcp/dto/crea
 import { getTestDb, destroyTestDb, createWorkspace, createUser } from './db';
 
 /**
- * Personal MCP CRUD service (#686 phase 2) against a real Postgres.
+ * Personal MCP CRUD service against a real Postgres.
  *
  * The security-critical properties here are DB-observable and cannot be seen by
- * a mocked unit test (ARCH INVARIANT #8): owner-only isolation is enforced by
+ * a mocked unit test: owner-only isolation is enforced by
  * the repo's WHERE-scoping, and the per-user cap is enforced by a `FOR NO KEY
  * UPDATE` row lock that only serializes under a REAL transaction. So these run
  * against live PG.
@@ -19,8 +19,8 @@ import { getTestDb, destroyTestDb, createWorkspace, createUser } from './db';
  *  - SecretBoxService: a visible reversible marker so we can assert the raw
  *    header value NEVER reaches the view (only `hasHeaders`);
  *  - McpClientsService: a fixed testServer() result (the transport itself is
- *    the admin path's concern, already covered) + invalidateUser (#686 phase 3:
- *    every personal mutation evicts the owner's per-user toolset cache);
+ *    the admin path's concern, already covered) + invalidateUser (every
+ *    personal mutation evicts the owner's per-user toolset cache);
  *  - EnvironmentService: only `getMcpPersonalServersMax()` is consumed.
  */
 const secretBoxStub = {
@@ -185,7 +185,7 @@ describe('AccountMcpServersService [integration]', () => {
     });
   });
 
-  // F-1 (#686 ARCH #8): the migration declares
+  // The migration declares
   //   `user_id ... references users(id) ON DELETE CASCADE`
   // so a personal server (which holds the encrypted per-user `headersEnc` blob)
   // MUST be destroyed when its owner is deleted — NOT nulled, which would

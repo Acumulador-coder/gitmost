@@ -113,8 +113,8 @@ export function showTypingIndicator(messages: UIMessage[], isStreaming: boolean)
  * model is still thinking): in that gap the assistant MessageItem renders nothing,
  * so the indicator stands in for the nascent bubble (name + dots) at a constant
  * gap. It hides the name only once that row shows visible content, because then
- * MessageItem draws the same name — avoids a duplicate stacked label and the
- * layout jump that switching owners mid-stream used to cause.
+ * MessageItem draws the same name — avoiding a duplicate stacked label and a
+ * layout jump from switching owners mid-stream.
  */
 export function typingIndicatorShowsName(messages: UIMessage[]): boolean {
   const last = messages[messages.length - 1];
@@ -125,7 +125,7 @@ export function typingIndicatorShowsName(messages: UIMessage[]): boolean {
 /**
  * Scrollable transcript. Auto-scrolls to the newest message as it streams in,
  * but only while the user is pinned to the bottom — if they scrolled up to read
- * earlier messages, streamed deltas no longer yank them back down.
+ * earlier messages, streamed deltas do not yank them back down.
  */
 export default function MessageList({
   messages,

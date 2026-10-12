@@ -9,14 +9,13 @@ import { Node as PMNode } from '@tiptap/pm/model';
 import { LowlightPlugin } from './lowlight-plugin';
 
 /**
- * #683 `code_highlight` (AC5) — the plugin's onHighlight hook must fire ONLY on a
+ * The plugin's onHighlight hook must fire ONLY on a
  * REAL syntax-highlight decoration recompute (init + an edit that affects a code
  * block), and MUST NOT fire on a plain keystroke / cursor move OUTSIDE any code
  * block (the `decorationSet.map(...)` fast-path in `apply`).
  *
- * This drives a real ProseMirror EditorState + the real LowlightPlugin (the
- * observable-property integration test AGENTS #8 requires — a pure-helper unit
- * test would not catch a plugin that times every transaction).
+ * This drives a real ProseMirror EditorState + the real LowlightPlugin (a
+ * pure-helper unit test would not catch a plugin that times every transaction).
  *
  * NON-VACUITY: the "does NOT fire while typing outside a code block" case is the
  * guard. If the guarded `apply` branch is neutered to always call
@@ -155,5 +154,79 @@ describe('LowlightPlugin onHighlight cadence (#683 AC5)', () => {
       ],
     });
     expect(() => state.apply(state.tr.insertText('Y', 3))).not.toThrow();
+  });
+});
+
+describe('LowlightPlugin highlight cache', () => {
+  // The per-block highlight cache: a recompute must only highlight blocks whose
+  // language or text changed. Reddens if the cache is dropped (every recompute
+  // re-highlights every block) or keyed wrongly (the unchanged blocks miss).
+  it('re-highlights only the edited code block, reusing results for the others', () => {
+    // One token spanning the whole text, so every highlighted block yields an
+    // inline decoration and a cache hit is visible in the decoration set.
+    const tokenize = (text: string) => ({
+      data: {},
+      children: [
+        {
+          type: 'element',
+          properties: { className: ['hljs-keyword'] },
+          children: [{ type: 'text', value: text }],
+        },
+      ],
+    });
+    const spyLowlight = {
+      highlight: vi.fn((_language: string, text: string) => tokenize(text)),
+      highlightAuto: vi.fn((text: string) => tokenize(text)),
+      listLanguages: () => ['js'],
+      registered: (language: string) => language === 'js',
+    };
+    // Positions: js 'aa' [0,4) (text 1..3), js 'bb' [4,8) (text 5..7),
+    // auto-detected 'cc' [8,12) (text 9..11).
+    const doc = PMNode.fromJSON(schema, {
+      type: 'doc',
+      content: [
+        {
+          type: CODE_BLOCK_NAME,
+          attrs: { language: 'js' },
+          content: [{ type: 'text', text: 'aa' }],
+        },
+        {
+          type: CODE_BLOCK_NAME,
+          attrs: { language: 'js' },
+          content: [{ type: 'text', text: 'bb' }],
+        },
+        { type: CODE_BLOCK_NAME, content: [{ type: 'text', text: 'cc' }] },
+      ],
+    });
+    const plugin = LowlightPlugin({
+      name: CODE_BLOCK_NAME,
+      lowlight: spyLowlight,
+      defaultLanguage: null,
+    });
+    const state = EditorState.create({
+      doc,
+      selection: TextSelection.create(doc, 2),
+      plugins: [plugin],
+    });
+    // Sanity: init highlighted all three, through both paths.
+    expect(spyLowlight.highlight).toHaveBeenCalledTimes(2);
+    expect(spyLowlight.highlightAuto).toHaveBeenCalledTimes(1);
+    spyLowlight.highlight.mockClear();
+    spyLowlight.highlightAuto.mockClear();
+
+    // Typing inside the first block takes the real recompute path.
+    const next = state.apply(state.tr.insertText('X', 2));
+
+    expect(spyLowlight.highlight).toHaveBeenCalledTimes(1);
+    expect(spyLowlight.highlight).toHaveBeenCalledWith('js', 'aXa');
+    expect(spyLowlight.highlightAuto).not.toHaveBeenCalled();
+
+    // The untouched blocks still carry their decorations, now at the shifted
+    // positions (js 'bb' text 6..8, auto 'cc' text 10..12).
+    const decorations: any = plugin.props.decorations!.call(plugin, next);
+    const rangesIn = (from: number, to: number) =>
+      decorations.find(from, to).map((d: any) => [d.from, d.to]);
+    expect(rangesIn(6, 8)).toEqual([[6, 8]]);
+    expect(rangesIn(10, 12)).toEqual([[10, 12]]);
   });
 });

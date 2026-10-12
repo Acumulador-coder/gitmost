@@ -7,12 +7,12 @@ import { AiChatController } from './ai-chat.controller';
 import type { User, Workspace } from '@docmost/db/types/entity.types';
 
 /**
- * Wiring spec for POST /ai-chat/bind-page (#665): the conscious-open writer. It
- * re-binds (history select) or clears ("New chat") the page->chat pointer, fail-
- * SOFT (every "not applied" outcome is 200 { chatId: null } with NO write) and
- * fail-CLOSED on a chat the caller does not own — with a WARN + a bounded skip
- * counter on each skip (criterion 15). slugId in `pageId` is resolved before the
- * uuid column (#312, criterion 17). Hand-rolled mocks, no Nest graph, no DB.
+ * Wiring spec for POST /ai-chat/bind-page: the conscious-open writer. It
+ * re-binds (history select) or clears ("New chat") the page->chat pointer,
+ * fail-soft (every "not applied" outcome is 200 { chatId: null } with no write)
+ * and fail-closed on a chat the caller does not own, with a WARN + a bounded
+ * skip counter on each skip. A slugId in `pageId` is resolved before the uuid
+ * column. Hand-rolled mocks, no Nest graph, no DB.
  */
 describe('AiChatController.bindPage', () => {
   const user = { id: 'u1' } as User;
@@ -40,7 +40,6 @@ describe('AiChatController.bindPage', () => {
       {} as never, // aiTranscription
       pageRepo as never,
       undefined, // streamRegistry
-      undefined, // environment
       undefined, // aiChatRunStepRepo
       bindingRepo as never,
     );

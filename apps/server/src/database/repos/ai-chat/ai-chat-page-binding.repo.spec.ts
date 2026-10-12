@@ -2,9 +2,9 @@ import { AiChatPageBindingRepo } from './ai-chat-page-binding.repo';
 import type { KyselyDB } from '../../types/kysely.types';
 
 /**
- * Unit test for AiChatPageBindingRepo.findChatIdByPage — the #665 binding resolver
- * that replaced findLatestByPage behind POST /ai-chat/bound-chat. It builds the
- * scoping query, so we assert the EXACT predicates the spec mandates over a
+ * Unit test for AiChatPageBindingRepo.findChatIdByPage — the binding resolver
+ * behind POST /ai-chat/bound-chat. It builds the scoping query, so we assert
+ * the EXACT predicates over a
  * chainable builder mock (no live DB): the (user, page) binding row joined to its
  * chat, re-checking creatorId + workspaceId + deletedAt at read time so a stale row
  * can never surface a foreign / cross-workspace / soft-deleted chat. A live-Postgres

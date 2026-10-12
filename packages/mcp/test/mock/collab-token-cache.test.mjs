@@ -1,5 +1,5 @@
-// Unit tests for the collab-token cache (issue #435). The live CollabSession
-// registry (#400/#431) keys sessions on (wsUrl, pageId, collabToken), so a token
+// Unit tests for the collab-token cache. The live CollabSession
+// registry keys sessions on (wsUrl, pageId, collabToken), so a token
 // string that changes every op defeats reuse. This cache holds the last minted
 // token per DocmostClient for MCP_COLLAB_TOKEN_TTL_MS so a burst of mutations
 // reuses ONE token -> ONE session. These tests exercise both mint sources:

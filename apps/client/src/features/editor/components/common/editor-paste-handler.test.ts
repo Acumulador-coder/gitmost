@@ -5,7 +5,7 @@ import {
 } from "./editor-paste-handler";
 
 /**
- * Unit tests for the #146 post-paste reflow helpers. jsdom does not compute
+ * Unit tests for the post-paste reflow helpers. jsdom does not compute
  * styles or layout, so we stub getComputedStyle (per element via a Map) and the
  * scroll/overflow geometry properties (per element via Object.defineProperty).
  * Element trees are built DETACHED from `document`, so the ancestor walk only

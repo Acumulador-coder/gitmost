@@ -183,10 +183,9 @@ type ReindexStatus = Pick<
  * new run mints a fresh runId and so a different key.
  *
  * This is the single place the client turns the server's run identity into the
- * value it keys on — it removes the "is this the same run I've been watching or
- * a brand-new one?" ambiguity that made a class of reindex-status bugs (a stale
- * pre-reindex snapshot vs a fresh run) get fixed twice (#262). `startedAt` is
- * folded in so a run that somehow reuses a runId but restarted is still new.
+ * value it keys on, so "same run I've been watching, or a new one?" (a stale
+ * pre-reindex snapshot vs a fresh run) has one answer. `startedAt` is folded in
+ * so a run that reuses a runId but restarted is still new.
  */
 export function reindexRunKey(status: ReindexStatus | undefined): string | null {
   const runId = status?.runId;
@@ -443,10 +442,6 @@ export default function AiProviderSettings() {
     useState<boolean>(
       workspace?.settings?.ai?.publicShareAssistant ?? false,
     );
-  // #184: detached/autonomous agent runs (settings.ai.autonomousRuns).
-  const [autonomousRunsEnabled, setAutonomousRunsEnabled] = useState<boolean>(
-    workspace?.settings?.ai?.autonomousRuns ?? false,
-  );
   const [chatToggleLoading, setChatToggleLoading] = useState(false);
   const [searchToggleLoading, setSearchToggleLoading] = useState(false);
   const [dictationToggleLoading, setDictationToggleLoading] = useState(false);
@@ -456,8 +451,6 @@ export default function AiProviderSettings() {
     publicShareAssistantToggleLoading,
     setPublicShareAssistantToggleLoading,
   ] = useState(false);
-  const [autonomousRunsToggleLoading, setAutonomousRunsToggleLoading] =
-    useState(false);
 
   // Whether a key is currently stored server-side (drives the placeholder).
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -785,37 +778,6 @@ export default function AiProviderSettings() {
     }
   }
 
-  // Optimistic toggle for detached/autonomous agent runs
-  // (settings.ai.autonomousRuns). When on, a chat turn becomes a server-side run
-  // that survives a browser disconnect and can be reconnected to / live-followed;
-  // only an explicit Stop ends it. Off by default; single-instance-only in phase 1.
-  async function handleToggleAutonomousRuns(value: boolean) {
-    setAutonomousRunsToggleLoading(true);
-    const previous = autonomousRunsEnabled;
-    setAutonomousRunsEnabled(value);
-    try {
-      const updated = await updateWorkspace({ autonomousRuns: value });
-      setWorkspace({
-        ...updated,
-        settings: {
-          ...updated.settings,
-          ai: { ...updated.settings?.ai, autonomousRuns: value },
-        },
-      });
-      notifications.show({ message: t("Updated successfully") });
-    } catch (err) {
-      setAutonomousRunsEnabled(previous);
-      const message = (err as { response?: { data?: { message?: string } } })
-        ?.response?.data?.message;
-      notifications.show({
-        message: message ?? t("Failed to update data"),
-        color: "red",
-      });
-    } finally {
-      setAutonomousRunsToggleLoading(false);
-    }
-  }
-
   // Admins only — match the previous behavior.
   if (!isAdmin) {
     return (
@@ -1049,31 +1011,6 @@ export default function AiProviderSettings() {
           disabled={isLoading || !publicShareAssistantEnabled}
           {...form.getInputProps("publicShareAssistantRoleId")}
         />
-
-        {/* Detached/autonomous agent runs: a chat turn becomes a server-side run
-            that survives a browser disconnect; only an explicit Stop ends it.
-            Single-instance-only in phase 1. */}
-        <Group justify="space-between" align="center" wrap="nowrap" mt="md">
-          <Stack gap={0}>
-            <Text fw={600} size="sm">
-              {t("Autonomous agent runs")}
-            </Text>
-            <Text size="xs" c="dimmed">
-              {t(
-                "Keep an agent turn running server-side even if the browser disconnects; reconnect and follow it on reopen. Single-instance deployments only.",
-              )}
-            </Text>
-          </Stack>
-          <Switch
-            label={t("Enabled")}
-            labelPosition="left"
-            checked={autonomousRunsEnabled}
-            disabled={autonomousRunsToggleLoading}
-            onChange={(e) =>
-              handleToggleAutonomousRuns(e.currentTarget.checked)
-            }
-          />
-        </Group>
 
         <Group mt="md" align="center">
           <Button

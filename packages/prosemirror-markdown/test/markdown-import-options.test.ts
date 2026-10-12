@@ -5,14 +5,14 @@ import { convertProseMirrorToMarkdown } from '../src/lib/markdown-converter.js';
 import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 
 // ---------------------------------------------------------------------------
-// #502: the canonical importer is parameterized with `{ parseMath, fuzzyLinkify }`
+// The canonical importer is parameterized with `{ parseMath, fuzzyLinkify }`
 // (both DEFAULT true). The MCP markdown-WRITE path passes both false so an agent's
 // plain prose/config is imported LITERALLY:
 //   - parseMath:false  -> a `$…$` span stays literal text (no phantom mathInline)
 //   - fuzzyLinkify:false -> a SCHEMELESS `www.host`/email stays literal text; an
 //     EXPLICIT `https://…` STILL links (only the fuzzy autolink is suppressed).
-// The DEFAULTS (editor/file-import/git-sync) keep math + fuzzy autolink ON, so
-// this file also pins that the defaults are UNCHANGED.
+// The DEFAULTS (editor/file-import/git-sync) keep math + fuzzy autolink ON;
+// this file pins both.
 // ---------------------------------------------------------------------------
 
 const OFF = { parseMath: false, fuzzyLinkify: false } as const;

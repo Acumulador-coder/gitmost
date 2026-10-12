@@ -52,7 +52,7 @@ export const bodyLocalOnlyAtom = atom<{ isOffline: boolean }>({
   isOffline: false,
 });
 
-// #564 — the body's Yjs write guard is ARMED and REJECTING: the live editor is
+// The body's Yjs write guard is ARMED and REJECTING: the live editor is
 // bound to a local ydoc the remote room has not confirmed yet, so ANY doc-
 // changing transaction is dropped on the floor.
 //

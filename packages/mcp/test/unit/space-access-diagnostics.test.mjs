@@ -1,4 +1,4 @@
-// Issue #534: enrich-on-404 space-access diagnostics.
+// Enrich-on-404 space-access diagnostics.
 //
 // When a tool is handed a well-formed but non-existent/inaccessible spaceId, the
 // server answers the space-permissions check with an opaque 404 ("Space
@@ -168,7 +168,7 @@ test("search WITHOUT spaceId is inert (raw error propagates, no /spaces sweep)",
   assert.equal(c._spacesFetches, 0, "no /spaces sweep without a spaceId");
 });
 
-// --- Fail-open: a NON-404 error is never enriched (regression guard) --------
+// --- Fail-open: a NON-404 error is never enriched ---------------------------
 test("a non-404 error (500) on a wrapped call propagates unchanged, with NO /spaces sweep", async () => {
   const c = makeClient();
   // A real server failure — must surface as-is, never be swallowed by the

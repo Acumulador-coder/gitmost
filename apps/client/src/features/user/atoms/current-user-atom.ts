@@ -18,20 +18,14 @@ const currentUserStorage = createJSONStorage<ICurrentUser | null>(
   uiLocalStorage as () => Storage,
 );
 
-// `getOnInit: true` (#640, part 2) — read the persisted current user
-// SYNCHRONOUSLY at atom init, so the very first frame already has a resolved
-// (workspace, user) scope key (`scopeKeyAtom`). The explicit synchronous storage
-// above is what makes this true: with it, jotai's `getOnInit` reads the persisted
-// `currentUser` from localStorage the first time a store reads this atom (at app
-// boot localStorage is already populated), synchronously, and the value type
-// stays `ICurrentUser | null` (sync). Were it left async (`undefined` storage),
-// jotai would pick the async overload and return the initialValue
-// (null) at t0, not storage, so `scopeKeyAtom` would be "anon:anon" on the first
-// frame — and the ydoc DB name / tombstone check / eviction would have no real
-// scope to compute against (an anon-scope eviction would target a database
-// matching no real DB and falsely report success). UserProvider still fetches
-// `/me` and overwrites this a tick later, so a stale persisted user is corrected
-// within one RTT (its authority is capped to a single round-trip).
+// `getOnInit: true` — read the persisted current user SYNCHRONOUSLY at atom
+// init, so the very first frame already has a resolved (workspace, user) scope
+// key (`scopeKeyAtom`). This needs the explicit synchronous storage above: with
+// async storage jotai would return the initialValue (null) at t0, `scopeKeyAtom`
+// would be "anon:anon" on the first frame, and the ydoc DB name / tombstone
+// check / eviction would compute against no real scope. UserProvider still
+// fetches `/me` and overwrites this a tick later, so a stale persisted user is
+// corrected within one RTT.
 export const currentUserAtom = atomWithStorage<ICurrentUser | null>(
   "currentUser",
   null,

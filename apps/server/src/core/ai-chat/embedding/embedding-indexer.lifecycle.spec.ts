@@ -14,19 +14,18 @@ import { EmbeddingReindexProgressService } from '../../../integrations/ai/embedd
 import { workspaceReindexJobOptions } from '../../../integrations/queue/constants/queue.constants';
 
 /**
- * #599 — the reindex run as the unit that owns a fingerprint TRANSITION:
+ * The reindex run as the unit that owns a fingerprint TRANSITION:
  *
  *   GC(keep = active + target)  ->  write every page under the TARGET  ->
  *   atomic flip onto the target (guarded)  ->  GC(keep = target)
  *
  * Covered here (unit-level, plain mocks — no Nest graph, no DB):
- *   - the start GC keeps at most 2 generations (acceptance 5);
+ *   - the start GC keeps at most 2 generations;
  *   - a swap run writes TARGET rows while the ACTIVE ones keep serving, and the
- *     per-page replace deletes only the target generation (acceptance 3);
- *   - a fatal provider abort never reaches the flip, and a re-run is idempotent
- *     (acceptance 4);
+ *     per-page replace deletes only the target generation;
+ *   - a fatal provider abort never reaches the flip, and a re-run is idempotent;
  *   - the coverage total handed to the flip counts only pages that really
- *     produced a chunk (the denominator, acceptance 1/2).
+ *     produced a chunk.
  */
 
 const WS = 'ws-1';
@@ -237,7 +236,7 @@ describe('reindexWorkspace — generational GC + atomic flip (#599)', () => {
 });
 
 /**
- * #599 D1 — a run with NON-FATAL per-page failures is NOT a full reindex.
+ * A run with NON-FATAL per-page failures is NOT a full reindex.
  *
  * Per-page isolation (a TEI timeout, a 429/500, a mixed-dimension page) keeps the
  * batch going, but it leaves HOLES in the target generation. Flipping onto it would
@@ -460,36 +459,25 @@ describe('reindexPage — fingerprint-scoped replace (#599 acceptance 3)', () =>
 });
 
 /**
- * #599 (review F1) — A CONFIG CHANGE DURING A SUCCESSFUL RUN MUST NOT LOSE THE NEW
- * GENERATION.
- *
- * The chain that used to lose it, end to end:
+ * A config change during a successful run must not lose the new generation.
  *
  *   1. a reindex run X is in flight, building generation fp-1;
  *   2. the admin picks another model -> the config resolves to fp-2, and
- *      AiSettingsService.reindex() fires: `aiQueue.remove(jobId)` is a NO-OP on an
- *      ACTIVE job, and `aiQueue.add(jobId)` is then DE-DUPLICATED against X. So the
- *      config change enqueues NOTHING;
- *   3. X finishes fp-1 with zero failures, and completeRun correctly refuses to flip
- *      (its target is stale);
+ *      AiSettingsService.reindex() fires: `aiQueue.remove(jobId)` is a no-op on an
+ *      active job and `aiQueue.add(jobId)` is de-duplicated against X, so the
+ *      config change enqueues nothing;
+ *   3. X finishes fp-1 with zero failures, and completeRun refuses to flip (its
+ *      target is stale);
  *   4. X is dropped by removeOnComplete.
  *
- * End state: config = fp-2, pointer still on fp-1, ZERO rows for fp-2, no job in the
- * queue, and no cron/reconciler anywhere that re-triggers a reindex on
- * `config != active`. On a MODEL change (the normal dropdown case) `modelChanged`
- * keeps the vector arm down forever: semantic search is permanently lexical-only,
- * while the settings panel shows a green "Indexed N of N, reindexing: false" — the
- * pointer really IS on a complete generation. Invisible.
- *
- * The fix: completeRun THROWS StaleReindexTargetError instead of returning quietly,
- * so the job FAILS and BullMQ retries it — and the retry re-resolves the provider,
- * picks up fp-2, builds it and flips onto it.
+ * Nothing else re-triggers a reindex on `config != active`, so completeRun THROWS
+ * StaleReindexTargetError: the job fails, BullMQ retries it, and the retry
+ * re-resolves the provider, picks up fp-2, builds it and flips onto it.
  *
  * These tests wire the REAL EmbeddingGenerationService (real completeRun, real
  * generationForTarget, real flip against a stateful workspace-settings double) to
- * the REAL indexer, and drive them through a retry loop that mirrors BullMQ's
- * `attempts` — the actual policy from workspaceReindexJobOptions, so the test cannot
- * pass on a retry budget the queue does not really grant.
+ * the REAL indexer, and drive them through a retry loop that uses the actual
+ * `attempts` from workspaceReindexJobOptions.
  */
 describe('reindexWorkspace — a config change DURING the run (#599 review F1)', () => {
   /** The live provider config; mutating it IS the admin changing the model. */

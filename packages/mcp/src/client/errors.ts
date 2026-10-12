@@ -4,7 +4,7 @@
 // REST call through formatDocmostAxiosError so the whole surface is uniform.
 import axios from "axios";
 
-// --- Issue #437: central error diagnostics -------------------------------
+// --- Central error diagnostics ---------------------------------------------
 // The agent only ever sees the thrown exception's `error.message`, so a failed
 // tool must return an ACTIONABLE message (method, path, status, and the
 // server's own validation text) instead of the opaque "Request failed with
@@ -28,9 +28,8 @@ const FULL_UUID_RE =
 
 /**
  * Throw an actionable error BEFORE any network call when `value` is not a full
- * canonical UUID. Absorbs #436: a truncated/short comment id used to reach the
- * server and bounce back as an opaque 400/404 the agent could not self-correct;
- * failing fast here names the exact fix.
+ * canonical UUID, so a truncated/short id gets an actionable message naming
+ * the fix instead of an opaque 400/404 from the server.
  */
 export function assertFullUuid(
   tool: string,
@@ -47,12 +46,12 @@ export function assertFullUuid(
 }
 
 // Max number of accessible spaces to enumerate inline in the "space not
-// accessible" message (issue #534) before collapsing the rest into a "(+N ещё)"
+// accessible" message before collapsing the rest into a "(+N ещё)"
 // tail, so a workspace with many spaces cannot blow up the model context.
 const SPACE_LIST_CAP = 10;
 
 /**
- * Compose the model-facing "spaceId is not accessible" message (issue #534).
+ * Compose the model-facing "spaceId is not accessible" message.
  * This is FACT text about the supplied spaceId that REPLACES the opaque server
  * string ("Space permissions not found") on the enrich-on-404 path — it names
  * the exact bad id, lists the spaces the token can actually see (id + name, so

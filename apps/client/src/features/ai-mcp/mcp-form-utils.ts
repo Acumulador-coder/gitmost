@@ -7,10 +7,9 @@ import { IAiMcpServer } from "./mcp-server-types.ts";
 // ALREADY deny-all (a stored literal `[]`, meaning zero tools — creatable via
 // the API) loads into the form as an empty field too. Coercing that empty
 // field to null on submit would SILENTLY widen a deny-all server to allow-all
-// on any routine edit (rename, toggle) — the exact silent-widen class #476
-// closed on the read side. So when the edited server was deny-all, preserve
-// `[]` (deny-all); only a genuinely-unrestricted server (stored null/absent)
-// stays null.
+// on any routine edit (rename, toggle). So when the edited server was deny-all,
+// preserve `[]` (deny-all); only a genuinely-unrestricted server (stored
+// null/absent) stays null.
 export function resolveToolAllowlist(
   fieldValue: string[],
   server?: Pick<IAiMcpServer, "toolAllowlist">,

@@ -30,6 +30,11 @@ export interface IPageSearch {
 // list helpers read `items`; these travel alongside for pagination + diagnostics.
 export interface IPageSearchResponse {
   items: IPageSearch[];
+  // #701: vector-only semantic neighbours (not matches, first page only).
+  related?: IPageSearch[];
+  // Share search only: set when search is disabled on the share (it publishes
+  // only saved versions), with the server's explanation; no results then.
+  disabledReason?: string;
   total: number;
   hasMore: boolean;
   truncatedAtCap: boolean;

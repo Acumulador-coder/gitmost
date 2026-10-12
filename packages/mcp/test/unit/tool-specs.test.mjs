@@ -28,8 +28,8 @@ test("every spec exposes mcpName + inAppKey, and the key matches inAppKey", () =
   }
 });
 
-// Since issue #412 the external MCP name equals the in-app key: both are the
-// same camelCase identifier (mcpName === inAppKey).
+// The external MCP name equals the in-app key: both are the same camelCase
+// identifier (mcpName === inAppKey).
 test("mcpName and inAppKey are the same camelCase identifier", () => {
   for (const [key, spec] of Object.entries(SHARED_TOOL_SPECS)) {
     assert.match(spec.mcpName, /^[a-z][a-zA-Z0-9]*$/, `${key}: mcpName not camelCase`);
@@ -49,7 +49,7 @@ test("mcpName and inAppKey are each unique across the registry", () => {
   }
 });
 
-// #489 — every spec must declare its write-class so the external-MCP retry path
+// Every spec must declare its write-class so the external-MCP retry path
 // can gate a single auto-retry ONLY on a pure read (a blind retry of a write =
 // double-apply). The declaration is enforced at registration time.
 test("#489: every spec declares a valid writeClass ('readOnly' | 'write')", () => {
@@ -84,7 +84,7 @@ test("#489: representative reads are readOnly and representative writes are writ
   }
 });
 
-// #494 — every non-inline spec MUST carry a callable execute path for each host
+// Every non-inline spec MUST carry a callable execute path for each host
 // that registers it, or the MCP host throws a call-time TypeError (`execute!`)
 // and the in-app host silently drops the tool. A registration-time assert closes
 // this mirror. These tests REDDEN if the guard is weakened/removed.
@@ -215,7 +215,7 @@ test("editPageText builder produces { pageId, edits } and drops the stale strip-
   assert.match(spec.description, /REFUSED into\s+failed\[\]/);
 });
 
-// #413: getNode gained an optional `format` (markdown default / json opt-in).
+// getNode takes an optional `format` (markdown default / json opt-in).
 test("getNode builder produces { pageId, nodeId, format? } with format optional", () => {
   const spec = SHARED_TOOL_SPECS.getNode;
   const shape = spec.buildShape(z);
@@ -234,14 +234,14 @@ test("getNode builder produces { pageId, nodeId, format? } with format optional"
   assert.match(spec.description, /json/i);
 });
 
-// #413: patchNode takes XOR { markdown | node } (both schema-optional).
+// patchNode takes XOR { markdown | node } (both schema-optional).
 test("patchNode spec exists, describes markdown+node XOR, builds { pageId, nodeId, markdown?, node? }", () => {
   const spec = SHARED_TOOL_SPECS.patchNode;
   assert.ok(spec, "patchNode spec missing");
   assert.equal(spec.mcpName, "patchNode");
   assert.equal(spec.inAppKey, "patchNode");
 
-  // The canonical description must carry the #413 guidance.
+  // The canonical description must carry the markdown/node guidance.
   assert.match(spec.description, /WITHOUT/i);
   assert.match(spec.description, /EXACTLY ONE of `markdown` or `node`/);
   assert.match(spec.description, /RECOMMENDED/);
@@ -268,7 +268,7 @@ test("patchNode spec exists, describes markdown+node XOR, builds { pageId, nodeI
   assert.doesNotThrow(() => schema.parse({ pageId: "p1", nodeId: "n1" }));
 });
 
-// #413: insertNode also takes XOR { markdown | node } plus the anchor shape.
+// insertNode also takes XOR { markdown | node } plus the anchor shape.
 test("insertNode spec exists, describes markdown+node XOR, builds the full anchor+content shape", () => {
   const spec = SHARED_TOOL_SPECS.insertNode;
   assert.ok(spec, "insertNode spec missing");
@@ -299,7 +299,7 @@ test("insertNode spec exists, describes markdown+node XOR, builds the full ancho
   );
 });
 
-// #443: getTree — a space's page hierarchy (or a subtree) in one request.
+// getTree — a space's page hierarchy (or a subtree) in one request.
 test("getTree spec exists on both hosts, builds { spaceId, rootPageId?, maxDepth? }", () => {
   const spec = SHARED_TOOL_SPECS.getTree;
   assert.ok(spec, "getTree spec missing");
@@ -331,7 +331,7 @@ test("getTree spec exists on both hosts, builds { spaceId, rootPageId?, maxDepth
   assert.match(spec.description, /listPages tree:true/);
 });
 
-// #443: getPageContext — a page's breadcrumbs + direct children in one call.
+// getPageContext — a page's breadcrumbs + direct children in one call.
 test("getPageContext spec exists on both hosts, builds { pageId }", () => {
   const spec = SHARED_TOOL_SPECS.getPageContext;
   assert.ok(spec, "getPageContext spec missing");
@@ -356,7 +356,7 @@ test("getPageContext spec exists on both hosts, builds { pageId }", () => {
   assert.match(spec.description, /getTree/);
 });
 
-// #443: listPages tree:true is deprecated in favour of getTree.
+// listPages tree:true is deprecated in favour of getTree.
 test("listPages description deprecates tree:true and points at getTree", () => {
   const spec = SHARED_TOOL_SPECS.listPages;
   assert.match(spec.description, /DEPRECATED/i);
@@ -369,7 +369,7 @@ test("no-arg specs (getWorkspace/listSpaces/listShares) omit buildShape", () => 
   }
 });
 
-// #411: plain-Markdown full-body replace tool, paired with updatePageJson.
+// Plain-Markdown full-body replace tool, paired with updatePageJson.
 test("updatePageMarkdown spec exists, pairs with updatePageJson, builds { pageId, content, title }", () => {
   const spec = SHARED_TOOL_SPECS.updatePageMarkdown;
   assert.ok(spec, "updatePageMarkdown spec missing");
@@ -381,7 +381,7 @@ test("updatePageMarkdown spec exists, pairs with updatePageJson, builds { pageId
   // Same tier as its JSON sibling.
   assert.equal(spec.tier, SHARED_TOOL_SPECS.updatePageJson.tier);
   const shape = spec.buildShape(z);
-  // #647 §H — baseHash is now part of the shape and MANDATORY (content is always
+  // baseHash is part of the shape and MANDATORY (content is always
   // written by updatePageMarkdown, so the guarded write always needs a base).
   assert.deepEqual(Object.keys(shape).sort(), ["baseHash", "content", "pageId", "title"]);
   // pageId + content + baseHash required, title optional.
@@ -393,11 +393,11 @@ test("updatePageMarkdown spec exists, pairs with updatePageJson, builds { pageId
   // baseHash is mandatory: a write missing it is rejected at the schema.
   assert.throws(() => schema.parse({ pageId: "p1", content: "# Hi" }));
   // The description must flag the `^[...]` inline-footnote parse path so the
-  // markdown->footnote canonicalization guarantee stays documented (#411).
+  // markdown->footnote canonicalization guarantee stays documented.
   assert.match(spec.description, /\^\[/);
 });
 
-// #411: importPageMarkdown is dropped from the EXTERNAL MCP surface but stays
+// importPageMarkdown is dropped from the EXTERNAL MCP surface but stays
 // available to the in-app agent — encoded as inAppOnly on the shared spec.
 test("importPageMarkdown spec is inAppOnly (removed from the external MCP surface, kept in-app)", () => {
   const spec = SHARED_TOOL_SPECS.importPageMarkdown;

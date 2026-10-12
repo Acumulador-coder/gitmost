@@ -57,7 +57,6 @@ import {
   useAiChatsQuery,
   useAiRolesQuery,
 } from "@/features/ai-chat/queries/ai-chat-query.ts";
-import { workspaceAtom } from "@/features/user/atoms/current-user-atom";
 import {
   markOperationStart,
   measureOperation,
@@ -96,11 +95,9 @@ const MIN_HEIGHT = 400;
 // Margin kept between the window and the viewport edges while dragging.
 const EDGE_MARGIN = 8;
 
-// #184 phase 1.5 / #430 / #488: the degraded-poll fallback. The window owns only
-// a DUMB 2.5s timer, gated by an armed flag; the THREAD's run-lifecycle FSM owns
-// arm/disarm AND the inactivity cap that turns a stuck run into a `stalled` banner
-// (#488 commit 4a — the cap moved into the thread so polling->stalled is a single
-// FSM transition; the window no longer silently stops polling at the cap).
+// Degraded-poll fallback: the window owns only a DUMB 2.5s timer, gated by an
+// armed flag; the THREAD's run-lifecycle FSM owns arm/disarm AND the inactivity
+// cap that turns a stuck run into a `stalled` banner.
 
 /** Compact token formatter: 1.2M / 3.4k / 950. */
 function formatTokens(n: number): string {
@@ -185,12 +182,10 @@ function isPointerOverNavbar(x: number, y: number): boolean {
 }
 
 /**
- * Floating, draggable, resizable, minimizable AI chat window. Replaces the
- * former right-aside `AiChatPanel`: it owns ALL chat orchestration (active
- * chat, new chat, in-place id adoption from streamed metadata, open-page
- * context, token sum) and wraps the
- * reused inner components (ConversationList + ChatThread) in window chrome
- * ported from the GitmostAgent.jsx design.
+ * Floating, draggable, resizable, minimizable AI chat window. It owns ALL chat
+ * orchestration (active chat, new chat, in-place id adoption from streamed
+ * metadata, open-page context, token sum) and wraps the reused inner components
+ * (ConversationList + ChatThread) in window chrome.
  */
 export default function AiChatWindow() {
   const { t, i18n } = useTranslation();
@@ -275,9 +270,10 @@ export default function AiChatWindow() {
 
   // #184 phase 1.5 / #488: degraded-poll fallback. ChatThread's FSM arms this via
   // onResumeFallback(true) when it enters a poll-bearing recovery (attach 204 /
-  // starved finish / stop) and disarms it on settle / local stream / stalled. The
-  // window owns ONLY the dumb 2.5s timer; the THREAD owns arm/disarm AND the
-  // inactivity cap (a stuck run -> the thread's `stalled` banner disarms this).
+  // starved finish / a live SSE disconnect of an active run / stop) and disarms it
+  // on settle / local stream / stalled. The window owns ONLY the dumb 2.5s timer;
+  // the THREAD owns arm/disarm AND the inactivity cap (a stuck run -> the thread's
+  // `stalled` banner disarms this).
   const [degradedPoll, setDegradedPoll] = useState(false);
   const onResumeFallback = useCallback((active: boolean): void => {
     setDegradedPoll(active);
@@ -291,9 +287,9 @@ export default function AiChatWindow() {
   const { data: messageRows, isLoading: messagesLoading } =
     useAiChatMessagesQuery(
       activeChatId ?? undefined,
-      // #491: the full infinite-query no longer POLLS. It seeds the thread ONCE; the
-      // degraded fallback now runs a DELTA poller (below) that augments THIS cache
-      // idempotently, instead of refetching every page (with full parts) every 2.5s.
+      // The full infinite-query does not poll: it seeds the thread once, and the
+      // degraded fallback runs a delta poller (below) that augments this cache
+      // idempotently instead of refetching every page.
       false,
       // #344: gate on windowOpen too — no message history is fetched while the window
       // is closed; it loads when the window opens with an active chat.
@@ -305,25 +301,18 @@ export default function AiChatWindow() {
   // is unit-testable in isolation (W1). The thread's FSM owns arm/disarm (degradedPoll
   // via onResumeFallback) and CONSUMES the run fact the hook surfaces: `polledRunFact`
   // is threaded into <ChatThread>, where a fresh NEGATIVE fact quenches a stale
-  // `reconnecting`/`polling` immediately (#555 S3 / I3). See run-fsm.spec.md §3.4.
-  const polledRunFact = useAiChatDeltaPoll({
+  // `polling` after merging the persisted reply (#555 S3 / I3). See run-fsm.spec.md
+  // §3.4. `pollFailure` is the latest failed poll (AI-7), shown by the thread.
+  const { runFact: polledRunFact, failure: pollFailure } = useAiChatDeltaPoll({
     chatId: activeChatId,
     armed: degradedPoll,
     enabled: windowOpen,
   });
 
-  // #184 reconnect-and-live-follow. Whether detached agent runs are enabled for
-  // this workspace. When the feature is off no runs are ever created, so the
-  // resume attempt would only ever 204; gating ChatThread's resume on it avoids a
-  // pointless attach round-trip.
-  const workspace = useAtomValue(workspaceAtom);
-  const autonomousRunsEnabled =
-    workspace?.settings?.ai?.autonomousRuns === true;
-
-  // Authoritative stop of the open chat's detached run (the Stop button in
-  // autonomous mode). Request the server stop — the ONLY thing that ends a
-  // detached run; a mere local SSE abort is a client disconnect the server
-  // ignores. On failure surface the error.
+  // Authoritative stop of the open chat's detached run (the Stop button).
+  // Request the server stop — the ONLY thing that ends a detached run; a mere
+  // local SSE abort is a client disconnect the server ignores. On failure
+  // surface the error.
   const handleServerStop = useCallback(
     (chatId: string): void => {
       void stopRun(chatId).catch(() => {
@@ -406,7 +395,7 @@ export default function AiChatWindow() {
   // (a no-op for the atom), so the reconciler never fires — explicitly disarm any
   // armed error-path fallback here so a late refetch can't yank the user into a
   // just-failed chat after they chose a fresh one.
-  // #665: the last in-flight "New chat" unbind (DELETE /bind-page). ChatThread's
+  // The last in-flight "New chat" unbind (DELETE /bind-page). ChatThread's
   // first send of a fresh thread waits on this so an immediate role-card click
   // can't race its DELETE past the server's birth UPSERT. It MUST live here (not
   // in ChatThread): startNewChat remounts ChatThread, so a ref inside it would be
@@ -475,14 +464,12 @@ export default function AiChatWindow() {
     ],
   );
 
-  // The active chat object (for its title) and an export gate. The export is now
-  // SERVER-sourced (the DB is the single source of truth — #183): the assistant
-  // row is persisted upfront + per step, so even a brand-new chat whose first
-  // turn is streaming/interrupted has a server row to render. Enable the button
-  // whenever a persisted chat is active (`activeChatId` is set). For a BRAND-NEW
-  // chat that id is adopted EARLY — at the stream's `start` chunk via
-  // onServerChatId (#174) — so the Copy button is available during the first
-  // turn's stream, not only after it terminates.
+  // The active chat object (for its title) and an export gate. The export is
+  // SERVER-sourced: the assistant row is persisted upfront + per step, so even a
+  // brand-new chat whose first turn is streaming/interrupted has a server row to
+  // render. Enable the button whenever `activeChatId` is set; a brand-new chat
+  // adopts its id at the stream's `start` chunk via onServerChatId, so Copy is
+  // available during the first turn's stream.
   const activeChat = useMemo(
     () => chats?.items?.find((c) => c.id === activeChatId) ?? null,
     [chats, activeChatId],
@@ -535,21 +522,16 @@ export default function AiChatWindow() {
     }
   }, [activeChatId, clipboard, t, i18n.language]);
 
-  // Current context size for the active chat: how much the conversation now
-  // occupies in the model's context window — NOT the cumulative tokens spent.
-  // We read the most recent assistant row that carries a context figure:
-  // `contextTokens` (final-step input+output) for chats recorded after this
-  // shipped; older rows fall back to that turn's `usage` total. NOTE: reflects
-  // PERSISTED rows (updates on chat open/switch); it does not tick live
-  // mid-stream — acceptable for v1.
+  // Current context size for the active chat: how much the conversation occupies
+  // in the model's context window — NOT the cumulative tokens spent. Read from the
+  // most recent assistant row carrying `contextTokens` (final-step input+output);
+  // rows without it fall back to that turn's `usage` total. Reflects PERSISTED rows
+  // (updates on chat open/switch), not a live mid-stream tick.
   //
-  // The denominator `maxContextTokens` (the model's configured max window) is
-  // derived in the SAME backward scan: it is stamped alongside `contextTokens`
-  // on a completed turn, but the numerator and denominator are taken from the
-  // most recent row carrying EACH value independently — they may land on
-  // different rows (e.g. a fresh error row can carry contextTokens but not
-  // maxContextTokens), so we keep scanning for whichever is still unset. 0 when
-  // no row has it (older rows, or no admin-configured limit) — the badge then
+  // The denominator `maxContextTokens` (the model's configured max window) comes
+  // from the SAME backward scan, but each value is taken from the most recent row
+  // carrying it — they may land on different rows (an error row can carry
+  // contextTokens but not maxContextTokens). 0 when no row has it; the badge then
   // shows just the current size with no denominator.
   const { contextTokens, maxContextTokens } = useMemo(
     () => selectContextBadge(activeChatId ? messageRows : undefined),
@@ -568,9 +550,9 @@ export default function AiChatWindow() {
   //
   // - On OPEN: settle the geometry before paint (useLayoutEffect → no first-frame
   //   jump). With getOnInit the restored geom is already in the atom on this
-  //   first render, so `prev` is non-null and we take the clampGeom branch — this
-  //   is the fix for the old clobber where computeInitialGeom overwrote the saved
-  //   geometry. First placement (prev null) still computes the top-right default.
+  //   first render, so `prev` is non-null and we take the clampGeom branch instead
+  //   of overwriting it with computeInitialGeom. First placement (prev null)
+  //   computes the top-right default.
   useLayoutEffect(() => {
     if (!windowOpen) {
       setMinimized(false);
@@ -1088,13 +1070,14 @@ export default function AiChatWindow() {
               // disarms it on settle / local stream.
               onResumeFallback={onResumeFallback}
               // #555 S3: the degraded delta poll's authoritative run fact. The FSM
-              // consumes a fresh NEGATIVE fact to quench a stale reconnecting/polling
-              // immediately (I3), rather than waiting for the terminal row.
+              // consumes a fresh NEGATIVE fact to quench a stale polling after
+              // merging the persisted reply (I3), rather than waiting for the
+              // terminal row.
               polledRunFact={polledRunFact}
-              // #184: in autonomous mode the Stop button must hit the authoritative
-              // server stop (a local SSE abort is a client disconnect the server
-              // ignores).
-              autonomousRunsEnabled={autonomousRunsEnabled}
+              // AI-7: why the degraded poll is failing, if it is.
+              pollFailure={pollFailure}
+              // #184: the Stop button must hit the authoritative server stop (a
+              // local SSE abort is a client disconnect the server ignores).
               onServerStop={handleServerStop}
               // #665: the last "New chat" unbind promise; the thread's first send
               // of a fresh thread waits on it so an instant role-card click can't

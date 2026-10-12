@@ -1,4 +1,4 @@
-// Semantic graph -> draw.io pipeline for `drawioFromGraph` (issue #425, stage 3).
+// Semantic graph -> draw.io pipeline for `drawioFromGraph`.
 //
 // The model describes a diagram SEMANTICALLY — nodes with a `kind` and an
 // optional `icon`, groups (containers), edges with a `kind` — and NEVER sees a
@@ -7,7 +7,7 @@
 //   1. validateGraph      — a hand-written validator (no zod dependency, so this
 //                           lib stays importable by client.ts without coupling to
 //                           a zod major) that rejects malformed graphs early.
-//   2. resolveNodeStyle   — `icon` -> exact style via the shape catalog (#424);
+//   2. resolveNodeStyle   — `icon` -> exact style via the shape catalog;
 //                           an UNKNOWN icon degrades to a generic shape by `kind`
 //                           WITH the label (never an empty square). `kind` -> the
 //                           preset palette slot.
@@ -15,7 +15,7 @@
 //                           (`layer`/`sameLayerAs` -> layer constraints, `pinned`
 //                           -> a fixed node) and compound group nodes.
 //   4. assembleModel      — graph + ELK coordinates -> a full mxGraphModel XML
-//                           that satisfies the #423 linter BY CONSTRUCTION
+//                           that satisfies the drawio linter BY CONSTRUCTION
 //                           (sentinels, transparent containers, relative child
 //                           coords, cross-container edges parent="1", >=150px
 //                           gaps from ELK spacing, escaped labels).
@@ -527,7 +527,7 @@ export function applyHints(
 /**
  * Incremental variant of applyHints: apply `pinned` only to NEW nodes (those
  * absent from `existing`); an existing node's coordinates are NEVER changed
- * (acceptance #3). sameLayerAs/layer snapping is intentionally skipped in the
+ * sameLayerAs/layer snapping is intentionally skipped in the
  * incremental path — moving a new node's layer axis could still be desired, but
  * it must never move an existing cell, so we keep the incremental contract
  * simple: existing cells are frozen, new pinned nodes honour their pin.
@@ -636,7 +636,7 @@ export interface AssembleResult {
 
 /**
  * Assemble the final mxGraphModel XML from the graph + resolved styles/coords.
- * Guarantees BY CONSTRUCTION that the #423 linter passes:
+ * Guarantees BY CONSTRUCTION that the drawio linter passes:
  *   - id=0 and id=1(parent=0) sentinels;
  *   - each node/group is vertex="1" (containers get container=1 via the style);
  *   - each edge is edge="1" with a child <mxGeometry relative="1" as="geometry"/>;
@@ -831,7 +831,7 @@ export interface BuildFromGraphResult {
  * cells, so they are preserved and only new nodes are placed). `existingModelXml`
  * is the current diagram's full model XML — in incremental mode every existing
  * cell the graph does NOT re-list is MERGED back in verbatim so a hand-placed
- * cell is never dropped (WARNING #4). Pure — no network.
+ * cell is never dropped. Pure — no network.
  */
 export async function buildFromGraph(
   graph: Graph,

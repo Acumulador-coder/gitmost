@@ -39,19 +39,16 @@ import {
 } from '../integrations/metrics/metrics.registry';
 
 /**
- * #402 — collab lifecycle metrics as a lightweight hocuspocus extension.
+ * Collab lifecycle metrics as a lightweight hocuspocus extension.
  *
  * - afterLoadDocument / afterUnloadDocument (fire once PER DOCUMENT) drive the
  *   doc load/unload counters.
- * - collab_connect_duration_seconds: I time the onConnect→connected hook pair,
- *   i.e. connection ACCEPTANCE (which includes the auth handshake). This is the
- *   cleanest per-connection correlation hocuspocus exposes: both payloads carry
- *   the SAME `request` IncomingMessage object, so a WeakMap keyed on it gives a
- *   per-connection start with NO leak (the entry is GC'd with the request if a
- *   connection is rejected in onAuthenticate and `connected` never fires).
- *   I deliberately do NOT observe at afterLoadDocument: that hook fires per
- *   DOCUMENT, not per connection, so a second client joining an already-open
- *   doc would be missed. auth/load latencies are their own separate metrics.
+ * - collab_connect_duration_seconds times the onConnect→connected hook pair,
+ *   i.e. connection ACCEPTANCE (including the auth handshake). Both payloads
+ *   carry the SAME `request` IncomingMessage object, so a WeakMap keyed on it
+ *   gives a per-connection start with no leak (the entry is GC'd with the request
+ *   if onAuthenticate rejects and `connected` never fires). afterLoadDocument is
+ *   per DOCUMENT, so it would miss a client joining an already-open doc.
  *
  * All helpers are no-ops when METRICS_PORT is unset; these hooks are per
  * connect/load/unload (never per message), so there is no hot-path cost.
@@ -211,6 +208,9 @@ export class CollaborationGateway {
     eventName: TName,
     documentName: string,
     payload: Parameters<CollabEventHandlers[TName]>[1],
+    // Stops the event at its next step when aborted; the handler must accept
+    // it (see RedisSyncExtension.handleEvent).
+    signal?: AbortSignal,
   ): ReturnType<CollabEventHandlers[TName]> {
     if (this.redisSync) {
       // Normal path: the Redis bridge routes the event to the instance that owns
@@ -220,6 +220,7 @@ export class CollaborationGateway {
         eventName,
         documentName,
         payload,
+        signal,
       ) as ReturnType<CollabEventHandlers[TName]>;
     }
 
@@ -235,8 +236,9 @@ export class CollaborationGateway {
       const handler = handlers[eventName] as (
         documentName: string,
         payload: unknown,
+        signal?: AbortSignal,
       ) => ReturnType<CollabEventHandlers[TName]>;
-      return handler(documentName, payload);
+      return handler(documentName, payload, signal);
     }
 
     // Collaboration was never initialized (no live instance). Fail loudly rather
@@ -253,11 +255,10 @@ export class CollaborationGateway {
   }
 
   /**
-   * #647 refinement B — the `readLiveIfLoaded` primitive (#654's gating
-   * deliverable). NON-CLAIMING, NON-FORCE-LOADING read of a document's live
-   * content: returns `{loaded:true, content, hash}` only if the doc is already
-   * hydrated on some instance, else `{loaded:false}` (or `{loaded:false,
-   * unreachable:true}` when the owner exists but the short probe timed out). See
+   * Non-claiming, non-force-loading read of a document's live content: returns
+   * `{loaded:true, content, hash}` only if the doc is already hydrated on some
+   * instance, else `{loaded:false}` (or `{loaded:false, unreachable:true}` when
+   * the owner exists but the short probe timed out). See
    * RedisSyncExtension.readLiveIfLoaded for the full 6-property contract.
    */
   async readLiveIfLoaded(
@@ -281,6 +282,47 @@ export class CollaborationGateway {
 
     // Collaboration was never initialized: nothing is loaded anywhere.
     return { loaded: false };
+  }
+
+  /**
+   * Write a git-originated body into a page, applying the merge on the instance
+   * that OWNS the live Y.Doc so a connected editor CONVERGES on the change.
+   *
+   * Not via openDirectConnection directly: that opens the document on whichever
+   * process runs git-sync. When an editor is connected to a different collab
+   * instance, that is a separate, detached Y.Doc — the live editor never receives
+   * the update and its next autosave overwrites the DB, reverting the git change.
+   * The custom-event channel runs the merge on the owning instance's shared
+   * Document, whose update is broadcast to every connection (handleUpdate).
+   *
+   * Without redis there is a single instance, so the write runs locally — which
+   * is already the owning (and only) instance the editor is connected to.
+   *
+   * An aborted `signal` rejects with its reason and stops the write, on the
+   * owning instance too, at its next step before the merge transaction (the
+   * merge itself is atomic: once it ran, the write is done).
+   */
+  async writePageBody(
+    documentName: string,
+    payload: {
+      prosemirrorJson: unknown;
+      baseProsemirrorJson?: unknown;
+      userId: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (this.redisSync) {
+      await this.handleYjsEvent(
+        'gitSyncWriteBody',
+        documentName,
+        payload as any,
+        signal,
+      );
+      return;
+    }
+    await this.collabEventsService
+      .getHandlers(this.hocuspocus)
+      .gitSyncWriteBody(documentName, payload as any, signal);
   }
 
   /*

@@ -1,5 +1,5 @@
 /**
- * History-replay token budget (#490).
+ * History-replay token budget.
  *
  * The whole persisted conversation is replayed to the provider on EVERY turn, so
  * a long chat eventually exceeds the model's context window and the provider 400s
@@ -24,11 +24,10 @@ export const REPLAY_BUDGET_WINDOW_FRACTION = 0.7;
 /**
  * Per-step fraction of the normal budget applied on the REACTIVE re-trim after a
  * provider context-overflow 400 — the preventive estimate under-counted, so cut
- * harder. This is now applied ITERATIVELY: with `k` consecutive overflow turns the
- * budget is scaled by `fraction ** k` (k=1 -> 0.5×, k=2 -> 0.25×, …), so recovery
- * ESCALATES turn over turn until the replayed history finally fits, instead of the
- * old single fixed 0.5× cut that could never un-brick a chat whose real model
- * window is smaller than 0.5 × the (unconfigured, flat-default) base budget (#520).
+ * harder. Applied ITERATIVELY: with `k` consecutive overflow turns the budget is
+ * scaled by `fraction ** k` (k=1 -> 0.5×, k=2 -> 0.25×, …), so recovery ESCALATES
+ * turn over turn until the replayed history fits, even when the real model window
+ * is smaller than 0.5 × the (unconfigured, flat-default) base budget.
  */
 export const REPLAY_AGGRESSIVE_FRACTION = 0.5;
 /**
@@ -39,16 +38,14 @@ export const REPLAY_AGGRESSIVE_FRACTION = 0.5;
  * fits this much — keep-recent-turns still applies on top, so a handful of recent
  * turns survive.
  *
- * #520 Option B: for a LARGE configured window this floor sits BELOW the configured
- * replay budget, and recovery is allowed to escalate PAST the configured budget down
- * to it — "the chat must not brick on overflow" is an INVARIANT of the reactive
- * branch, and a configured window is a claim about model capacity, not a promise
- * about replay size; once the provider proves non-fit with a 400, reality beats the
- * config. This does NOT change the NORMAL path's upper bound (#510 Option A still
- * respects the configured budget while it fits) — it is survival once non-fit is
- * proven. For a SMALL configured window the effective floor is instead the old
- * single 0.5× cut (never worse than before, and never RAISED above the budget); see
- * {@link resolveEffectiveReplayThreshold}.
+ * For a LARGE configured window this floor sits BELOW the configured replay
+ * budget, and recovery may escalate PAST the configured budget down to it — "the
+ * chat must not brick on overflow" is an INVARIANT of the reactive branch, and a
+ * configured window is a claim about model capacity, not a promise about replay
+ * size; once the provider proves non-fit with a 400, reality beats the config. The
+ * NORMAL path still respects the configured budget while it fits. For a SMALL
+ * configured window the effective floor is a single 0.5× cut (never RAISED above
+ * the budget); see {@link resolveEffectiveReplayThreshold}.
  */
 export const REPLAY_MIN_FLOOR_TOKENS = 8_000;
 /**
@@ -118,9 +115,9 @@ export function resolveReplayBudget(rawContextWindow: unknown): ReplayBudget {
  *   - k=0 -> base unchanged (no overflow: nothing to recover from).
  *   - k=1 -> floor(0.5 × base); k=2 -> floor(0.25 × base); … each further consecutive
  *     overflow tightens the cut, so recovery ESCALATES until the history fits.
- *   - the escalation is clamped at the floor so it CONVERGES — this is what un-bricks
+ *   - the escalation is clamped at the floor so it CONVERGES — this is what recovers
  *     a chat whose real model window is smaller than a single 0.5× cut of the base
- *     (e.g. an unconfigured window: flat-default base 100k, real window <50k) (#520).
+ *     (e.g. an unconfigured window: flat-default base 100k, real window <50k).
  *
  * The overflowing turn produced no usage signal, so the preventive estimate
  * under-counted and a normal-threshold (or single fixed 0.5×) trim may not shrink
@@ -129,17 +126,16 @@ export function resolveReplayBudget(rawContextWindow: unknown): ReplayBudget {
  * A `null` base budget (trimming OFF) is passed through unchanged: an explicit
  * off-switch is never overridden by the recovery path.
  *
- * The absolute floor is `min(REPLAY_MIN_FLOOR_TOKENS, floor(0.5 × base))` (#520
- * Option B):
+ * The absolute floor is `min(REPLAY_MIN_FLOOR_TOKENS, floor(0.5 × base))`:
  *   - LARGE window (floor(0.5 × base) >= REPLAY_MIN_FLOOR_TOKENS) -> the fixed
  *     REPLAY_MIN_FLOOR_TOKENS, which is BELOW the configured budget: escalation is
  *     ALLOWED to cut past the configured budget down to this absolute minimum, so a
  *     chat whose real model window is far smaller than the configured window still
- *     un-bricks (the invariant beats a config reality disproved with a 400).
+ *     recovers.
  *   - SMALL window (floor(0.5 × base) < REPLAY_MIN_FLOOR_TOKENS) -> floor(0.5 ×
- *     base), i.e. AT LEAST the old single 0.5× cut: recovery is never WORSE than the
- *     pre-#520 behavior, and the floor is still never RAISED above the configured
- *     budget itself (that would re-overflow the very window it was set for).
+ *     base), i.e. AT LEAST a single 0.5× cut, and the floor is never RAISED above
+ *     the configured budget itself (that would re-overflow the very window it was
+ *     set for).
  */
 export function resolveEffectiveReplayThreshold(
   thresholdTokens: number | null,
@@ -256,7 +252,7 @@ export interface TrimResult {
 /**
  * Bound the replayed history to `budgetTokens`, deterministically. Returns the
  * SAME array reference (no copy) when nothing needs trimming, so the common case
- * is free and byte-identical. Trimming order (spec #490):
+ * is free and byte-identical. Trimming order:
  *   1. truncate OLD turns' tool outputs (head+tail + marker) — the bulk of the size
  *   2. mechanically collapse the OLDEST turns to their text (concatenation, no LLM)
  *   3. the current + last {@link REPLAY_KEEP_RECENT_TURNS} turns stay FULL
@@ -292,7 +288,7 @@ export function trimHistoryForReplay(
   // The tail we always keep full: from the Nth-from-last user message onward.
   const boundary = recentBoundaryIndex(messages, REPLAY_KEEP_RECENT_TURNS);
   const tail = messages.slice(boundary);
-  let head = messages.slice(0, boundary).map(cloneMessage);
+  const head = messages.slice(0, boundary).map(cloneMessage);
 
   // Phase 1: truncate old tool outputs.
   for (const m of head) {

@@ -21,10 +21,10 @@ export interface ToolbarState {
 // Undo/redo availability, computed WITHOUT `editor.can().undo()/.redo()`.
 //
 // `editor.can()` runs the command as a dry-run (building a throwaway state +
-// transaction) — the most expensive work in this selector, and it ran on every
-// keystroke (and every REMOTE keystroke under collaboration). Instead we read
-// the history stack depth directly, which is a cheap plugin-state lookup and
-// mirrors exactly what the undo/redo commands themselves check:
+// transaction) — too expensive for a selector that runs on every keystroke (and
+// every REMOTE keystroke under collaboration). Instead we read the history stack
+// depth directly, a cheap plugin-state lookup that mirrors exactly what the
+// undo/redo commands themselves check:
 //
 //  - Collaboration (Yjs): the yjs UndoManager's undo/redo stack lengths — the
 //    same `undoStack.length === 0` / `redoStack.length === 0` guard the
@@ -33,8 +33,7 @@ export interface ToolbarState {
 //    redoDepth, which back the UndoRedo extension.
 //
 // When neither history backend is installed (the pre-sync static editor —
-// mainExtensions only, undoRedo disabled), both fall through to 0 -> false,
-// matching the previous `safeCan` behavior.
+// mainExtensions only, undoRedo disabled), both fall through to 0 -> false.
 // Reads the Yjs UndoManager's undo/redo availability from its stack lengths.
 //
 // `undoStack` / `redoStack` are PRIVATE y-undo / yjs internals, so we touch them

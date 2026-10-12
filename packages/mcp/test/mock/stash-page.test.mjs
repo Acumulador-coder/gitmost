@@ -42,9 +42,9 @@ after(async () => {
 // In-memory sandbox sink mirroring the host binding: store the blob, return a
 // uri + sha256 + size. Records every put so the test can inspect what was
 // stashed (and verify the doc body never leaves via the return value). Models
-// the real store's FIFO eviction + cap + the has/evict probes so B1 (self-
-// eviction reconciliation and doc-put-throw cleanup) is testable. Default
-// maxTotal is effectively unlimited so the happy-path tests behave as before.
+// the real store's FIFO eviction + cap + the has/evict probes so self-eviction
+// reconciliation and doc-put-throw cleanup are testable. Default maxTotal is
+// effectively unlimited so the happy-path tests never evict.
 //
 // `throwOnJson` forces the final document put to throw, standing in for "doc
 // exceeds the cap".

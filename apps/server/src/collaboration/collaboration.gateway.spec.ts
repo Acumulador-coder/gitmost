@@ -2,16 +2,13 @@ import { CollaborationGateway } from './collaboration.gateway';
 import { CollaborationHandler } from './collaboration.handler';
 
 /**
- * Focused test for the COLLAB_DISABLE_REDIS fallback in handleYjsEvent.
+ * The COLLAB_DISABLE_REDIS fallback in handleYjsEvent: with Redis disabled there
+ * is no RedisSyncExtension, so the handler must run locally against the single
+ * hocuspocus instance and return its verdict (not silently no-op).
  *
- * With Redis disabled the gateway builds no RedisSyncExtension, so the old code
- * (`return this.redisSync?.handleEvent(...)`) returned undefined and every
- * doc-mutation event silently no-opped. The fallback must instead invoke the
- * handler locally against the single hocuspocus instance and return its verdict.
- *
- * We construct the gateway with stub extensions and an EnvironmentService whose
+ * The gateway is built with stub extensions and an EnvironmentService whose
  * isCollabDisableRedis() returns true (redisSync stays null, real hocuspocus is
- * still built), then spy getHandlers so no real direct connection is opened.
+ * still built); getHandlers is spied so no real direct connection is opened.
  */
 
 const stubExtension = {} as any;
@@ -53,7 +50,8 @@ describe('CollaborationGateway.handleYjsEvent (no-Redis fallback)', () => {
       payload as any,
     );
 
-    expect(fakeHandler).toHaveBeenCalledWith('doc-1', payload);
+    // No signal was passed: the handler gets `undefined` for it.
+    expect(fakeHandler).toHaveBeenCalledWith('doc-1', payload, undefined);
     expect(result).toEqual(verdict);
     expect(result).not.toBeUndefined();
   });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Generates `src/components/ui/lucide/lucide-catalog.generated.ts` — the single
-// committed catalog artifact the icon picker loads (see issue #696).
+// committed catalog artifact the icon picker loads.
 //
 // HAND-RUN ONLY, never in CI/Docker/build: the committed artifact is what ships;
 // this script only regenerates it when `lucide-react` is bumped. cwd = apps/client.

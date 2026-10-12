@@ -1,6 +1,4 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Mixin over the shared client context (see client/context.ts).
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import { parseCells as parseDrawioCells } from "../lib/drawio-xml.js";
 import {
@@ -53,7 +51,7 @@ import {
   mergeFootnoteDefinitions,
 } from "../lib/transforms.js";
 
-// Public method surface of DrawioMixin (issue #450) — a NAMED type so the factory
+// Public method surface of DrawioMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements IDrawioMixin` fails to compile on drift.
@@ -224,8 +222,8 @@ export function DrawioMixin<TBase extends GConstructor<DocmostClientContext>>(Ba
       "image/svg+xml",
     );
 
-    // NOTE: no `id` attribute is set here. The vendored `drawio` node schema
-    // (diagramAttributes) declares no `id`, so any block id would be silently
+    // NOTE: no `id` attribute is set here. The editor-ext `drawio` node
+    // declares no `id`, so any block id would be silently
     // dropped by PMNode.fromJSON on save and the returned handle would fail to
     // resolve. The addressable handle is the node's "#<index>" (like image/table
     // nodes), computed after the insert below.
@@ -292,13 +290,11 @@ export function DrawioMixin<TBase extends GConstructor<DocmostClientContext>>(Ba
       // cannot reference it. drawio nodes carry no persisted id, so there is no
       // stable handle for a nested diagram.
       //
-      // CRITICAL (#494): the diagram is ALREADY WRITTEN and committed at this
-      // point (the mutation above succeeded). Throwing here reported a FAILURE for
-      // a write that in fact landed, so a retry-prone agent re-ran drawioCreate
-      // and inserted a DUPLICATE diagram (the #435 double-apply class). Return
-      // SUCCESS with nodeId:null and a warning instead: the write is
-      // acknowledged, and the agent is told there is no addressable handle and how
-      // to re-read the diagram — so it never blind-retries a landed write.
+      // The diagram is ALREADY WRITTEN and committed at this point (the
+      // mutation above succeeded). Throwing would report a failure for a write
+      // that landed, and a retry-prone agent would insert a duplicate diagram.
+      // So return success with nodeId:null and a warning telling the agent
+      // there is no addressable handle and how to re-read the diagram.
       return {
         success: true,
         nodeId: null,
@@ -341,9 +337,9 @@ export function DrawioMixin<TBase extends GConstructor<DocmostClientContext>>(Ba
    * KNOWN LIMITATION (same class as replaceImage's, see media.ts): this repoints
    * `src`/`attachmentId` on the SAME node, so the diagram COUNT is unchanged
    * (drawio: 1 -> 1) and no text or marks move — `summarizeChange` therefore may
-   * report `verify.changed === false`. #600 added drawio/excalidraw integrity
-   * counts, which name a diagram that is LOST or GAINED; an attribute-only swap
-   * of a surviving diagram is still outside the text+marks+counts model. That is
+   * report `verify.changed === false`. The drawio/excalidraw integrity counts
+   * name a diagram that is LOST or GAINED; an attribute-only swap of a
+   * surviving diagram is outside the text+marks+counts model. That is
    * acceptable here: the write is confirmed by `repointed` / the baseHash CAS,
    * and verify is supplementary.
    */
@@ -475,26 +471,14 @@ export function DrawioMixin<TBase extends GConstructor<DocmostClientContext>>(Ba
     };
   }
 
-  // --- draw.io high-level semantic tools (issue #425) ---
+  // --- draw.io high-level semantic tools ---
 
   /**
    * ID-based targeted edits of an existing drawio diagram (add / update / delete
    * cells) instead of resending the whole XML. Reads the CURRENT diagram, checks
    * the optimistic lock (`baseHash` is MANDATORY, exactly as drawioUpdate), applies
    * the operations to the parsed model (a `delete` CASCADES to container children
-   * and to every edge whose source/target is deleted), then runs the SAME #423
-   * pipeline as drawioUpdate (lint + quality warnings -> preview -> attachment ->
-   * repoint the node). Ids are stable so diffs stay meaningful across edits.
-   */
-
-  // --- draw.io high-level semantic tools (issue #425) ---
-
-  /**
-   * ID-based targeted edits of an existing drawio diagram (add / update / delete
-   * cells) instead of resending the whole XML. Reads the CURRENT diagram, checks
-   * the optimistic lock (`baseHash` is MANDATORY, exactly as drawioUpdate), applies
-   * the operations to the parsed model (a `delete` CASCADES to container children
-   * and to every edge whose source/target is deleted), then runs the SAME #423
+   * and to every edge whose source/target is deleted), then runs the SAME
    * pipeline as drawioUpdate (lint + quality warnings -> preview -> attachment ->
    * repoint the node). Ids are stable so diffs stay meaningful across edits.
    *
@@ -620,7 +604,7 @@ export function DrawioMixin<TBase extends GConstructor<DocmostClientContext>>(Ba
   /**
    * The main high-level tool: build a diagram from a SEMANTIC graph (nodes with
    * a `kind`/`icon`, groups, edges) — the model never supplies coordinates or
-   * style strings. The server resolves icons via the shape catalog (#424),
+   * style strings. The server resolves icons via the shape catalog,
    * assigns palette colors from the preset, runs ELK layered layout (honouring
    * `direction` and the `layer`/`sameLayerAs`/`pinned` hints and compound groups),
    * and assembles linter-clean XML, then inserts it through the SAME create

@@ -68,7 +68,7 @@ const ASIDE_GAP = 16;
 // `calc(26.25rem * var(--mantine-scale))`, and getComputedStyle does NOT
 // evaluate calc() for an unregistered custom property — it returns the literal
 // string "calc(26.25rem * 1)", whose parseFloat is NaN → a silent 0 that makes
-// the whole left-edge fix a no-op on desktop-open (#570). Instead we append a
+// the left-edge compensation a no-op on desktop-open. Instead we append a
 // hidden probe whose width IS the variable and read its laid-out box, forcing
 // the browser to evaluate calc/rem/scale for us. This yields ~420 on
 // desktop-open and 0 when the aside reserves no space (closed, or the below-`md`
@@ -102,7 +102,7 @@ export interface FullEditorProps {
   // Ф7 (#643) — the live REST body has not resolved for THIS page yet
   // (`isLoading || !livePage`). Owns the body's SKELETON vs static/live decision
   // inside PageEditor, and gates the title-editor's canonicalizing navigate /
-  // force-save. Absent (legacy `page && space` mount / flag OFF) ⇒ resolved.
+  // force-save. Absent ⇒ resolved.
   bodyContentPending?: boolean;
 }
 
@@ -143,7 +143,7 @@ export function FullEditor({
     user.settings?.preferences?.pageEditMode ?? PageEditMode.Edit;
   const isEditMode = currentPageEditMode === PageEditMode.Edit;
   // Ф7 (#643) — the LIVE page resolved (drives the title-editor's navigate /
-  // force-save gates). Absent prop (legacy mount / flag OFF) ⇒ resolved.
+  // force-save gates). Absent prop ⇒ resolved.
   const pageResolved = bodyContentPending === undefined ? true : !bodyContentPending;
 
   // Apply the user's saved preference only once on initial load, not on every

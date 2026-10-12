@@ -13,11 +13,10 @@
  * unchanged pages produce identical bytes and git sees no diff.
  */
 import {
-  convertProseMirrorToMarkdown,
-  markdownToProseMirror,
   serializeDocmostMarkdownBody,
   type DocmostMdMeta,
 } from "@docmost/prosemirror-markdown";
+import { converterPool } from "./convert-pool.js";
 
 /**
  * Meta object as `exportPageBody` builds it (SPEC §4). Kept byte-for-byte
@@ -71,14 +70,18 @@ export async function stabilizePageFile(
  * this body with a minimal `gitmost_id` frontmatter; determinism here is what
  * keeps re-pulls of an unchanged page byte-identical (no churn, loop-guard).
  */
-export async function stabilizePageBody(content: unknown): Promise<string> {
-  // git-sync is the LOSSLESS mirror path, so run the serializer in `strict`
-  // mode: a node/mark type the converter has no case for (e.g. one added to the
-  // schema without a matching serializer arm) throws a ConverterLossError here
-  // rather than silently degrading — surfacing the loss loudly at write time
-  // instead of committing a lossy file. Valid content (every current schema type
-  // has a case) is unaffected.
-  const md1 = convertProseMirrorToMarkdown(content, { strict: true });
-  const doc2 = await markdownToProseMirror(md1);
-  return convertProseMirrorToMarkdown(doc2, { strict: true });
+export async function stabilizePageBody(
+  content: unknown,
+  signal?: AbortSignal,
+): Promise<string> {
+  // The pass runs on the converter worker pool (./convert-worker.ts), within
+  // its input budget and deadline, and stops when `signal` aborts: a big page
+  // would otherwise block the event loop for seconds. git-sync is the LOSSLESS
+  // mirror path, so the serializer runs in `strict` mode there: a node/mark
+  // type the converter has no case for (e.g. one added to the schema without a
+  // matching serializer arm) rejects with a ConverterLossError rather than
+  // silently degrading — surfacing the loss loudly at write time instead of
+  // committing a lossy file. Valid content (every current schema type has a
+  // case) is unaffected.
+  return converterPool.stabilizePageBody(content, signal);
 }

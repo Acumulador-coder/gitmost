@@ -15,7 +15,7 @@ import {
 
 export function usePageSearchQuery(
   params: IPageSearchParams,
-): UseQueryResult<IPageSearch[], Error> {
+): UseQueryResult<{ items: IPageSearch[]; related: IPageSearch[] }, Error> {
   return useQuery({
     queryKey: ["page-search", params],
     queryFn: () => searchPage(params),
@@ -38,7 +38,10 @@ export function useSearchSuggestionsQuery(
 
 export function useShareSearchQuery(
   params: IPageSearchParams,
-): UseQueryResult<IPageSearch[], Error> {
+): UseQueryResult<
+  { items: IPageSearch[]; related: IPageSearch[]; disabledReason?: string },
+  Error
+> {
   return useQuery({
     queryKey: ["share-search", params],
     queryFn: () => searchShare(params),

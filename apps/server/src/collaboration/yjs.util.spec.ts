@@ -379,11 +379,10 @@ describe('replaceYjsMarkedText', () => {
     expect(text.toDelta()).toEqual(before);
   });
 
-  // F1 regression: the marked doc text is TYPOGRAPHIC (smart quotes / em-dash)
-  // and expectedText equals that raw typographic text — as it now does, because
-  // the MCP client stores the RAW anchored substring (getAnchoredText) rather
-  // than the agent's ASCII input. The strict `joinedText !== expectedText`
-  // compare must therefore MATCH and the suggestion apply (not a spurious 409).
+  // The marked doc text is TYPOGRAPHIC (smart quotes / em-dash) and expectedText
+  // is that raw typographic text (the MCP client stores the raw anchored
+  // substring, getAnchoredText). The strict `joinedText !== expectedText`
+  // compare must match and the suggestion apply (no spurious 409).
   it('typographic marked text applies when expectedText is the raw typographic text', () => {
     const marked = '“hello”—world';
     const { fragment, text } = buildRuns([

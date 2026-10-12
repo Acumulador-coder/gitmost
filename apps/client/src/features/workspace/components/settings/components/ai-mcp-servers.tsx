@@ -20,7 +20,7 @@ import McpServerFormModal from "@/features/ai-mcp/mcp-server-form-modal.tsx";
  * Admin section: list / add / edit / delete external MCP servers the agent may
  * use (web search, etc.) for the WHOLE workspace. The reusable row and add/edit
  * modal (incl. the per-server Test) live in the shared `features/ai-mcp` module
- * (#686) and are driven by the admin `/workspace/ai-mcp-servers*` mutations
+ * and are driven by the admin `/workspace/ai-mcp-servers*` mutations
  * passed in as hooks; the personal (account) page reuses the same components
  * with its own `/account/mcp-servers*` hooks. Auth headers are write-only and
  * never shown (only `hasHeaders` is known client-side).

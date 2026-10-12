@@ -11,11 +11,11 @@ import {
 } from "./local-first-body";
 
 /**
- * #564 guard 2, the CROWN guarantee, tested directly on the guard.
+ * Guard 2, the CROWN guarantee, tested directly on the guard.
  *
  * The component test proves the same thing end-to-end but has to run on a
- * trimmed extension list (the full docmost list crashes under vitest for a
- * module-resolution reason unrelated to #564 — see the note in
+ * trimmed extension list (the full docmost list crashes under vitest for an
+ * unrelated module-resolution reason — see the note in
  * page-editor.local-first.test.tsx). This spec closes the SEMANTIC half instead:
  * it exercises the two classes of writer that the trimmed list cannot represent
  * and that a real extension list is full of —
@@ -58,7 +58,6 @@ function createAppendingPlugin(getEnabled: () => boolean) {
 }
 
 let canWrite = false;
-let isActive = true;
 let appendEnabled = false;
 let editor: Editor;
 
@@ -68,14 +67,12 @@ function docText(): string {
 
 beforeEach(() => {
   canWrite = false;
-  isActive = true;
   appendEnabled = false;
   editor = new Editor({
     extensions: [
       StarterKit.configure({ undoRedo: false } as never),
       createAppendingPlugin(() => appendEnabled),
       createBodyWriteGuard({
-        isActive: () => isActive,
         canWrite: () => canWrite,
       }),
     ],
@@ -150,15 +147,6 @@ describe("createBodyWriteGuard", () => {
     const before = editor.state.doc.toJSON();
     editor.view.dispatch(editor.state.tr.setMeta("decorations", true));
     expect(editor.state.doc.toJSON()).toEqual(before);
-  });
-
-  it("is INERT when the flag is off — the flag-off path behaves like today", () => {
-    isActive = false;
-    appendEnabled = true;
-
-    editor.commands.insertContent("typed");
-    expect(docText()).toContain("typed");
-    expect(docText()).toContain("[appended]");
   });
 });
 

@@ -2,7 +2,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { AccountMcpServersController } from './account-mcp-servers.controller';
 
 /**
- * Kill-switch guard for the personal MCP CRUD API (#686). When
+ * Kill-switch guard for the personal MCP CRUD API. When
  * MCP_PERSONAL_SERVERS_ENABLED=false, EVERY endpoint must answer 403 and MUST
  * NOT reach the service (no read/write happens against a disabled feature). The
  * observable property is "403 + service untouched", so we drive the real

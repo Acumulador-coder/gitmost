@@ -1,58 +1,11 @@
-import { StarterKit } from '@tiptap/starter-kit';
-import { TextAlign } from '@tiptap/extension-text-align';
-import { Superscript } from '@tiptap/extension-superscript';
-import SubScript from '@tiptap/extension-subscript';
-import { Typography } from '@tiptap/extension-typography';
-import { TextStyle } from '@tiptap/extension-text-style';
-import { Color } from '@tiptap/extension-color';
-import { Youtube } from '@tiptap/extension-youtube';
-import { TaskList, TaskItem } from '@tiptap/extension-list';
-import {
-  Heading,
-  Callout,
-  Comment,
-  CustomCodeBlock,
-  Details,
-  DetailsContent,
-  DetailsSummary,
-  LinkExtension,
-  MathBlock,
-  MathInline,
-  TableHeader,
-  TableCell,
-  TableRow,
-  CustomTable,
-  TiptapImage,
-  TiptapVideo,
-  TiptapAudio,
-  TiptapPdf,
-  PageBreak,
-  TrailingNode,
-  Attachment,
-  Drawio,
-  Excalidraw,
-  Embed,
-  HtmlEmbed,
-  Mention,
-  Subpages,
-  Highlight,
-  Spoiler,
-  Indent,
-  UniqueID,
-  Columns,
-  Column,
-  Status,
-  addUniqueIdsToDoc,
-  TransclusionSource,
-  TransclusionReference,
-  FootnoteReference,
-  FootnotesList,
-  FootnoteDefinition,
-  PageEmbed,
-  Code,
-} from '@docmost/editor-ext';
+import { addUniqueIdsToDoc, documentExtensions } from '@docmost/editor-ext';
 import { convertProseMirrorToMarkdown } from '@docmost/prosemirror-markdown';
-import { generateText, getSchema, JSONContent } from '@tiptap/core';
+import {
+  getSchema,
+  getText,
+  getTextSerializersFromSchema,
+  JSONContent,
+} from '@tiptap/core';
 import { generateHTML, generateJSON } from '../common/helpers/prosemirror/html';
 // @tiptap/html library works best for generating prosemirror json state but not HTML
 // see: https://github.com/ueberdosis/tiptap/issues/5352
@@ -62,77 +15,9 @@ import { Node, Schema } from '@tiptap/pm/model';
 import { updateYFragment } from 'y-prosemirror';
 import * as Y from 'yjs';
 import { Logger } from '@nestjs/common';
+import type { Hocuspocus } from '@hocuspocus/server';
 
-export const tiptapExtensions = [
-  StarterKit.configure({
-    codeBlock: false,
-    link: false,
-    trailingNode: false,
-    heading: false,
-    // #515: StarterKit's stock `code` mark ships `excludes: "_"`, which strips
-    // every co-occurring inline mark on the HTML -> PM parse (htmlToJson) and on
-    // editor transactions. Use the shared Docmost `Code` (excludes: "code") instead,
-    // so bold/italic/… around inline code survive import and editing.
-    code: false,
-  }),
-  Code,
-  Heading,
-  UniqueID.configure({
-    types: ['heading', 'paragraph', 'transclusionSource'],
-  }),
-  Comment,
-  TextAlign.configure({ types: ['heading', 'paragraph'] }),
-  Indent,
-  TaskList,
-  TaskItem.configure({
-    nested: true,
-  }),
-  LinkExtension,
-  Superscript,
-  SubScript,
-  Highlight,
-  Spoiler,
-  Typography,
-  TrailingNode,
-  TextStyle,
-  Color,
-  MathInline,
-  MathBlock,
-  Details,
-  DetailsContent,
-  DetailsSummary,
-  CustomTable,
-  TableCell,
-  TableRow,
-  TableHeader,
-  Youtube,
-  TiptapImage,
-  TiptapVideo,
-  TiptapAudio,
-  TiptapPdf,
-  PageBreak,
-  Callout,
-  Attachment,
-  CustomCodeBlock,
-  Drawio,
-  Excalidraw,
-  Embed,
-  // Registered server-side so the node survives schema parsing/serialization.
-  // Authoring is gated to admins at the document WRITE paths (see
-  // stripHtmlEmbedNodes usage in persistence/page services), NOT here.
-  HtmlEmbed,
-  Mention,
-  Subpages,
-  Columns,
-  Column,
-  Status,
-  TransclusionSource,
-  TransclusionReference,
-  FootnoteReference,
-  FootnotesList,
-  FootnoteDefinition,
-  PageEmbed,
-] as any;
+export const tiptapExtensions = documentExtensions;
 
 export function jsonToHtml(tiptapJson: any) {
   return generateHTML(tiptapJson, tiptapExtensions);
@@ -150,8 +35,30 @@ export function htmlToJson(html: string) {
 }
 
 /**
- * Deterministic text-serializer overrides for the `format:"text"` page read
- * (#502). Non-text nodes render to a STABLE placeholder instead of their
+ * `pmJson` in the shape the editor leaves a document in once it is opened, so
+ * storing it is what opening it would store: it ends with the TrailingNode
+ * extension's node (an empty paragraph) unless its last block is one that
+ * extension accepts last, and every block type the UniqueID extension covers
+ * carries an id. Both rules are read from `tiptapExtensions`. A body stored in
+ * another shape is reshaped by the first browser that opens the page, a write
+ * recorded as that viewer's edit.
+ */
+export function inEditorShape(pmJson: any) {
+  const trailing = (tiptapExtensions as any[]).find(
+    (ext) => ext.name === 'trailingNode',
+  )?.options as { node: string; notAfter: string[] } | undefined;
+  const content: any[] = pmJson?.content ?? [];
+  const last = content[content.length - 1];
+  const withTrailing =
+    trailing && (!last || !trailing.notAfter.includes(last.type))
+      ? { ...pmJson, content: [...content, { type: trailing.node }] }
+      : pmJson;
+  return addUniqueIdsToDoc(withTrailing, tiptapExtensions);
+}
+
+/**
+ * Deterministic text-serializer overrides for the `format:"text"` page read.
+ * Non-text nodes render to a STABLE placeholder instead of their
  * (structure-dependent) inner text, so a machine diff of two text reads is
  * driven only by the page's actual prose — output stability across package
  * versions IS the contract (pinned by a snapshot test). Returning a string from
@@ -183,7 +90,7 @@ const TEXT_READ_SERIALIZERS: Record<string, (props: { node: any }) => string> =
  * concatenated node text with `generateText`'s default `\n\n` block separator.
  * This feeds the page `textContent` tsvector and MUST NOT change.
  *
- * `deterministic:true` (#502 `format:"text"` page read): a flat, machine-diffable
+ * `deterministic:true` (`format:"text"` page read): a flat, machine-diffable
  * rendering — one line per block (`\n` block separator; `hardBreak` already
  * serializes to `\n`), inline marks/anchors/autoformat dropped, and non-text
  * nodes replaced by the stable placeholders above (`[image]`, `[table RxC]`).
@@ -194,17 +101,40 @@ export function jsonToText(
   tiptapJson: any,
   options?: { deterministic?: boolean },
 ) {
+  // Same steps as tiptap's generateText(), minus its getSchema() on every call:
+  // building the schema costs ~3.5 ms, and the embedding chunker calls this once
+  // per block, so a 9000-block page blocked the event loop for ~33 s.
+  const schema = getDocumentSchema();
+  const contentNode = Node.fromJSON(schema, tiptapJson);
   if (options?.deterministic) {
-    return generateText(tiptapJson, tiptapExtensions, {
+    return getText(contentNode, {
       blockSeparator: '\n',
-      textSerializers: TEXT_READ_SERIALIZERS,
+      textSerializers: {
+        ...getTextSerializersFromSchema(schema),
+        ...TEXT_READ_SERIALIZERS,
+      },
     });
   }
-  return generateText(tiptapJson, tiptapExtensions);
+  return getText(contentNode, {
+    blockSeparator: '\n\n',
+    textSerializers: getTextSerializersFromSchema(schema),
+  });
+}
+
+let documentSchema: Schema | null = null;
+
+/**
+ * The ProseMirror schema of `tiptapExtensions`, built once: building it costs
+ * milliseconds, and the text serializer, `jsonToNode` and the git-sync block
+ * merge all need it per call.
+ */
+export function getDocumentSchema(): Schema {
+  documentSchema ??= getSchema(tiptapExtensions);
+  return documentSchema;
 }
 
 export function jsonToNode(tiptapJson: JSONContent) {
-  const schema = getSchema(tiptapExtensions);
+  const schema = getDocumentSchema();
   try {
     return Node.fromJSON(schema, tiptapJson);
   } catch (error) {
@@ -222,6 +152,44 @@ export function jsonToNode(tiptapJson: JSONContent) {
 
 export function getPageId(documentName: string) {
   return documentName.split('.')[1];
+}
+
+/**
+ * Whether `documentName` is `page.<uuid>` with the page's canonical lower-case
+ * uuid — the ONE document name of a page (CO-7). `getPageId` also resolves
+ * aliases (a slugId, an upper-case uuid, any prefix), each of which hocuspocus
+ * would open as a SEPARATE Y.Doc of the same page.
+ */
+export function isCanonicalPageDocumentName(documentName: string): boolean {
+  return /^page\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    documentName,
+  );
+}
+
+/**
+ * Hocuspocus's PRIVATE debounce id of a document's pending `onStoreDocument`
+ * (`storeDocumentHooks` in @hocuspocus/server). It is not public API, so it is
+ * written down only here; a spec against a real Hocuspocus instance fails when
+ * the library changes it.
+ */
+export function storeDebounceId(documentName: string): string {
+  return `onStoreDocument-${documentName}`;
+}
+
+/**
+ * Run a document's pending DEBOUNCED store now, if one is pending: the same
+ * scheduled payload (so the edit keeps its own context/actor), with the timer
+ * cleared. Resolves `false` when nothing was pending; rejects with the store's
+ * own error (the caller logs it).
+ */
+export async function flushPendingStore(
+  instance: Hocuspocus,
+  documentName: string,
+): Promise<boolean> {
+  const id = storeDebounceId(documentName);
+  if (!instance?.debouncer?.isDebounced(id)) return false;
+  await instance.debouncer.executeNow(id);
+  return true;
 }
 
 export function isEmptyParagraphDoc(tiptapJson: JSONContent): boolean {
@@ -297,20 +265,18 @@ export function prosemirrorNodeToYElement(node: any): Y.XmlElement | Y.XmlText {
 }
 
 /**
- * #647 §C / R1 — write a ProseMirror JSON doc into the live Yjs fragment by
- * STRUCTURAL DIFF (`updateYFragment`), the exact routine the editor itself uses
- * to sync ProseMirror edits into Yjs. It diffs the new node against the current
- * fragment and touches only the changed children, so unchanged nodes keep their
- * Yjs identity (node ids). y-prosemirror anchors the editor selection to those
- * ids, so a naive `fragment.delete(0,len)` + `toYdoc` + `applyUpdate` full replace
- * (what `updatePageContent` operation='replace' does) discards every id and snaps
- * an idle human editor's cursor to the end of the document on every agent write
- * (the #152 regression). The guarded CAS replace uses THIS instead.
+ * Write a ProseMirror JSON doc into the live Yjs fragment by STRUCTURAL DIFF
+ * (`updateYFragment`), the routine the editor itself uses to sync ProseMirror
+ * edits into Yjs. Only changed children are touched, so unchanged nodes keep
+ * their Yjs identity; y-prosemirror anchors the editor selection to it, so a
+ * full replace (`fragment.delete(0,len)` + `toYdoc` + `applyUpdate`, as
+ * `updatePageContent` operation='replace' does) snaps an idle editor's cursor to
+ * the end of the document. The guarded CAS replace uses this.
  *
  * MUST run inside a `doc.transact` (the caller's `connection.transact`) so the
- * diff applies atomically with no remote update interleaving. Mirrors the MCP
- * client's `applyDocToFragment` (packages/mcp/src/lib/collaboration.ts) but over
- * the server's own schema (`jsonToNode`, which strips unknown node types).
+ * diff applies atomically. Mirrors the MCP client's `applyDocToFragment`
+ * (packages/mcp/src/lib/collaboration.ts) over the server's own schema
+ * (`jsonToNode`, which strips unknown node types).
  */
 export function applyPmJsonToFragment(doc: Y.Doc, pmJson: JSONContent): void {
   const pmNode = jsonToNode(pmJson);
@@ -323,9 +289,7 @@ export function applyPmJsonToFragment(doc: Y.Doc, pmJson: JSONContent): void {
 
 export function jsonToMarkdown(tiptapJson: any): string {
   // Direct ProseMirror JSON -> Markdown via the canonical converter
-  // (`@docmost/prosemirror-markdown`) — no HTML intermediate, no second
-  // editor-ext markdown layer. Same serializer as the page/space export and the
-  // git-sync vault writer, so every server PM->MD path emits identical canonical
-  // markdown (issue #345).
+  // (`@docmost/prosemirror-markdown`), the same serializer as the page/space
+  // export and the git-sync vault writer.
   return convertProseMirrorToMarkdown(tiptapJson);
 }

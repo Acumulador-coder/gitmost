@@ -17,6 +17,7 @@ import {
   Pack,
   RSAMessage,
   RSAMessageCloseProxy,
+  RSAMessageCustomEventAbort,
   RSAMessageCustomEventComplete,
   RSAMessageCustomEventStart,
   RSAMessagePong,
@@ -55,9 +56,19 @@ export class RedisSyncExtension<TCE extends CustomEvents> implements Extension {
   private instance!: Hocuspocus;
   private readonly customEvents: TCE;
   private replyIdCounter: number = 0;
-  // @ts-ignore
-  private pendingReplies: Record<number, PromiseWithResolvers<any>['resolve']> =
-    {};
+  private pendingReplies: Record<
+    number,
+    {
+      // @ts-ignore
+      resolve: PromiseWithResolvers<any>['resolve'];
+      // @ts-ignore
+      reject: PromiseWithResolvers<any>['reject'];
+    }
+  > = {};
+  // Owner side: the abort controller of each custom event running here for
+  // another instance, keyed `${replyTo}#${replyId}`; an entry lives exactly as
+  // long as its handler runs.
+  private readonly runningRemoteEvents = new Map<string, AbortController>();
 
   constructor(configuration: Configuration<TCE>) {
     const {
@@ -182,25 +193,57 @@ export class RedisSyncExtension<TCE extends CustomEvents> implements Extension {
     }
     if (type === 'customEventStart') {
       const { documentName, eventName, payload, replyTo, replyId } = msg;
-      const res = await this.handleEventLocally(
-        eventName as Extract<keyof TCE, string>,
-        documentName,
-        payload,
-      );
-      const reply: RSAMessageCustomEventComplete = {
-        type: 'customEventComplete',
-        replyId,
-        payload: res,
-      };
+      const runKey = `${replyTo}#${replyId}`;
+      const controller = new AbortController();
+      this.runningRemoteEvents.set(runKey, controller);
+      let reply: RSAMessageCustomEventComplete;
+      try {
+        const res = await this.handleEventLocally(
+          eventName as Extract<keyof TCE, string>,
+          documentName,
+          payload,
+          controller.signal,
+        );
+        reply = {
+          type: 'customEventComplete',
+          replyId,
+          payload: res,
+        };
+      } catch (err) {
+        // The remote handler threw (e.g. the markdown->ProseMirror transform in
+        // gitSyncWriteBody can throw on a malformed body). Reply with the error on
+        // the SAME correlation channel so the origin rejects promptly with the real
+        // message instead of waiting out customEventTTL as a generic 'TIMEOUT'.
+        // Catching here also keeps the throw from escaping this async messageBuffer
+        // listener as an unhandledRejection on the owning instance.
+        reply = {
+          type: 'customEventComplete',
+          replyId,
+          payload: undefined,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      } finally {
+        this.runningRemoteEvents.delete(runKey);
+      }
       this.pub.publish(`${replyTo}`, this.pack(reply));
       return;
     }
+    if (type === 'customEventAbort') {
+      this.runningRemoteEvents
+        .get(`${msg.replyTo}#${msg.replyId}`)
+        ?.abort(new Error('the origin instance aborted this collab event'));
+      return;
+    }
     if (type === 'customEventComplete') {
-      const { replyId, payload } = msg;
-      const resolveFn = this.pendingReplies[replyId];
-      if (!resolveFn) return;
+      const { replyId, payload, error } = msg;
+      const pending = this.pendingReplies[replyId];
+      if (!pending) return;
       delete this.pendingReplies[replyId];
-      resolveFn(payload);
+      if (error !== undefined) {
+        pending.reject(new Error(error));
+      } else {
+        pending.resolve(payload);
+      }
       return;
     }
     const { socketId } = msg;
@@ -253,25 +296,34 @@ export class RedisSyncExtension<TCE extends CustomEvents> implements Extension {
     eventName: TName,
     documentName: string,
     payload: any,
+    signal?: AbortSignal,
   ) {
     const handler = this.customEvents[eventName];
     if (!handler) throw new Error(`Invalid eventName: ${eventName}`);
-    const result = await handler(documentName, payload);
+    const result = await handler(documentName, payload, signal);
     return result as Promise<ReturnType<TCE[TName]>>;
   }
 
+  /**
+   * Run a custom event on the instance that owns `documentName`. An aborted
+   * `signal` rejects at once with its reason and stops the handler at its next
+   * step: a local handler gets the signal, a remote owner gets an abort message.
+   */
   async handleEvent<TName extends Extract<keyof TCE, string>>(
     eventName: TName,
     documentName: string,
     payload: any,
+    signal?: AbortSignal,
   ) {
+    signal?.throwIfAborted();
     const isDocLoadedOnInstance = this.instance.documents.has(documentName);
 
     if (isDocLoadedOnInstance) {
-      return this.handleEventLocally(eventName, documentName, payload);
+      return this.handleEventLocally(eventName, documentName, payload, signal);
     }
 
     const proxyTo = await this.getOrClaimLockThrottled(documentName);
+    signal?.throwIfAborted();
     if (proxyTo && proxyTo !== this.serverId) {
       ++this.replyIdCounter; // bug in biome thinks this.replyIdCounter is not used if written on the line below
       const replyId = this.replyIdCounter;
@@ -286,22 +338,65 @@ export class RedisSyncExtension<TCE extends CustomEvents> implements Extension {
       };
       const msg = this.pack(proxyMessage);
       this.pub.publish(`${this.msgChannel}:${proxyTo}`, msg);
-      // @ts-ignore
-      const { promise, resolve, reject } = Promise.withResolvers();
-      this.pendingReplies[replyId] = resolve;
+      // Manual deferred (no Promise.withResolvers) so this runs on Node < 22 too.
+      let resolve!: (v: unknown) => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      const replyTo = proxyMessage.replyTo;
+      const onAbort = () => {
+        if (!this.pendingReplies[replyId]) return;
+        delete this.pendingReplies[replyId];
+        const abortMessage: RSAMessageCustomEventAbort = {
+          type: 'customEventAbort',
+          replyTo,
+          replyId,
+        };
+        this.pub.publish(
+          `${this.msgChannel}:${proxyTo}`,
+          this.pack(abortMessage),
+        );
+        reject(signal!.reason);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      const settle =
+        (fn: (v: unknown) => void) =>
+        (v: unknown): void => {
+          signal?.removeEventListener('abort', onAbort);
+          fn(v);
+        };
+      this.pendingReplies[replyId] = {
+        resolve: settle(resolve),
+        reject: settle(reject),
+      };
       setTimeout(() => {
-        reject('TIMEOUT');
+        // Fallback for a genuinely lost reply. A handler that threw now rejects
+        // promptly via the error-carrying customEventComplete above; this TIMEOUT
+        // only fires when no reply ever comes back.
+        const pending = this.pendingReplies[replyId];
+        if (pending) {
+          delete this.pendingReplies[replyId];
+          pending.reject(
+            new Error(
+              `collab event "${eventName}" for ${documentName}: no reply ` +
+                `from the owning instance ${proxyTo} within ` +
+                `${this.customEventTTL} ms`,
+            ),
+          );
+        }
       }, this.customEventTTL);
       return promise as Promise<ReturnType<TCE[TName]>>;
     }
     // This server owns the document, but hocuspocus hasn't loaded it yet
-    return this.handleEventLocally(eventName, documentName, payload);
+    return this.handleEventLocally(eventName, documentName, payload, signal);
   }
 
   /**
-   * #647 refinement B — the `readLiveIfLoaded` primitive #654 gates on. Reads the
-   * live (fully hydrated) content of a document IF it is already loaded on SOME
-   * instance, WITHOUT force-loading it and WITHOUT claiming ownership.
+   * Reads the live (fully hydrated) content of a document IF it is already
+   * loaded on SOME instance, WITHOUT force-loading it and WITHOUT claiming
+   * ownership.
    *
    * Contract (see redis-sync.types `ReadLiveResult` + collaboration.handler
    * `readLiveContent`):
@@ -386,12 +481,17 @@ export class RedisSyncExtension<TCE extends CustomEvents> implements Extension {
     // Plain `new Promise` (not `Promise.withResolvers`, which is Node 22+) so the
     // read probe is portable across the server's supported runtimes.
     return new Promise<unknown>((resolve, reject) => {
-      this.pendingReplies[replyId] = resolve;
+      // `pendingReplies` stores {resolve, reject} (the shared reply handler calls
+      // pending.resolve/pending.reject on customEventComplete); mirror that shape
+      // here so the #647 read probe uses the same map as handleEvent.
+      this.pendingReplies[replyId] = { resolve, reject };
       setTimeout(() => {
         // Drop the pending resolver so a late reply cannot leak or resolve a
         // reused id; the awaiting caller has already gone down the reject path.
-        delete this.pendingReplies[replyId];
-        reject(new Error('TIMEOUT'));
+        if (this.pendingReplies[replyId]) {
+          delete this.pendingReplies[replyId];
+          reject(new Error('TIMEOUT'));
+        }
       }, timeoutMs);
     });
   }

@@ -48,7 +48,7 @@ export class WsRedisIoAdapter extends IoAdapter {
    * Called once by Nest's SocketModule during application shutdown, after every
    * socket.io server has been closed. The @socket.io/redis-adapter never owns
    * the lifecycle of the ioredis pub/sub clients it is handed, so we close them
-   * here to avoid leaking their TCP handles on shutdown (see issue #255).
+   * here to avoid leaking their TCP handles on shutdown.
    *
    * Uses disconnect(false) to mirror the sibling pub/sub pair in
    * collaboration/extensions/redis-sync (redis-sync.extension.ts onDestroy):

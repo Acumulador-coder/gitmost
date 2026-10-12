@@ -7,7 +7,35 @@ import {
 } from "./tool-parts";
 
 describe("toolCitations", () => {
-  it("emits one citation per searchPages item with a /p/{id} href", () => {
+  it("cites searchPages results only, never the non-matching related pages", () => {
+    const part: ToolUiPart = {
+      type: "tool-searchPages",
+      state: "output-available",
+      output: {
+        results: [
+          { id: "p1", title: "First" },
+          { id: "p2", title: "Second" },
+        ],
+        related: [{ id: "r1", title: "Neighbour" }],
+        total: 2,
+      },
+    };
+    expect(toolCitations(part)).toEqual([
+      { pageId: "p1", title: "First", href: "/p/p1" },
+      { pageId: "p2", title: "Second", href: "/p/p2" },
+    ]);
+  });
+
+  it("emits no citations for a searchPages miss even when related pages exist", () => {
+    const part: ToolUiPart = {
+      type: "tool-searchPages",
+      state: "output-available",
+      output: { results: [], related: [{ id: "r1", title: "Neighbour" }], total: 0 },
+    };
+    expect(toolCitations(part)).toEqual([]);
+  });
+
+  it("still cites a legacy (persisted) searchPages bare-array output", () => {
     const part: ToolUiPart = {
       type: "tool-searchPages",
       state: "output-available",

@@ -1,24 +1,20 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 
 /**
- * In-memory run-stream registry (#184 phase 1.5, step-aligned retention #491). A
- * durable agent run tees its SSE frames here (via
- * `pipeUIMessageStreamToResponse({ consumeSseStream })`) so a LATE tab — one that
- * reloaded, or opened after the starter dropped — can attach through
- * `GET /ai-chat/runs/:chatId/stream`, be handed the TAIL past the step it already
- * has persisted, and then follow the live tail as a normal streamer.
+ * In-memory run-stream registry. A durable agent run tees its SSE frames here
+ * (via `pipeUIMessageStreamToResponse({ consumeSseStream })`) so a late tab — one
+ * that reloaded, or opened after the starter dropped — can attach through
+ * `GET /ai-chat/runs/:chatId/stream`, receive the tail past the step it already
+ * has persisted, and then follow the live stream.
  *
- * This is deliberately single-process and best-effort: it holds nothing the DB
- * does not (the run + assistant row are the source of truth), so a process
- * restart simply drops in-flight entries and the client falls back to its
- * restore + degraded-poll path. The async `attach` return type is the seam for a
- * future phase-2 cross-process backend (Redis) — the interface does not change.
+ * Single-process and best-effort: it holds nothing the DB does not (the run +
+ * assistant row are the source of truth), so a restart drops in-flight entries
+ * and the client falls back to restore + degraded poll. The async `attach`
+ * return type is the seam for a cross-process backend (Redis).
  *
- * ── #491 step-aligned retention (the OOM fix) ────────────────────────────────
- * The old registry buffered up to 32MB of raw SSE frames PER active run (V8 ~2×
- * in memory) and, on attach, blasted the WHOLE buffer to the socket synchronously
- * with no drain — a handful of marathon runs on a 1GB container OOM'd. #491 caps
- * the ring at a few MB (env-tunable, default 4MB) and keeps it there by ROTATING:
+ * ── step-aligned retention ───────────────────────────────────────────────────
+ * The ring is capped at a few MB (env-tunable, default 4MB) and kept there by
+ * ROTATING:
  *
  *  - Every buffered frame is STAMPED with a step number at tee (see ingestFrame).
  *    Convention: the stamp of a frame is the number of `finish-step` parts seen
@@ -30,11 +26,9 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
  *
  *  - The ring rotates ONLY on a CONFIRMED persist of step N
  *    (`confirmPersistedStep`), dropping frames with `stamp < N` (those steps are
- *    now on disk and a fresh client seed carries them). A NON-confirmed step is
- *    never rotated away, so a persist FAILURE just makes the ring cover MORE
- *    (auto-safe). This is the anti-inversion rule: a naive "rotate in .then()"
- *    that rotated after an UNwritten step would drop a step nobody has → silent
- *    hole. Rotation is gated on a real, successful persist.
+ *    on disk and a fresh client seed carries them). A non-confirmed step is never
+ *    rotated away, so a persist failure just makes the ring cover more; rotating
+ *    after an unwritten step would drop a step nobody has.
  *
  *  - If the ring still exceeds its byte cap after rotation (a single fat step, or
  *    a lagging persist), the OLDEST frames are evicted to stay bounded. Evicting a
@@ -56,7 +50,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
  *     refetches (a larger N) and re-attaches.
  * The N cutoff is applied in ALL branches, INCLUDING the finished-retained replay.
  *
- * ── same-tick invariants (unchanged, still load-bearing) ─────────────────────
+ * ── same-tick invariants ─────────────────────────────────────────────────────
  * invariant 1: only the matching run may mutate/observe an entry (runId check).
  * invariant 2: retention deletes ONLY its own entry (a replacement may own the key).
  * invariant 3: open() over a live entry mirrors the done-path (subscribers released).
@@ -65,12 +59,12 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
  *              ingested frame is EITHER in the snapshot (buffered before the sync
  *              block, and the just-added subscriber never sees it) OR fanned out to
  *              the paused subscriber's `pending` (ingested after) — never both and
- *              never neither: no loss, no duplication. NOTE (#491): the controller
- *              now AWAITS the drain-respecting tail write BEFORE calling start(), so
- *              frames ingested during that await accumulate in `pending`; this is
- *              bounded by the subscriber cap (an overflow degrades start() to an
- *              end(), a 204-equivalent). It is the SYNCHRONOUS snapshot+registration
- *              — not a same-tick start() — that makes this correct.
+ *              never neither: no loss, no duplication. The controller awaits
+ *              the drain-respecting tail write BEFORE calling start(), so frames
+ *              ingested meanwhile accumulate in `pending`, bounded by the
+ *              subscriber cap (an overflow degrades start() to an end(), a
+ *              204-equivalent). The synchronous snapshot+registration — not a
+ *              same-tick start() — is what makes this correct.
  * invariant 5: the controller wires close-cleanup BEFORE any write.
  * invariant 6: no cross-run replay — the `anchor` (the client's assistant row id)
  *              must match this run's assistant id, or a foreign run's transcript
@@ -81,12 +75,11 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 export const RUN_STREAM_RETAIN_FINISHED_MS = 30_000;
 
 /**
- * DEFAULT per-run replay ring cap (#491, down from 32MB). SSE frames carry
- * UNcompacted tool outputs + framing overhead (×1.5–2 vs the persisted parts), so
- * a "2–3 large reads + reasoning" step routinely blows past 2MB; 4MB comfortably
- * holds a step or two of TAIL, which is all a resuming client needs (steps below
- * its persisted frontier come from the seed, not the ring). The ring stays bounded
- * because it rotates on every confirmed persist; this cap is only the ceiling for
+ * Default per-run replay ring cap. SSE frames carry uncompacted tool outputs +
+ * framing overhead (×1.5–2 vs the persisted parts), so a "2–3 large reads +
+ * reasoning" step routinely exceeds 2MB; 4MB holds a step or two of tail, which
+ * is all a resuming client needs (steps below its persisted frontier come from
+ * the seed). The ring rotates on every confirmed persist; this cap only bounds
  * the un-persisted tail between rotations. Env-tunable via
  * AI_CHAT_RUN_STREAM_MAX_BUFFER_BYTES (bytes); a 0/invalid value falls back to this.
  */
@@ -299,7 +292,7 @@ export class AiChatStreamRegistryService implements OnModuleDestroy {
 
   /**
    * Attach to a run's stream from the client's step frontier `n` (its persisted
-   * `stepsPersisted`). Async only for the phase-2 Redis seam — the body runs
+   * `stepsPersisted`). Async only for the cross-process seam — the body runs
    * synchronously so the tail SLICE and the subscriber registration happen in ONE
    * tick with no await between them (invariant 4).
    *
@@ -333,13 +326,10 @@ export class AiChatStreamRegistryService implements OnModuleDestroy {
     // Invariant 6: cross-run replay is forbidden. Before bind, assistantMessageId
     // is undefined and mismatches any anchor -> 204 -> client restore+poll path.
     if (anchor && entry.assistantMessageId !== anchor) return null;
-    // #491 regression guard (#137/#161 dup): a NOT-tail-aware client (no `n`)
-    // resuming a FINISHED run must 204 and poll — the old `finished && !expectLive`
-    // gate. Without this, a missing `n` collapsing to frontier 0 would serve the
-    // WHOLE tail of a finished, NON-rotated run (coverageFloor 0), and a
-    // parameterless client that never stripped its transcript would APPEND that
-    // full replay onto the steps it already shows -> duplicated text. A tail-aware
-    // client (n present, incl. n=0) still gets the tail past its frontier.
+    // A client without `n` resuming a FINISHED run gets 204 and polls: a missing
+    // `n` would collapse to frontier 0 and serve the whole tail of a non-rotated
+    // run, which a client that keeps its transcript would append -> duplicated
+    // text. A tail-aware client (n present, incl. n=0) gets the tail past n.
     if (entry.finished && n === null) return null;
     // A finished entry with NOTHING in the ring (aborted before the first frame,
     // or fully overflowed) has no tail to deliver -> 204 -> the client polls.

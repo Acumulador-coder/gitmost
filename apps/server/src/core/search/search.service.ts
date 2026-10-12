@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { SearchDTO, SearchSuggestionDTO } from './dto/search.dto';
 import {
   SearchResponseDto,
@@ -13,8 +13,9 @@ import { SpaceMemberRepo } from '@docmost/db/repos/space/space-member.repo';
 import { ShareRepo } from '@docmost/db/repos/share/share.repo';
 import { PagePermissionRepo } from '@docmost/db/repos/page/page-permission.repo';
 import { PageEmbeddingRepo } from '@docmost/db/repos/ai-chat/page-embedding.repo';
-// #599: SearchService no longer talks to AiService directly — every semantic read
-// goes through EmbeddingGenerationService, which embeds the query with the CURRENT
+import { ShareService } from '../share/share.service';
+// Every semantic read goes through EmbeddingGenerationService, which embeds the
+// query with the CURRENT
 // provider but reports the ACTIVE generation's fingerprint to filter rows by.
 import { EmbeddingGenerationService } from '../../integrations/ai/embedding-generation.service';
 import { AiEmbeddingNotConfiguredException } from '../../integrations/ai/ai-embedding-not-configured.exception';
@@ -43,10 +44,9 @@ const RRF_K = 60;
 // LITERALLY by a `col LIKE '%' || q || '%'` predicate. Without this a query of
 // `%` or `_` would match every row.
 //
-// S2 (acceptance #10): escaping is intentionally SYMMETRIC on `%` and `_` — the
-// ability to literal-search a bare `%` (or `_`) as a real character was
-// deliberately dropped. Such a query parses to no positive recall and returns
-// total:0 rather than matching everything. That trade-off is accepted.
+// Escaping is intentionally SYMMETRIC on `%` and `_`, so a bare `%` (or `_`)
+// cannot be searched as a literal character: such a query parses to no positive
+// recall and returns total:0 rather than matching everything.
 export function escapeLikePattern(raw: string): string {
   return (raw ?? '')
     .replace(/\\/g, '\\\\')
@@ -91,6 +91,39 @@ function getVectorStatementTimeoutMs(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 2000;
 }
 
+// #701: the most vector-only neighbours returned as `related` (first page only).
+const RELATED_LIMIT = 5;
+
+// Why an approved-mode share has no search: it publishes only the last saved
+// (manual) version, while the index (title, text, embeddings) holds the live
+// draft — searching it would leak the unpublished draft to anonymous readers.
+export const SHARE_SEARCH_DISABLED_APPROVED =
+  'Search is unavailable on this share because it publishes only saved versions.';
+
+/**
+ * Who is searching. There are exactly two kinds of caller:
+ *  - an authenticated user: `userId` is REQUIRED — the scope is an explicit
+ *    space (its Read right checked by the caller) or the user's member spaces,
+ *    and the page-permission filter always runs; `shareId` is ignored;
+ *  - the anonymous public-share reader: the scope is ONE share tree and nothing
+ *    else — `spaceId` is ignored, no page outside the share is ever looked up.
+ */
+export type SearchCaller =
+  | { userId: string; workspaceId: string }
+  | { anonymousShare: true; workspaceId: string };
+
+type SearchScope =
+  | { kind: 'none' }
+  | { kind: 'disabled'; reason: string }
+  | { kind: 'spaces'; spaceIds: string[]; workspaceId: string }
+  | {
+      kind: 'ids';
+      pageIds: string[];
+      workspaceId: string;
+      // The share root: `path` is cut there, never showing a title above it.
+      rootPageId: string;
+    };
+
 @Injectable()
 export class SearchService {
   private readonly logger = new Logger(SearchService.name);
@@ -106,6 +139,9 @@ export class SearchService {
     // the vector arm must filter by (NOT the live config's, which is the target of
     // an in-flight reindex) and reports its coverage for `semantic.state`.
     private embeddingGeneration: EmbeddingGenerationService,
+    // Share search honours the workspace/space "sharing disabled" settings
+    // exactly like the share page itself (isSharingAllowed).
+    private shareService: ShareService,
   ) {}
 
   // === #529 SQL fragment builders (parameterized AST, never string-concat) =====
@@ -256,8 +292,18 @@ export class SearchService {
 
   async searchPage(
     searchParams: SearchDTO,
-    opts: { userId?: string; workspaceId: string },
+    caller: SearchCaller,
   ): Promise<SearchResponseDto> {
+    const anonymous = 'anonymousShare' in caller && caller.anonymousShare;
+    // Fail closed: a non-anonymous search without a user would run with no
+    // membership scope and no page-permission filter.
+    const userId = anonymous ? null : (caller as { userId: string }).userId;
+    if (!anonymous && !userId) {
+      throw new Error(
+        'searchPage: an authenticated search requires a userId (anonymous search is share-scoped only)',
+      );
+    }
+    const workspaceId = caller.workspaceId;
     const rawQuery = (searchParams.query ?? '').trim();
     const mode = defaultBooleanMode();
     const match = (searchParams.match as SearchMatchMode) ?? 'auto';
@@ -281,6 +327,7 @@ export class SearchService {
 
     const empty = (reason?: string): SearchResponseDto => ({
       items: [],
+      related: [],
       total: 0,
       hasMore: false,
       truncatedAtCap: false,
@@ -296,12 +343,24 @@ export class SearchService {
     }
 
     // --- Resolve scope (A6). --------------------------------------------------
-    const scope = await this.resolveScope(searchParams, opts);
+    const scope = await this.resolveScope(searchParams, workspaceId, userId);
     if (scope.kind === 'none') return empty();
+    if (scope.kind === 'disabled') {
+      return { ...empty(), disabledReason: scope.reason };
+    }
 
     // --- Optional parentPageId subtree scope. ---------------------------------
     let descendantIds: string[] | null = null;
     if (searchParams.parentPageId) {
+      // Share scope: the subtree root must be a page of the share. An arbitrary
+      // id is never looked up — that was a page-existence oracle across the
+      // workspace (and a 500 on a non-uuid id) for anonymous readers.
+      if (
+        scope.kind === 'ids' &&
+        !scope.pageIds.includes(searchParams.parentPageId)
+      ) {
+        return empty();
+      }
       const descendants = await this.pageRepo.getPageAndDescendants(
         searchParams.parentPageId,
         { includeContent: false },
@@ -359,11 +418,11 @@ export class SearchService {
         // (see EmbeddingGenerationService.embedQueryForActiveGeneration).
         const { vector, fingerprint, generation } =
           await this.embeddingGeneration.embedQueryForActiveGeneration(
-            opts.workspaceId,
+            workspaceId,
             rawQuery,
           );
 
-        // #599 (D2) — the MODEL of the served generation changed under us. The rows
+        // The MODEL of the served generation changed under us. The rows
         // of the active generation and this query vector belong to two independently
         // trained embedding spaces: their cosine is noise (the spaces are related by
         // an arbitrary rotation), and RRF would inject those arbitrarily ranked pages
@@ -379,7 +438,7 @@ export class SearchService {
           semanticStale = true;
           semanticReason = 'stale';
           this.logger.warn(
-            `search.semantic.model-changed workspace=${opts.workspaceId} ` +
+            `search.semantic.model-changed workspace=${workspaceId} ` +
               `active_model=${generation.activeModel ?? 'unknown'} ` +
               `config_model=${generation.targetModel} (vector arm disabled: the served ` +
               `generation lives in a different embedding space; lexical only until the ` +
@@ -394,10 +453,10 @@ export class SearchService {
             limit: getVectorCandidates(),
             // Filter page_embeddings by (immutable) workspace_id directly, so the
             // composite index bites on its leading column and candidates are
-            // workspace-scoped at the embedding level (#530 review WARNING 2). Space
-            // scoping stays on the pages join only — page_embeddings.space_id can be
-            // STALE after a cross-space move, so filtering it here would drop a moved
-            // page's vector hit (re-review regression fix).
+            // workspace-scoped at the embedding level. Space scoping stays on the
+            // pages join only — page_embeddings.space_id can be STALE after a
+            // cross-space move, so filtering it here would drop a moved page's
+            // vector hit.
             workspaceId: scope.workspaceId,
           });
           semanticAvailable = true;
@@ -413,18 +472,14 @@ export class SearchService {
           // and simply report the state without the numbers (a swap in flight is
           // still reported stale, that fact needs no DB count).
           //
-          // #599 (R3) — when the COUNT fails, coverage is UNKNOWN, and the DTO
-          // defines `full` as "the active generation covers every page". We must not
-          // claim that on no evidence: on a legacy workspace with 0 indexed pages a
-          // single failed COUNT would turn an honest `stale` into a lying `full`
-          // ("semantic search is complete") while the index is empty. Unknown
-          // coverage therefore reports `stale` (numbers omitted) — the honest,
-          // safe-direction answer: "the arm ran, but we cannot prove it is complete;
-          // a reindex may be needed".
+          // When the COUNT fails, coverage is UNKNOWN, and the DTO defines `full`
+          // as "the active generation covers every page" — so unknown coverage
+          // reports `stale` (numbers omitted): a legacy workspace with 0 indexed
+          // pages must not report `full` because of a failed COUNT.
           semanticStale = generation.swapping;
           try {
             const coverage = await this.embeddingGeneration.getCoverage(
-              opts.workspaceId,
+              workspaceId,
               generation.active,
             );
             semanticCoverage = {
@@ -435,7 +490,7 @@ export class SearchService {
           } catch {
             semanticStale = true;
             this.logger.debug(
-              `search.semantic.coverage-unavailable workspace=${opts.workspaceId} ` +
+              `search.semantic.coverage-unavailable workspace=${workspaceId} ` +
                 `(coverage unknown -> reporting state=stale)`,
             );
           }
@@ -447,7 +502,7 @@ export class SearchService {
           // floods WARN once per search request.
           semanticReason = 'no-provider';
           this.logger.debug(
-            `search.semantic.no-provider workspace=${opts.workspaceId}`,
+            `search.semantic.no-provider workspace=${workspaceId}`,
           );
         } else {
           // A provider IS configured but the embed call failed/timed out — a real
@@ -455,26 +510,27 @@ export class SearchService {
           // — no query text/secrets.
           semanticReason = 'degraded';
           this.logger.warn(
-            `search.semantic.degraded reason=degraded workspace=${opts.workspaceId}`,
+            `search.semantic.degraded reason=degraded workspace=${workspaceId}`,
           );
         }
       }
     }
-    // --- Ranked candidate ids (ALL matches, RRF order). -----------------------
+    // --- Ranked candidate ids (ALL candidates, RRF order). --------------------
     // Lexical branches ranked SEPARATELY (FTS by ts_rank_cd, substring by tier);
     // when a query vector is available a third VECTOR branch is fused over the
     // UNION of lexical + vector candidates. RRF: score = Σ w/(k + rank_branch).
-    // Deterministic ORDER BY rrf DESC, id so pagination never dupes/skips (A4,
-    // acceptance #8). `total` is thus the union size (lexical ∪ vector top-N),
-    // post-permission-filter — a documented change from Phase A's exact lexical
-    // count (#530). On degrade the query is byte-identical to Phase A.
+    // Deterministic ORDER BY rrf DESC, id so pagination never dupes/skips (A4).
+    // Each id carries `lexical` — whether the page actually matches the query.
+    // Only those are matches (`items`/`total`); the vector arm re-ranks them via
+    // RRF, while vector-only neighbours go to `related` and are never counted. On
+    // degrade the query is the plain lexical one.
     //
     // The fused query is bounded by a per-statement timeout (see runRankedQuery):
     // if the brute-force vector scan is cancelled (SQLSTATE 57014) we degrade to
     // the byte-identical lexical path — search returns lexical results, never
     // hangs, never 500s. Only the timeout is caught here; any OTHER SQL error
     // propagates. The permission filter below stays outside, unchanged.
-    let orderedIds: string[];
+    let orderedIds: { id: string; lexical: boolean }[];
     try {
       orderedIds = await this.runRankedQuery(
         candidateSql,
@@ -491,7 +547,7 @@ export class SearchService {
         semanticCoverage = undefined;
         semanticStale = false;
         this.logger.warn(
-          `search.semantic.degraded reason=degraded workspace=${opts.workspaceId} (vector statement timeout)`,
+          `search.semantic.degraded reason=degraded workspace=${workspaceId} (vector statement timeout)`,
         );
         // Re-run the exact Phase-A lexical path (no vector arm, no timeout).
         orderedIds = await this.runRankedQuery(
@@ -505,14 +561,14 @@ export class SearchService {
       }
     }
 
-    // #599 semantic state:
+    // Semantic state:
     //   'off'   — the arm never ran and there is nothing to reindex about it
     //             (kill-switch / no provider / a degrade).
     //   'stale' — either the arm RAN over an incompletely covered generation
     //             (`available: true` — a partially covered generation still returns
     //             real hits), or the arm was deliberately NOT raised because the
     //             served generation's model no longer matches the configured one
-    //             (D2: `available: false`, lexical only, a reindex will fix it).
+    //             (`available: false`, lexical only, a reindex will fix it).
     //   'full'  — the arm ran over a fully covered, same-model generation.
     if (semanticAvailable && semanticStale && !semanticReason) {
       semanticReason = 'stale';
@@ -538,17 +594,23 @@ export class SearchService {
     // stays trivially exact); otherwise a SQL anti-join drops hidden pages. An
     // error PROPAGATES (500) — it never degrades to an empty lexical result, so
     // hidden-page cardinality never leaks into `total`. The share path is already
-    // permission-filtered by getPageAndDescendantsExcludingRestricted.
-    if (opts.userId && scope.kind === 'spaces' && orderedIds.length > 0) {
+    // permission-filtered by getPageAndDescendantsExcludingRestricted; every
+    // other search is an authenticated one (userId checked above).
+    if (!anonymous && orderedIds.length > 0) {
       const accessible = await this.pagePermissionRepo.filterAccessiblePageIds({
-        pageIds: orderedIds,
-        userId: opts.userId,
+        pageIds: orderedIds.map((r) => r.id),
+        userId,
         spaceId: searchParams.spaceId,
-        workspaceId: opts.workspaceId,
+        workspaceId,
       });
       const accessibleSet = new Set(accessible);
-      orderedIds = orderedIds.filter((id) => accessibleSet.has(id));
+      orderedIds = orderedIds.filter((r) => accessibleSet.has(r.id));
     }
+
+    // #701 — split the permitted ids: lexical matches vs vector-only neighbours.
+    // Both keep RRF order; for the neighbours that equals vec_distance order.
+    const matchIds = orderedIds.filter((r) => r.lexical).map((r) => r.id);
+    const relatedIds = orderedIds.filter((r) => !r.lexical).map((r) => r.id);
 
     // W1 — CANDIDATE_CAP bounds pagination REACHABILITY (JS-side), NOT query
     // compute. The `ranked` CTE deliberately has no SQL LIMIT: an exact `total`
@@ -559,45 +621,64 @@ export class SearchService {
     // reachable window afterwards (rows past it are unreachable → truncatedAtCap).
     // Accepted for the small-tenant fork target — do NOT convert `cap` into a SQL
     // LIMIT thinking it bounds compute; it does not, and doing so breaks the exact
-    // total contract (acceptance #8/#11).
-    const total = orderedIds.length;
+    // total contract. `total` counts the permitted LEXICAL matches only —
+    // vector-only neighbours never enter it.
+    const total = matchIds.length;
     const truncatedAtCap = total > cap;
-    const window = orderedIds.slice(0, cap);
+    const window = matchIds.slice(0, cap);
     const pageIds = window.slice(offset, offset + limit);
     const hasMore = offset + pageIds.length < window.length;
+    const relatedPageIds =
+      offset === 0 ? relatedIds.slice(0, RELATED_LIMIT) : [];
+    // An anonymous share reader never gets the semantic block: its state and
+    // coverage counters describe the whole workspace, private spaces included.
+    const semanticOut = anonymous ? {} : { semantic };
 
-    if (pageIds.length === 0) {
+    if (pageIds.length === 0 && relatedPageIds.length === 0) {
       return {
         items: [],
+        related: [],
         total,
         hasMore,
         truncatedAtCap,
         offset,
         query: queryMeta,
-        semantic,
+        ...semanticOut,
       };
     }
 
-    // --- Detail fetch for the page slice only (ts_headline/snippet are costly, so
-    //     compute them ONLY for the returned rows), preserving RRF order. -------
-    const items = await this.fetchDetails(pageIds, parsed, titleOnly);
+    // --- Detail fetch for the page slice + the related neighbours only
+    //     (ts_headline/snippet are costly, so compute them ONLY for the returned
+    //     rows) in one call, preserving RRF order, then split. ---------------
+    const details = await this.fetchDetails(
+      [...pageIds, ...relatedPageIds],
+      parsed,
+      titleOnly,
+      scope.kind === 'ids' ? scope.rootPageId : null,
+      anonymous,
+    );
+    const pageIdSet = new Set(pageIds);
+    const items = details.filter((d) => pageIdSet.has(d.id));
+    const related = details.filter((d) => !pageIdSet.has(d.id));
 
     return {
       items,
+      related,
       total,
       hasMore,
       truncatedAtCap,
       offset,
       query: queryMeta,
-      semantic,
+      ...semanticOut,
     };
   }
 
   /**
-   * Run the ranked-candidate-ids query and return the ids in RRF order (#530).
+   * Run the ranked-candidate-ids query and return the ids in RRF order,
+   * each flagged `lexical` when the page actually matches the query.
    *
    * When `vectorArm` is null (degrade / semantic off / no query vector) this runs
-   * the BYTE-IDENTICAL Phase-A 2-branch lexical query — the semantic layer must
+   * the plain 2-branch lexical query — the semantic layer must
    * be a pure superset that never changes lexical behaviour on degrade.
    *
    * When a vector arm is supplied it is UNION ALL'd with the lexical arm into one
@@ -606,14 +687,16 @@ export class SearchService {
    * per-branch row_number; the final ORDER BY fuses the three legs with RRF,
    * adding the vector leg ONLY for rows that have a vec_distance (a lexical-only
    * hit contributes 0 to the vector leg, and vice-versa). W_VEC weights the
-   * vector leg.
+   * vector leg. A row is `lexical` when it came from the lexical arm, i.e. passed
+   * the match predicate; every row of the lexical-only path is lexical by
+   * construction.
    */
   private async runRankedQuery(
     candidateSql: RawBuilder<unknown>,
     parsed: ParsedQuery,
     titleOnly: boolean,
     vectorArm: RawBuilder<unknown> | null,
-  ): Promise<string[]> {
+  ): Promise<{ id: string; lexical: boolean }[]> {
     if (!vectorArm) {
       // Phase-A lexical path — DO NOT change (byte-identical on degrade, #529).
       const rankedRows = await sql<{ id: string }>`
@@ -637,7 +720,7 @@ export class SearchService {
           + (CASE WHEN sub_tier IS NOT NULL THEN 1.0/(${RRF_K} + rn_sub) ELSE 0 END) DESC,
           id ASC
       `.execute(this.db);
-      return rankedRows.rows.map((r) => r.id);
+      return rankedRows.rows.map((r) => ({ id: r.id, lexical: true }));
     }
 
     // #530 fused 3-branch RRF over lexical ∪ vector candidates. The lexical arm
@@ -656,7 +739,7 @@ export class SearchService {
       await sql`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`.execute(
         trx,
       );
-      const rankedRows = await sql<{ id: string }>`
+      const rankedRows = await sql<{ id: string; lexical: boolean }>`
         WITH candidates AS (
           (SELECT pages.id AS id,
                   ${this.ftsScoreExpr(parsed)} AS fts_score,
@@ -671,18 +754,23 @@ export class SearchService {
           SELECT id,
                  MAX(fts_score) AS fts_score,
                  MAX(sub_tier) AS sub_tier,
-                 MIN(vec_distance) AS vec_distance
+                 MIN(vec_distance) AS vec_distance,
+                 -- #701: only the lexical arm emits a NULL vec_distance, so this
+                 -- marks pages that passed candidateSql (the real match
+                 -- predicate) — including +required-only queries, whose
+                 -- fts_score/sub_tier stay NULL because they score positives only.
+                 bool_or(vec_distance IS NULL) AS lexical
           FROM candidates
           GROUP BY id
         ),
         ranked AS (
-          SELECT id, fts_score, sub_tier, vec_distance,
+          SELECT id, fts_score, sub_tier, vec_distance, lexical,
                  row_number() OVER (ORDER BY fts_score DESC NULLS LAST, id) AS rn_fts,
                  row_number() OVER (ORDER BY sub_tier DESC NULLS LAST, id) AS rn_sub,
                  row_number() OVER (ORDER BY vec_distance ASC NULLS LAST, id) AS rn_vec
           FROM agg
         )
-        SELECT id
+        SELECT id, lexical
         FROM ranked
         ORDER BY
           (CASE WHEN fts_score IS NOT NULL THEN 1.0/(${RRF_K} + rn_fts) ELSE 0 END)
@@ -690,44 +778,54 @@ export class SearchService {
           + (CASE WHEN vec_distance IS NOT NULL THEN ${wVec}::float/(${RRF_K} + rn_vec) ELSE 0 END) DESC,
           id ASC
       `.execute(trx);
-      return rankedRows.rows.map((r) => r.id);
+      return rankedRows.rows.map((r) => ({ id: r.id, lexical: r.lexical }));
     });
   }
 
-  // Resolve the search scope: explicit space, the authed user's member spaces, or
-  // a public share's descendant id set (permission-filtered). Mirrors the legacy
-  // branch logic (A6) but returns a small tagged union.
+  // Resolve the search scope: for an authenticated caller (`userId` set) an
+  // explicit space or the user's member spaces; for the anonymous caller
+  // (`userId` null) ONLY a public share's descendant id set (permission-
+  // filtered). Returns a small tagged union.
   private async resolveScope(
     searchParams: SearchDTO,
-    opts: { userId?: string; workspaceId: string },
-  ): Promise<
-    | { kind: 'none' }
-    | { kind: 'spaces'; spaceIds: string[]; workspaceId: string }
-    | { kind: 'ids'; pageIds: string[]; workspaceId: string }
-  > {
-    if (searchParams.spaceId) {
-      return {
-        kind: 'spaces',
-        spaceIds: [searchParams.spaceId],
-        workspaceId: opts.workspaceId,
-      };
-    }
-
-    if (opts.userId && !searchParams.shareId) {
-      const spaceIds = await this.spaceMemberRepo.getUserSpaceIds(opts.userId);
+    workspaceId: string,
+    userId: string | null,
+  ): Promise<SearchScope> {
+    if (userId) {
+      if (searchParams.spaceId) {
+        return {
+          kind: 'spaces',
+          spaceIds: [searchParams.spaceId],
+          workspaceId,
+        };
+      }
+      const spaceIds = await this.spaceMemberRepo.getUserSpaceIds(userId);
       if (spaceIds.length === 0) return { kind: 'none' };
-      return { kind: 'spaces', spaceIds, workspaceId: opts.workspaceId };
+      return { kind: 'spaces', spaceIds, workspaceId };
     }
 
-    if (searchParams.shareId && !opts.userId) {
+    if (searchParams.shareId) {
+      // The same gate as the share page itself: a missing share, a share of
+      // another workspace and a share whose workspace/space has sharing
+      // disabled are all the same 404.
       const share = await this.shareRepo.findById(searchParams.shareId);
-      if (!share || share.workspaceId !== opts.workspaceId) {
-        return { kind: 'none' };
+      if (!share || share.workspaceId !== workspaceId) {
+        throw new NotFoundException('Share not found');
+      }
+      const sharingAllowed = await this.shareService.isSharingAllowed(
+        workspaceId,
+        share.spaceId,
+      );
+      if (!sharingAllowed) {
+        throw new NotFoundException('Share not found');
       }
       const isRestricted = await this.pagePermissionRepo.hasRestrictedAncestor(
         share.pageId,
       );
       if (isRestricted) return { kind: 'none' };
+      if (share.publishedMode === 'approved') {
+        return { kind: 'disabled', reason: SHARE_SEARCH_DISABLED_APPROVED };
+      }
 
       const pageIds: string[] = [];
       if (share.includeSubPages) {
@@ -742,17 +840,26 @@ export class SearchService {
         pageIds.push(share.pageId);
       }
       if (pageIds.length === 0) return { kind: 'none' };
-      return { kind: 'ids', pageIds, workspaceId: opts.workspaceId };
+      return {
+        kind: 'ids',
+        pageIds,
+        workspaceId,
+        rootPageId: share.pageId,
+      };
     }
 
     return { kind: 'none' };
   }
 
   // Fetch the display superset (A7) for the given page ids, in the given order.
+  // `pathRootId` (share scope) cuts every `path` at that page. `anonymous` (the
+  // share reader) omits `space` and `creatorId` from every item.
   private async fetchDetails(
     pageIds: string[],
     parsed: ParsedQuery,
     titleOnly: boolean,
+    pathRootId: string | null,
+    anonymous: boolean,
   ): Promise<SearchResultDto[]> {
     // S1: rank/highlight/matchedFields must reflect required terms too, not just
     // bare positives — a required-only query like `+кофейня` (no bare positive)
@@ -854,7 +961,7 @@ export class SearchService {
     const rows: any[] = await q.execute();
 
     const byId = new Map<string, any>(rows.map((r) => [r.id, r]));
-    const pathById = await this.buildAncestorPaths(pageIds);
+    const pathById = await this.buildAncestorPaths(pageIds, pathRootId);
 
     const items: SearchResultDto[] = [];
     for (const id of pageIds) {
@@ -883,8 +990,7 @@ export class SearchService {
         slugId: r.slugId,
         icon: r.icon,
         title: r.title,
-        space: r.space,
-        creatorId: r.creatorId,
+        ...(anonymous ? {} : { space: r.space, creatorId: r.creatorId }),
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
         rank,
@@ -905,12 +1011,17 @@ export class SearchService {
    * walking UP parentPageId. Returns hitId → ancestor titles ordered root →
    * direct parent (the hit's own title excluded).
    *
-   * A8 fix: the recursive walk now skips soft-deleted ancestors (`deleted_at IS
-   * NULL`) and stays within the hit's own space, so a deleted or cross-space
-   * ancestor's title can no longer leak into `path`.
+   * The recursive walk skips soft-deleted ancestors (`deleted_at IS NULL`) and
+   * stays within the hit's own space, so a deleted or cross-space ancestor's
+   * title never leaks into `path`.
+   *
+   * `rootPageId` (share scope) stops the walk at the share root: its title is
+   * the top of every `path`, and no title above the share ever leaves the
+   * server to an anonymous reader.
    */
   private async buildAncestorPaths(
     hitIds: string[],
+    rootPageId: string | null,
   ): Promise<Map<string, string[]>> {
     const result = new Map<string, string[]>();
     if (hitIds.length === 0) return result;
@@ -936,6 +1047,9 @@ export class SearchService {
               // A8: don't cross into a deleted ancestor or another space.
               .where('p.deletedAt', 'is', null)
               .whereRef('p.spaceId', '=', 'a.spaceId')
+              .$if(Boolean(rootPageId), (qb) =>
+                qb.where('a.pageId', '!=', rootPageId),
+              )
               .select([
                 'a.hitId as hitId',
                 'p.id as pageId',

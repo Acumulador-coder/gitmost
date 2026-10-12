@@ -1,15 +1,13 @@
 /**
- * Legacy footnote advisory for imported Markdown (issue #166, reduced in #414).
+ * Legacy footnote advisory for imported Markdown.
  *
- * Since #293 STEP 5 the canonical import form is inline `^[body]` footnotes
- * (handled by `@docmost/prosemirror-markdown`). LEGACY reference-style
- * `[^id]: …` definition markup is now INERT on import — the importer leaves it as
- * literal text — so authoring it silently produces broken footnotes (the #410
- * incident class). Rather than the old, elaborate diagnostics of every problem
- * SHAPE (dangling/duplicate/empty/in-table) that no longer describe what the
- * importer builds, this module surfaces ONE advisory warning whenever legacy
- * reference-style definition syntax is present, nudging the author to the inline
- * form. It never changes the document — the importer still creates the page.
+ * The canonical import form is inline `^[body]` footnotes (handled by
+ * `@docmost/prosemirror-markdown`). Reference-style `[^id]: …` definition
+ * markup is INERT on import — the importer leaves it as literal text — so
+ * authoring it silently produces broken footnotes. This module surfaces ONE
+ * advisory warning whenever legacy reference-style definition syntax is
+ * present, nudging the author to the inline form. It never changes the
+ * document — the importer still creates the page.
  *
  * The scan is fence-aware: a `[^id]:` line inside a ``` / ~~~ code block is
  * example text, not markup, so it never triggers the warning.

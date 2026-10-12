@@ -17,11 +17,14 @@ export {
   serializeDocmostMarkdownBody,
   parseDocmostMarkdown,
   convertProseMirrorToMarkdown,
-  markdownToProseMirror,
   canonicalizeContent,
   docsCanonicallyEqual,
 } from "@docmost/prosemirror-markdown";
 export type { DocmostMdMeta } from "@docmost/prosemirror-markdown";
+// The converter's markdownToProseMirror, same signature, run on the converter
+// worker pool (input budget + deadline) so a big page never blocks the
+// caller's event loop.
+export { markdownToProseMirror } from "./engine/convert-pool.js";
 
 // Pure engine (no IO): reconcile planner, vault layout, sanitize, stabilize,
 // loop-guard body hash.
@@ -63,20 +66,25 @@ export {
   BOT_AUTHOR_NAME,
   BOT_AUTHOR_EMAIL,
   DEFAULT_BRANCH,
+  LAST_EXPORT_REF,
+  PUSH_BUDGET,
 } from "./engine/git.js";
-export type { DiffEntry, MergeResult, CommitOptions } from "./engine/git.js";
+export type { DiffEntry, CommitOptions, TreeEntry } from "./engine/git.js";
 
 export {
   readExisting,
   computePullActions,
-  applyPullActions,
+  logDeletionDecision,
+  buildExportTree,
 } from "./engine/pull.js";
 export type {
   ReadExistingDeps,
   PullActionsInput,
   PullActions,
-  ApplyPullActionsDeps,
-  ApplyResult,
+  ExportTreeDeps,
+  ExportTreePlan,
+  ExportTreeResult,
+  PullFailure,
 } from "./engine/pull.js";
 
 export {
@@ -85,11 +93,6 @@ export {
   applyPushActions,
   runPush,
   parentFolderFile,
-  LAST_PUSHED_REF,
-  DOCMOST_BRANCH,
-  LOCAL_AUTHOR_NAME,
-  LOCAL_AUTHOR_EMAIL,
-  LOCAL_SOURCE_TRAILER,
 } from "./engine/push.js";
 export type {
   CreateAction,
@@ -102,8 +105,7 @@ export type {
   PushActionsInput,
   MetaSide,
   ApplyPushDeps,
-  WrittenBackPage,
-  PushedPageRecord,
+  CreatedPage,
   PushFailure,
   PushNoop,
   ApplyPushResult,
@@ -113,18 +115,16 @@ export type {
 
 export type { Settings } from "./engine/settings.js";
 
-export { runCycle } from "./engine/cycle.js";
+// What a cycle stopped by its AbortSignal throws.
+export { CycleAbortedError } from "./engine/abort.js";
+
+export { runCycle, prepareVault } from "./engine/cycle.js";
 export type {
   RunCycleDeps,
   RunCycleResult,
-  CycleFs,
+  PrepareVaultDeps,
 } from "./engine/cycle.js";
-
-export {
-  assertVaultPathSafe,
-  isWithinRoot,
-  VaultPathUnsafeError,
-} from "./engine/path-guard.js";
-export type { PathGuardIo, VaultPathUnsafeReason } from "./engine/path-guard.js";
+export { upgradeLegacyVault } from "./engine/upgrade.js";
+export type { UpgradeVaultDeps } from "./engine/upgrade.js";
 
 export { parsePageFile, serializePageFile } from "@docmost/prosemirror-markdown";

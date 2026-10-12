@@ -12,7 +12,7 @@ import { WsTreeService } from '../ws-tree.service';
  *
  * Listens to page lifecycle domain events and broadcasts the corresponding
  * tree mutation to everyone in the space room. Because the events carry thin
- * node snapshots (variant A), this listener performs NO DB reads — that is what
+ * node snapshots, this listener performs NO DB reads — that is what
  * keeps it safe against the in-transaction visibility race (a synchronous
  * SELECT here could run before the emitting `trx` committed).
  *

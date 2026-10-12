@@ -268,17 +268,15 @@ export class TransclusionService {
    * permission-filtered. EVERY consumer of these rows MUST permission-filter at
    * read time (as `lookupTemplate` does via `filterViewerAccessiblePageIds`).
    *
-   * NOTE (write-only graph — intentional, not dead): as of now the
+   * NOTE (write-only graph — intentional, not dead): the
    * `page_template_references` table is WRITE-ONLY in production. It is populated
    * by three paths (this diff-sync, `insertTemplateReferencesForPages` for new
    * pages, and the collab persistence flush) but has NO production reader: the
    * only read of the table is `findByReferencePageId` below, used purely to
-   * compute this sync's insert/delete diff — there is no reverse-navigation
-   * consumer yet (issue #34's dead `findReferencePageIdsBySource` reader was
-   * already removed). The graph is retained deliberately for an upcoming
-   * "used in N pages" reverse-navigation consumer; keep writing it so that
-   * feature has correct history when it lands. Do not remove the write graph or
-   * its migration just because nothing reads it today. (See Gitea #94.)
+   * compute this sync's insert/delete diff. The graph is retained deliberately
+   * for an upcoming "used in N pages" reverse-navigation consumer; keep writing
+   * it so that feature has correct history when it lands. Do not remove the
+   * write graph or its migration just because nothing reads it today.
    */
   async syncPageTemplateReferences(
     referencePageId: string,
@@ -713,12 +711,10 @@ export class TransclusionService {
       throw new NotFoundException('Sync block not found');
     }
 
-    let content: unknown;
-    let copies: ReturnType<typeof rewriteAttachmentsForUnsync>['copies'];
-    ({ content, copies } = rewriteAttachmentsForUnsync(
+    const { content, copies } = rewriteAttachmentsForUnsync(
       transclusion.content,
       () => uuid7(),
-    ));
+    );
 
     if (copies.length > 0) {
       const oldIds = copies.map((c) => c.oldAttachmentId);

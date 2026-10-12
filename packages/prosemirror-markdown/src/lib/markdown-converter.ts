@@ -61,19 +61,16 @@ export interface ConvertProseMirrorToMarkdownOptions {
    * When true, an inline comment anchor whose Comment mark is `resolved`
    * emits its BARE text (no `<span data-comment-id …>` wrapper), so an agent
    * reading the page never sees resolved-comment anchors. ACTIVE (unresolved)
-   * anchors still emit their wrapper. Defaults to false — a zero-behavior
-   * change for every existing caller, including the lossless git-sync export
-   * path where resolved anchors MUST be preserved for round-tripping.
+   * anchors still emit their wrapper. Defaults to false: the lossless git-sync
+   * export path MUST preserve resolved anchors for round-tripping.
    */
   dropResolvedCommentAnchors?: boolean;
   /**
    * Optional sink for LOSS warnings. When the serializer reaches a node or mark
    * type it has no dedicated case for, it degrades gracefully (flattens an
-   * unknown node to its children, drops an unknown mark) — historically a SILENT
-   * data loss. When this array is provided, one human-readable message per such
-   * event is pushed here so the caller can observe (and log) what was degraded.
-   * Not provided by default -> behavior is byte-identical to before for existing
-   * callers.
+   * unknown node to its children, drops an unknown mark). When this array is
+   * provided, one human-readable message per such event is pushed here so the
+   * caller can observe (and log) what was degraded.
    */
   warnings?: string[];
   /**
@@ -102,6 +99,97 @@ export interface ConvertProseMirrorToMarkdownOptions {
 const LIST_MARKER_SEPARATOR = "<!-- -->";
 
 /**
+ * True for a mark whose markdown form is a BARE, collidable, FLANKING-SENSITIVE
+ * delimiter run: `**` (bold), `*` (italic), `~~` (strike), `==` (a highlight
+ * with NO color — a colored one emits `<mark style=…>` HTML instead).
+ *
+ * This is the single predicate behind three invariants, so it lives at module
+ * scope and is exported rather than duplicated:
+ *   1. edge whitespace is expelled outside the delimiters for exactly these
+ *      marks (`applyInlineMark` → wrapFlankingDelimited);
+ *   2. exactly these delimiters can collide with a neighbouring code span's
+ *      backticks, which drives the code-emphasis run coalescing and its
+ *      lossless-HTML flanking fallback;
+ *   3. exactly the text nodes carrying one of these marks go through the
+ *      edge-punctuation flanking guard (renderInlineChildren →
+ *      bareDelimitersFlank).
+ * Every other mark (link, underline, sub/sup, spoiler, comment anchor,
+ * textStyle, colored highlight) has SELF-DELIMITING boundaries, where edge
+ * whitespace is legal and must be left where the author put it.
+ */
+export function isBareDelimiterMark(m: any): boolean {
+  return (
+    m?.type === "bold" ||
+    m?.type === "italic" ||
+    m?.type === "strike" ||
+    (m?.type === "highlight" && !m?.attrs?.color)
+  );
+}
+
+/**
+ * Wrap `text` in a BARE markdown delimiter run (`**`, `*`, `~~`, `==`), moving
+ * any leading/trailing whitespace OUTSIDE the delimiters first — the standard
+ * serializer behaviour prosemirror-markdown calls `expelEnclosingWhitespace`.
+ *
+ * WHY: these delimiters are FLANKING-SENSITIVE. A closing run preceded by
+ * whitespace is not right-flanking and an opening run followed by whitespace is
+ * not left-flanking, so `**Model: **rest` NEVER closes: the mark is SILENTLY
+ * LOST and two literal `**` are stamped into the document text. The corrupted
+ * form is byte-stable (it re-exports identically), so the byte-fixpoint property
+ * cannot see it — only the semantic round-trip can. Expelling the whitespace
+ * emits `**Model:** rest`, which renders identically and re-imports with the
+ * mark intact.
+ *
+ * WHITESPACE CLASS: JS `\s`, because that is exactly what every parser on this
+ * path uses — marked's emphasis flanking classes are `[\s\p{P}\p{S}]` /
+ * `[^\s\p{P}\p{S}]`, its GFM strikethrough rule is `^(~~?)(?=[^\s~])…`, and this
+ * repo's `==` highlight extension (markdown-to-prosemirror.ts) is `^==(?=\S)…`.
+ * So U+00A0 NBSP and the other Unicode spaces ARE flanking whitespace here —
+ * measured: a bold run ending in NBSP loses its mark exactly like one ending in
+ * U+0020.
+ *
+ * THIS FUNCTION only MOVES the character — it never deletes it. END-TO-END,
+ * though, the expelled character can still be dropped by the markdown layer,
+ * and that is ACCEPTED (it is dropped in the exact same positions when it is a
+ * plain unmarked space, so nothing is made worse; the mark is what is rescued):
+ *   • at a LINE EDGE — leading indentation is stripped by
+ *     escapeLeadingBlockTrigger (measured: no encoding of it survives import,
+ *     see that function), and a trailing space is removed by the final `.trim()`
+ *     / eaten as a hardBreak marker;
+ *   • on a CONTINUATION line after a hardBreak, for the same reason;
+ *   • at a TABLE-CELL edge, where the cell text is trimmed on re-import;
+ *   • when it MERGES with an adjacent space in the neighbouring text, in which
+ *     case the two collapse to one on re-import (and the doc re-exports with one
+ *     — a single one-time normalization, byte-stable from the second pass on).
+ * A NBSP is NOT markdown indentation and is NOT stripped by the escaper, but
+ * everything that trims with JS `trim()` (which eats NBSP) still drops it: the
+ * very start/end of the whole document (the converter's final `.trim()`), the
+ * edges of an ATX heading's content, and the edges of a table cell.
+ *
+ * A run with NO non-whitespace character is emitted BARE (no delimiters at all):
+ * CommonMark cannot express emphasis over pure whitespace, and `** **` would
+ * re-import as two literal asterisks — the very data loss this closes.
+ *
+ * Also called with `<strong>`/`</strong>`-style tags for the flanking fallback
+ * (applyInlineMark `htmlDelimiters`): an HTML parser drops whitespace at the
+ * edge of the tag's content just as markdown does, so the same expulsion keeps
+ * that form byte-stable.
+ */
+function wrapFlankingDelimited(
+  text: string,
+  open: string,
+  close: string,
+): string {
+  if (!/\S/.test(text)) return text;
+  // trimStart/trimEnd strip exactly the `\s` class, in linear time (a `/\s*$/`
+  // regex is quadratic on a long whitespace run that is not at the end).
+  const lead = text.slice(0, text.length - text.trimStart().length);
+  const trail = text.slice(text.trimEnd().length);
+  const core = text.slice(lead.length, text.length - trail.length);
+  return lead + open + core + close + trail;
+}
+
+/**
  * Backslash-escape a leading markdown BLOCK trigger so a serialized paragraph
  * line re-parses as a PARAGRAPH, not another block. Without this, a paragraph
  * whose text begins at column 0 with an ATX heading `#`, a blockquote/callout
@@ -120,12 +208,28 @@ const LIST_MARKER_SEPARATOR = "<!-- -->";
  * Applied ONLY to paragraph text, once per `\n`-separated LINE (the paragraph
  * case splits on `\n` — each hardBreak emits `  \n` — so a trigger on a
  * continuation line is escaped too): headings/lists/blockquotes legitimately
- * open with these markers and render them from their own cases. This is the
- * single, canonical fix for the class the client bridge worked around with a
- * ZWSP (`gitmost-recording.ts`) and the generative suite self-censored around
- * (`text-arbitraries.ts`) — both now removed.
+ * open with these markers and render them from their own cases.
+ *
+ * LEADING INDENTATION IS STRIPPED FIRST, and that is load-bearing, not tidying.
+ * CommonMark allows 1..3 spaces of indent BEFORE any block trigger, and 4 spaces
+ * (or a tab) opens an INDENTED CODE BLOCK. So a trigger that has been pushed
+ * right by a space still opens its block while the column-0 patterns below stop
+ * matching — a paragraph would silently become a list / heading / quote / table /
+ * code block. Whitespace lands there whenever a mark's edge whitespace is
+ * expelled to the start of a line (wrapFlankingDelimited) or the user's own
+ * paragraph text begins with spaces.
+ *
+ * Stripping costs NOTHING that survives a round trip: the importer preserves
+ * leading space/tab indentation in NO form (measured — 1..3 spaces are dropped;
+ * 4 spaces or a tab become a codeBlock; `&#32;`, `&#9;` and a `<span>`/`<strong>`
+ * wrapper all lose it; `\ ` leaves a literal backslash). Only space and TAB are
+ * stripped — exactly CommonMark's indentation class — so a leading NBSP (which
+ * IS preserved on import, and is not indentation) stays put.
  */
-function escapeLeadingBlockTrigger(line: string): string {
+function escapeLeadingBlockTrigger(rawLine: string): string {
+  // Strip markdown INDENTATION (space/tab only) so the trigger tests below,
+  // which are anchored at column 0, see the line the parser will actually see.
+  const line = rawLine.replace(/^[ \t]+/, "");
   // ATX heading: 1..6 `#` then whitespace/EOL.
   if (/^#{1,6}(?:\s|$)/.test(line)) return "\\" + line;
   // Blockquote / Docmost callout opener (`>` or `> [!info]`).
@@ -233,18 +337,14 @@ export function convertProseMirrorToMarkdown(
   // Escape a value interpolated into an HTML double-quoted attribute value
   // (textAlign, colors, image src, math `text`, all data-* attrs, etc.). In the
   // ATTRIBUTE context only the quote that delimits the value and the ampersand
-  // that starts an entity are special, so we escape ONLY & " (and ' for safety
-  // when single-quoted delimiters are used). We deliberately do NOT escape < or
+  // that starts an entity are special, so we escape ONLY & ". We do NOT escape < or
   // >: the HTML re-parser (parse5/jsdom via @tiptap/html) does NOT decode
   // &lt;/&gt; back inside attribute values, so escaping them would corrupt the
   // stored data (e.g. a math node's LaTeX `a < b`) and ACCUMULATE escapes on
   // every round-trip (`a < b` -> `a &lt; b` -> `a &amp;lt; b`). Escaping & "
   // keeps the value inert against attribute-injection while staying idempotent.
-  // NOTE: escape ONLY & and " here. The value is always wrapped in double
-  // quotes, so " is the only delimiter; ' is NOT special in a double-quoted
-  // value, and parse5 does not decode &#39; back inside attribute values, so
-  // escaping ' would (like < >) corrupt the value and accumulate &amp; on every
-  // round-trip. Escaping & and " is idempotent (parse5 decodes them back).
+  // ' is NOT escaped either: the value is always double-quoted, and parse5 does
+  // not decode &#39; back, so escaping ' would (like < >) corrupt the value.
   const escapeAttr = (value: unknown): string =>
     String(value)
       .replace(/&/g, "&amp;")
@@ -270,16 +370,16 @@ export function convertProseMirrorToMarkdown(
 
   // Backslash-escape every character that would be INTERPRETED inside a markdown
   // label re-parsed as inline content — used for a link-form media node's visible
-  // text (`attrs.name`/`attrs.provider`, #293 canon #8) AND for an image `![alt]`
-  // (canon #4) — so the value round-trips byte-exact. Two overlapping trigger
+  // text (`attrs.name`/`attrs.provider`) AND for an image `![alt]` — so the
+  // value round-trips byte-exact. Two overlapping trigger
   // sets must be escaped:
   //   1. Stock CommonMark inline: emphasis (`* _`), code (`` ` ``), strikethrough
   //      (`~`), autolinks/raw-HTML (`<`), HTML entities (`&`), image markers (`!`),
   //      brackets (`[ ]`), and `( )` — even with `[ ]` escaped, an unescaped
   //      `](x)` forms a false nested-link destination and fragments the parse.
   //   2. The Docmost inline EXTENSIONS this package registers on its marked
-  //      instance: highlight `==x==` (canon #7), math `$x$` (canon #6), and
-  //      footnote `^[x]` (canon #2). Their triggers `= $ ^` are NOT CommonMark
+  //      instance: highlight `==x==`, math `$x$`, and footnote `^[x]`. Their
+  //      triggers `= $ ^` are NOT CommonMark
   //      punctuation the stock lexer would treat specially, but the extension
   //      tokenizers fire on them — so an alt/name like `x $A$ y`, `use ==b==`, or
   //      `^[fn]` would be silently turned into a math/highlight/footnote node on
@@ -289,17 +389,24 @@ export function convertProseMirrorToMarkdown(
   const escapeLinkText = (value: unknown): string =>
     String(value ?? "").replace(/[\\`*_~[\]<&!()=$^]/g, (c: string) => `\\${c}`);
 
-  // #293 canon #6: the schema-HTML forms for math. These are the LOSSLESS forms
+  // The schema-HTML forms for math. These are the LOSSLESS forms
   // the raw-HTML path (columns/cells) and the mathInline fallback emit, and the
   // SAME shape the importer's schema parseHTML rebuilds (span/div carrying the
   // LaTeX in a `text="…"` attribute). Kept as small helpers so the readable
   // `$…$`/`$$…$$` markdown forms and the raw-HTML forms cannot drift apart.
+  // Line breaks in the inline form are encoded (`\n` -> `&#10;`, `\r` ->
+  // `&#13;`): this span sits inside a paragraph, which is split on `\n` for
+  // escapeLeadingBlockTrigger, so a raw newline would expose the LaTeX's next
+  // line to block-trigger escaping and leading-indentation stripping; a raw CR
+  // would be normalized to an extra LF by the HTML parser. Both decode back.
   const mathInlineHtml = (latex: string): string =>
-    `<span data-type="mathInline" data-katex="true" text="${escapeAttr(latex)}"></span>`;
+    `<span data-type="mathInline" data-katex="true" text="${escapeAttr(latex)
+      .replace(/\r/g, "&#13;")
+      .replace(/\n/g, "&#10;")}"></span>`;
   const mathBlockHtml = (latex: string): string =>
     `<div data-type="mathBlock" data-katex="true" text="${escapeAttr(latex)}"></div>`;
 
-  // #293 canon #6: neutralize a would-be inline-math `$…$` span sitting in PROSE
+  // Neutralize a would-be inline-math `$…$` span sitting in PROSE
   // text so it re-imports as literal text (never a phantom math node). We escape
   // ONLY the two delimiting `$` of a span the inline-math tokenizer WOULD match
   // (shared rule, math-inline.ts), leaving the inner untouched. A currency `$`
@@ -310,7 +417,7 @@ export function convertProseMirrorToMarkdown(
   const escapeProseMath = (value: string): string =>
     value.replace(inlineMathGlobalRe(), (_m, inner) => `\\$${inner}\\$`);
 
-  // #293 canon #2 inline footnotes. PRE-SCAN the whole tree once: map every
+  // Inline footnotes. PRE-SCAN the whole tree once: map every
   // footnote DEFINITION by its id (first-wins) and collect every REFERENCED id.
   // The canonical markdown form inlines a note's body AT its reference point as
   // `^[body]`, so the serializer needs the body keyed by id when it reaches a
@@ -382,11 +489,10 @@ export function convertProseMirrorToMarkdown(
 
   // While TRUE, `case "text"` DOUBLES every RAW user backslash (`\` -> `\\`) in a
   // text run BEFORE the intentional markdown/balance escapes are layered on (see
-  // the text case). This is the F2 fix: a body ending in `\` (Windows path,
-  // LaTeX, regex) must survive `^[…]`. Without it a trailing `\` serialized to
-  // `^[…\]`, whose `\]` the import tokenizer reads as an ESCAPED `]`, so the
-  // balance never closed and the whole footnote degraded to literal prose (and
-  // the `\` was lost). Doubling raw backslashes makes `parseInline` restore each
+  // the text case), so a body ending in `\` (Windows path, LaTeX, regex)
+  // survives `^[…]`: otherwise a trailing `\` would serialize to `^[…\]`, whose
+  // `\]` the import tokenizer reads as an ESCAPED `]`, and the whole footnote
+  // would degrade to literal prose. Doubling raw backslashes makes `parseInline` restore each
   // (`\\`->`\`) on import while the serializer's OWN single escapes (`\[` `\]`
   // `\=` `\$`, the `\n` paragraph separator) stay intact. It is a closure flag
   // (per-conversion, not module state), so concurrent conversions never share it.
@@ -433,8 +539,7 @@ export function convertProseMirrorToMarkdown(
   // and prevent the page from ever being written. We track the live nesting
   // depth in a closure counter (the wrapper below) so we NEVER throw: past the
   // limit we stop recursing and emit the node's own text (or nothing) instead.
-  // Normal documents never approach MAX_NODE_DEPTH, so their output is byte-
-  // identical. NOTE: the wrapper signature is (node) only — several callers use
+  // NOTE: the wrapper signature is (node) only — several callers use
   // `.map(processNode)`, which would otherwise pass the array index as a second
   // argument; the wrapper ignores extra arguments so that is harmless.
   let nodeDepth = 0;
@@ -442,7 +547,7 @@ export function convertProseMirrorToMarkdown(
   // A table cell whose content is NOT a single plain paragraph — a list, code
   // block, blockquote, multiple paragraphs, etc. A GFM pipe cell can only hold
   // inline content on one line, so such a cell must force the HTML <table> form
-  // or its structure is flattened/lost on round trip (review #8).
+  // or its structure is flattened/lost on round trip.
   const cellIsMultiBlock = (cell: any): boolean => {
     const blocks = cell.content || [];
     if (blocks.length > 1) return true;
@@ -452,7 +557,7 @@ export function convertProseMirrorToMarkdown(
 
   // Render a whole table as raw HTML `<table>` (round-trips via the schema's
   // table-family parseHTML). Used when a GFM pipe table would be wrong: merged
-  // cells (colspan/rowspan), multi-block cells (#8), OR the table sits inside a
+  // cells (colspan/rowspan), multi-block cells, OR the table sits inside a
   // raw-HTML container like a column (marked does not parse markdown inside raw
   // HTML, so a GFM pipe table there becomes literal "| a | b |" text — #7).
   // `blockToHtml` is referenced lazily (defined below; only called at runtime).
@@ -484,12 +589,11 @@ export function convertProseMirrorToMarkdown(
   };
 
   // ---------------------------------------------------------------------------
-  // #515 inline helpers. `case "text"` used to inline both of these; they are
-  // factored out so the code-emphasis run emitter (renderInlineChildren) can
-  // reuse the EXACT same escaping and mark-rendering logic when it factors a
-  // shared mark out of several adjacent runs. Behaviour is unchanged: the escape
-  // gate still runs only for NON-code runs, and the mark switch still wraps the
-  // text in the order the marks array lists them (first mark = innermost).
+  // Inline helpers shared by `case "text"` and the code-emphasis run emitter
+  // (renderInlineChildren), so both use the EXACT same escaping and
+  // mark-rendering logic. The escape gate runs only for NON-code runs, and the
+  // mark switch wraps the text in the order the marks array lists them (first
+  // mark = innermost).
   // ---------------------------------------------------------------------------
 
   /**
@@ -500,7 +604,7 @@ export function convertProseMirrorToMarkdown(
    */
   const escapeInlineText = (raw: string): string => {
     let textContent = raw;
-    // #293 canon #2 (F2): inside a footnote body, DOUBLE every RAW user
+    // Inside a footnote body, DOUBLE every RAW user
     // backslash FIRST, so it survives `^[…]` (the import tokenizer treats
     // `\<char>` as an escape when balancing brackets, and `parseInline`
     // decodes escapes). Doing it before the intentional escapes below keeps
@@ -510,7 +614,7 @@ export function convertProseMirrorToMarkdown(
     if (inFootnoteBody) {
       textContent = textContent.replace(/\\/g, "\\\\");
     }
-    // #293 canon #7: `==` is now a LIVE inline highlight syntax on import (a
+    // `==` is a LIVE inline highlight syntax on import (a
     // marked inline extension turns `==text==` into a color-less highlight
     // mark). A LITERAL `==` in a text run would therefore be misparsed as a
     // highlight on the next import, so backslash-escape each `=` of a `==`
@@ -519,11 +623,11 @@ export function convertProseMirrorToMarkdown(
     // A highlight run's own `==` delimiters are appended AFTER this by the mark
     // switch, so they are never escaped; only the run's inner text is.
     textContent = textContent.replace(/==/g, "\\=\\=");
-    // #293 canon #6: escape a would-be inline-math `$…$` span so it stays
+    // Escape a would-be inline-math `$…$` span so it stays
     // literal text on re-import (currency `$5` is left clean — see
     // escapeProseMath).
     textContent = escapeProseMath(textContent);
-    // #293 canon #2: `^[` opens a LIVE inline-footnote span on import
+    // `^[` opens a LIVE inline-footnote span on import
     // (`^[text]` -> a footnote reference). A LITERAL `^[` in prose text
     // would therefore materialize a phantom footnote on the next import, so
     // backslash-escape the bracket (`^[` -> `^\[`); marked's escape
@@ -533,7 +637,7 @@ export function convertProseMirrorToMarkdown(
     // escape. A real footnoteReference node emits `^[body]` from its own
     // case, never through here.
     textContent = textContent.replace(/\^\[/g, "^\\[");
-    // #554: a LITERAL inline-HTML break tag typed as prose text (`<br>`,
+    // A LITERAL inline-HTML break tag typed as prose text (`<br>`,
     // `<br/>`, `<br />`, case-insensitive / optional whitespace) would be
     // parsed by marked as an inline-HTML line break on re-import, silently
     // turning the user's literal text into a hardBreak node. HTML-entity-
@@ -553,19 +657,35 @@ export function convertProseMirrorToMarkdown(
   /**
    * Wrap already-rendered inline content in ONE mark's markdown (or HTML) form.
    * Called in marks-array order, so the first mark of the array ends up
-   * innermost — exactly as the historical in-place loop did.
+   * innermost.
+   *
+   * `htmlDelimiters`: emit bold / italic / strike as `<strong>` / `<em>` / `<s>`
+   * instead of `**` / `*` / `~~`, for a run whose bare delimiters would not
+   * flank next to its neighbours (bareDelimitersFlank). Everything else — the
+   * inner markdown escaping, the other marks, the edge-whitespace expulsion — is
+   * unchanged, so the tags carry the same markdown-parsed content.
    */
-  const applyInlineMark = (mark: any, inner: string): string => {
+  const applyInlineMark = (
+    mark: any,
+    inner: string,
+    htmlDelimiters = false,
+  ): string => {
     let textContent = inner;
     switch (mark.type) {
       case "bold":
-        textContent = `**${textContent}**`;
+        // Edge whitespace is expelled OUTSIDE the `**` (see
+        // wrapFlankingDelimited) — `**x **` would not close at all.
+        textContent = htmlDelimiters
+          ? wrapFlankingDelimited(textContent, "<strong>", "</strong>")
+          : wrapFlankingDelimited(textContent, "**", "**");
         break;
       case "italic":
-        textContent = `*${textContent}*`;
+        textContent = htmlDelimiters
+          ? wrapFlankingDelimited(textContent, "<em>", "</em>")
+          : wrapFlankingDelimited(textContent, "*", "*");
         break;
       case "code":
-        // #515: `code` is applied FIRST (innermost) by the callers, never
+        // `code` is applied FIRST (innermost) by the callers, never
         // through this switch — a backtick span must sit INSIDE any emphasis
         // (CommonMark: `**`x`**` is <strong><code>x</code></strong>). Kept as a
         // defensive fallback for any caller that passes the mark through.
@@ -585,7 +705,11 @@ export function convertProseMirrorToMarkdown(
         break;
       }
       case "strike":
-        textContent = `~~${textContent}~~`;
+        // GFM strikethrough is flanking-sensitive on BOTH sides (marked's `del`
+        // rule is `^(~~?)(?=[^\s~])…[^\s~\\]\1`), so the same expulsion applies.
+        textContent = htmlDelimiters
+          ? wrapFlankingDelimited(textContent, "<s>", "</s>")
+          : wrapFlankingDelimited(textContent, "~~", "~~");
         break;
       case "underline":
         textContent = `<u>${textContent}</u>`;
@@ -597,7 +721,7 @@ export function convertProseMirrorToMarkdown(
         textContent = `<sup>${textContent}</sup>`;
         break;
       case "highlight": {
-        // #293 canon #7: a highlight WITHOUT a color serializes as the
+        // A highlight WITHOUT a color serializes as the
         // Obsidian/GFM `==text==` syntax (the importer's marked inline
         // `==` extension parses it back to a color-less highlight mark).
         // A highlight WITH a color keeps the `<mark style="background-
@@ -606,10 +730,19 @@ export function convertProseMirrorToMarkdown(
         // inner textContent already had any literal `==` backslash-
         // escaped above, so a highlight over text containing `==` still
         // round-trips.
+        // MEASURED (not assumed): the `==` importer extension is
+        // `/^==(?=\S)([\s\S]+?)==/`, so a LEADING space breaks the mark — and
+        // worse, `== x==` is not even byte-stable (it re-exports as the escaped
+        // `\=\= x\=\=`, so the second pass differs from the first). A TRAILING
+        // space happens to survive our own importer, but the run is
+        // flanking-sensitive all the same, so it gets the SAME both-sided
+        // expulsion as `**`/`*`/`~~`: `==x== ` is the symmetric, portable form
+        // every `==` implementation accepts. A COLORED highlight emits HTML,
+        // where edge whitespace is harmless, so it is left alone.
         const color = mark.attrs?.color;
         textContent = color
           ? `<mark style="background-color: ${escapeAttr(color)}">${textContent}</mark>`
-          : `==${textContent}==`;
+          : wrapFlankingDelimited(textContent, "==", "==");
         break;
       }
       case "textStyle":
@@ -645,9 +778,35 @@ export function convertProseMirrorToMarkdown(
       default:
         // Unknown mark: no dedicated case, so it has no markdown form and
         // is dropped from the run. Report the loss (throws in strict
-        // mode) then leave the text unwrapped — the historical behavior.
+        // mode) then leave the text unwrapped.
         warnLoss("mark", String(mark.type));
         break;
+    }
+    return textContent;
+  };
+
+  /** A text node's markdown (the body of `case "text"`), see applyInlineMark. */
+  const renderTextRun = (node: any, htmlDelimiters = false): string => {
+    const marks: any[] = node.marks || [];
+    // A run may carry `code` TOGETHER with other marks (the schema's `code`
+    // mark does not declare `excludes: "_"`, matching CommonMark:
+    // ``**`x`**`` is <strong><code>x</code></strong>). Serialize `code` FIRST
+    // so the backtick span is the INNERMOST wrapper, then apply the remaining
+    // marks in array order.
+    const hasCode = marks.some((m: any) => m.type === "code");
+    // The escape gate stays scoped to NON-code runs: a code span's content is
+    // literal (`==`, `$…$`, `^[`, `<br>` are not re-parsed inside backticks),
+    // so escaping it would permanently stamp backslashes into the code.
+    let textContent = hasCode
+      ? node.text || ""
+      : escapeInlineText(node.text || "");
+    if (hasCode) {
+      textContent = `\`${textContent}\``;
+    }
+    // Apply the remaining marks (bold, italic, link, …), `code` already done.
+    for (const mark of marks) {
+      if (mark.type === "code") continue;
+      textContent = applyInlineMark(mark, textContent, htmlDelimiters);
     }
     return textContent;
   };
@@ -673,15 +832,13 @@ export function convertProseMirrorToMarkdown(
 
     switch (type) {
       case "doc": {
-        // #293 canon #2: the `footnotesList` is NOT emitted in markdown — every
+        // The `footnotesList` is NOT emitted in markdown — every
         // note body is inlined at its `^[…]` reference. Skip the list entirely
         // (emitting "" would inject a phantom blank gap via the "\n\n" join),
         // then append any ORPHAN definition (one no reference points at) as its
         // own `^[body]` line so its body is never silently lost.
-        // F3 (accepted, intentional): on re-import that orphan `^[body]` line
-        // becomes a reference + definition (an orphan def gains a ref). This is
-        // lossless (the body survives) and byte-stable (it re-exports identically),
-        // so it is deliberately not treated as data loss.
+        // On re-import that orphan `^[body]` line becomes a reference +
+        // definition; this is lossless and byte-stable.
         const parts: string[] = [];
         let prevDocType: string | undefined;
         for (const child of nodeContent) {
@@ -715,11 +872,9 @@ export function convertProseMirrorToMarkdown(
           .join("\n");
         const align = node.attrs?.textAlign;
         // Non-default alignment round-trips as an ATTACHED HTML comment at the
-        // END of the block line (#293 canon #9):
+        // END of the block line:
         //   `some text <!--attrs {"textAlign":"center"}-->`
-        // This replaces the old `<p style="text-align:…">` wrapper (review #10,
-        // itself a replacement for the never-parsed `<div align>`). The schema's
-        // textAlign default is `null`; "left" is the visual default the editor
+        // The schema's textAlign default is `null`; "left" is the visual default the editor
         // renders identically to null — neither emits a marker (no churn). The
         // importer's applyAttachedComments step reads the comment back before the
         // DOM stage drops it. We only attach when there is text to attach to: a
@@ -735,12 +890,10 @@ export function convertProseMirrorToMarkdown(
         const headingText = renderInlineChildren(nodeContent);
         const headingLine = "#".repeat(level) + " " + headingText;
         const headingAlign = node.attrs?.textAlign;
-        // A non-default heading alignment attaches the same trailing comment
-        // (#293 canon #9), keeping the readable `## text` markdown form:
+        // A non-default heading alignment attaches the same trailing comment,
+        // keeping the readable `## text` markdown form:
         //   `## Title <!--attrs {"textAlign":"center"}-->`
-        // Bare `## text` carries no alignment, so without this an aligned heading
-        // would silently drop textAlign on export. Replaces the old
-        // `<hN style="text-align:…">` HTML form. "left"/null stay bare (no churn).
+        // "left"/null stay bare (no churn).
         // Require headingText so an empty aligned heading stays bare `##` rather
         // than emitting a comment with no visible element to attach to (matches
         // the paragraph guard's `text` check — a lone comment has no block to
@@ -751,31 +904,8 @@ export function convertProseMirrorToMarkdown(
         return headingLine;
       }
 
-      case "text": {
-        const marks: any[] = node.marks || [];
-        // #515: a run may now carry `code` TOGETHER with other marks (the schema's
-        // `code` mark no longer declares `excludes: "_"`, matching CommonMark:
-        // ``**`x`**`` is <strong><code>x</code></strong>). Serialize `code` FIRST
-        // so the backtick span is the INNERMOST wrapper, then apply the remaining
-        // marks in the SAME array order as before — so a run WITHOUT `code` is
-        // byte-identical to the historical output.
-        const hasCode = marks.some((m: any) => m.type === "code");
-        // The escape gate stays scoped to NON-code runs: a code span's content is
-        // literal (`==`, `$…$`, `^[`, `<br>` are not re-parsed inside backticks),
-        // so escaping it would permanently stamp backslashes into the code.
-        let textContent = hasCode
-          ? node.text || ""
-          : escapeInlineText(node.text || "");
-        if (hasCode) {
-          textContent = `\`${textContent}\``;
-        }
-        // Apply the remaining marks (bold, italic, link, …), `code` already done.
-        for (const mark of marks) {
-          if (mark.type === "code") continue;
-          textContent = applyInlineMark(mark, textContent);
-        }
-        return textContent;
-      }
+      case "text":
+        return renderTextRun(node);
 
       case "codeBlock":
         const language = node.attrs?.language || "";
@@ -786,7 +916,7 @@ export function convertProseMirrorToMarkdown(
         //
         // Read the child text RAW (schema codeBlock is `content: "text*"`), NOT
         // through processNode: code-fence content is literal and markdown escapes
-        // do not apply inside a fence. In particular the canon #7 `==` -> `\=\=`
+        // do not apply inside a fence. In particular the `==` -> `\=\=`
         // escape (in `case "text"`) must NOT reach code — marked leaves `\=`
         // verbatim inside a fence, so routing code through `case "text"` would
         // permanently stamp backslashes into any `==` (a `==` comparison is
@@ -816,7 +946,7 @@ export function convertProseMirrorToMarkdown(
         // Honor a non-1 `start`: CommonMark expresses it as the first marker
         // ("5." starts the list at 5), and marked parses that back into
         // <ol start="5">. Emitting `${start + index}.` keeps a start=5 list as
-        // "5.","6.",… while a default (start=1) list stays "1.","2.",… See #351.
+        // "5.","6.",… while a default (start=1) list stays "1.","2.",…
         // Only an INTEGER ≥ 2 is a valid explicit start; collapse everything else
         // (absent, non-number, 0, negative, fractional) to 1. A negative/fractional
         // start would otherwise emit an untokenizable marker (e.g. "-3.", "2.5.")
@@ -878,7 +1008,7 @@ export function convertProseMirrorToMarkdown(
 
       case "image": {
         const imgAttrs = node.attrs || {};
-        // #293 canon #4: a top-level image ALWAYS serializes as `![alt](src)`.
+        // A top-level image ALWAYS serializes as `![alt](src)`.
         // Non-default layout/identity attrs (which markdown `![](src)` cannot
         // express — width/height/align/size/attachmentId/aspectRatio/caption/
         // title) are carried in an attached `<!--img {…}-->` comment on the SAME
@@ -900,16 +1030,13 @@ export function convertProseMirrorToMarkdown(
         // STABLE key order so the output is deterministic. An attr equal to its
         // schema default is NOT emitted (predicate over the canonicalized attrs).
         const json: Record<string, unknown> = {};
-        // Numeric sizing attrs are coerced to string in the payload: the import
-        // side (applyCommentDirectives) writes them as DOM attributes and the
-        // schema's parseHTML reads them back as strings, so a numeric value would
-        // otherwise round-trip as `420 -> "420"` and produce a one-time spurious
-        // git diff. Emitting the string form up front keeps the round-trip
-        // byte-stable whether the source attr was a number or a string (mirrors
-        // the legacy imageToHtml, which stringified via `width="…"`).
+        // Sizing attrs are stringified so the payload is the same whether the
+        // source value was a number or a string; on import the image schema
+        // parses width/height back to numbers (a "%" width stays a string) and keeps
+        // size/aspectRatio as strings.
         if (imgAttrs.width != null) json.width = String(imgAttrs.width);
         if (imgAttrs.height != null) json.height = String(imgAttrs.height);
-        // align default is unified to "center" (#293 canon #4): treat BOTH null
+        // align default is "center": treat BOTH null
         // and "center" as the default and omit them, so a bare/center image stays
         // clean `![](src)` and only left/right emits `"align"`.
         if (imgAttrs.align != null && imgAttrs.align !== "center")
@@ -929,15 +1056,15 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "video": {
-        // #293 canon #8 (image-form): a top-level video serializes as
+        // A top-level video serializes as
         // `![](src)<!--video {…}-->`. The bare `![](src)` is ALWAYS followed by
         // the `video` discriminator comment — a bare image with NO comment is an
         // `image`, never sniffed by URL — so the comment is REQUIRED even when
         // there are no extra attrs (emitted name-only as `<!--video-->`). src
         // lives in the markdown target; every OTHER non-default attr rides in the
         // comment JSON (stable key order, numerics stringified for byte-stability
-        // exactly like canon #4). align default "center" is omitted. The schema
-        // `<div><video>` form is still emitted on the raw-HTML path (blockToHtml)
+        // exactly like images). align default "center" is omitted. The schema
+        // `<div><video>` form is emitted on the raw-HTML path (blockToHtml)
         // via videoToHtml, since comment nodes are dropped inside columns/cells.
         const attrs = node.attrs || {};
         const src = encodeMdUrl(attrs.src);
@@ -955,7 +1082,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "youtube": {
-        // #293 canon #8 (image-form): `![](url)<!--youtube {…}-->`. Same rules as
+        // Image-form: `![](url)<!--youtube {…}-->`. Same rules as
         // video — src in the target, other non-default attrs (width/height/align,
         // align!=center) in the ALWAYS-emitted discriminator comment. The
         // div[data-type="youtube"] form stays on the raw-HTML path (youtubeToHtml).
@@ -985,8 +1112,8 @@ export function convertProseMirrorToMarkdown(
           ),
         );
         // A GFM pipe table also cannot hold a cell with block content (a list,
-        // code block, paragraphs) — it would be flattened to one line and lost
-        // (review #8). Force the HTML form for those too.
+        // code block, paragraphs) — it would be flattened to one line and lost.
+        // Force the HTML form for those too.
         const hasMultiBlockCell = tableRows.some((row: any) =>
           (row.content || []).some((cell: any) => cellIsMultiBlock(cell)),
         );
@@ -1027,7 +1154,7 @@ export function convertProseMirrorToMarkdown(
         // like a paragraph followed by a list don't collide into "line1- a".
         // Then collapse newlines and escape pipes so a cell containing "|" or a
         // line break cannot corrupt the surrounding GFM row.
-        // #549: a GFM pipe cell is single-line — the generic `  \n`/newline
+        // A GFM pipe cell is single-line — the generic `  \n`/newline
         // collapse below flattens a hardBreak into a space, dropping it. Convert
         // the two-space hardBreak marker to `<br>` FIRST (GFM cells allow inline
         // `<br>`, which re-imports to a hardBreak) so intra-cell breaks survive.
@@ -1077,7 +1204,7 @@ export function convertProseMirrorToMarkdown(
         return `${renderBlockChildren(nodeContent, processNode).join("\n\n")}\n`;
 
       case "mathInline": {
-        // #293 canon #6: inline math serializes as Obsidian-native `$LaTeX$`
+        // Inline math serializes as Obsidian-native `$LaTeX$`
         // (readable, re-parsed by the importer's marked inline extension). A
         // literal `$` inside the LaTeX is escaped `\$` so it cannot close the
         // span early (the importer decodes `\$`→`$`). When the LaTeX cannot be
@@ -1094,7 +1221,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "mathBlock": {
-        // #293 canon #6: block math serializes as a `$$` fence on its own lines
+        // Block math serializes as a `$$` fence on its own lines
         // (`$$\n<latex>\n$$`), so multi-line LaTeX is preserved. If the LaTeX
         // itself contains a `$$` (which would close the fence early — essentially
         // never valid inside a single math node), fall back to the lossless
@@ -1134,7 +1261,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "attachment": {
-        // #293 canon #8 (link-form): `[filename](src)<!--attachment {…}-->`. The
+        // Link-form: `[filename](src)<!--attachment {…}-->`. The
         // schema's `url` is the markdown target; the VISIBLE text is the filename
         // (`attrs.name`, escaped so `[`/`]` cannot break the label). Every OTHER
         // non-default attr (mime/size/attachmentId) rides in the ALWAYS-emitted
@@ -1153,7 +1280,7 @@ export function convertProseMirrorToMarkdown(
 
       case "drawio":
       case "excalidraw": {
-        // #293 canon #8 (image-form): `![](src)<!--drawio|excalidraw {…}-->`. src
+        // Image-form: `![](src)<!--drawio|excalidraw {…}-->`. src
         // in the target; title/alt/width/height/size/aspectRatio/align(!=center)/
         // attachmentId in the ALWAYS-emitted discriminator comment (the NAME
         // selects drawio vs excalidraw). The div[data-type=…] form stays on the
@@ -1175,7 +1302,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "embed": {
-        // #293 canon #8 (link-form): `[provider](src)<!--embed {…}-->`. src in
+        // Link-form: `[provider](src)<!--embed {…}-->`. src in
         // the target; the VISIBLE text is the provider (`attrs.provider`). align/
         // width/height ride in the discriminator comment only when non-default
         // (align "center", width 800, height 600 are the schema defaults). The
@@ -1194,7 +1321,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "audio": {
-        // #293 canon #8 (image-form): `![](src)<!--audio {…}-->`. src in the
+        // Image-form: `![](src)<!--audio {…}-->`. src in the
         // target; attachmentId/size in the ALWAYS-emitted discriminator comment.
         // The <div><audio> form stays on the raw-HTML path (audioToHtml).
         const attrs = node.attrs || {};
@@ -1206,7 +1333,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "pdf": {
-        // #293 canon #8 (link-form): `[filename](src)<!--pdf {…}-->`. src in the
+        // Link-form: `[filename](src)<!--pdf {…}-->`. src in the
         // target; the VISIBLE text is the filename (`attrs.name`). attachmentId/
         // size/width/height ride in the ALWAYS-emitted discriminator comment. The
         // div[data-type="pdf"] form stays on the raw-HTML path (pdfToHtml).
@@ -1251,7 +1378,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "pageBreak":
-        // #293 canon #5: a pageBreak is a STANDALONE machinery comment on its
+        // A pageBreak is a STANDALONE machinery comment on its
         // own line — `<!--pagebreak-->` — which is invisible in any markdown
         // renderer yet round-trips (the importer materializes it back into the
         // pageBreak atom; see markdown-to-prosemirror's applyCommentDirectives).
@@ -1261,7 +1388,7 @@ export function convertProseMirrorToMarkdown(
         return standaloneCommentFor("pagebreak");
 
       case "subpages":
-        // #293 canon #5: a subpages block serializes as a STANDALONE comment —
+        // A subpages block serializes as a STANDALONE comment —
         // `<!--subpages-->` by default, or `<!--subpages {"recursive":true}-->`
         // when the recursive toggle is set. Same rationale as pageBreak: readable
         // markdown, invisible in renderers, re-materialized on import. The div
@@ -1295,7 +1422,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "footnoteReference": {
-        // #293 canon #2: on the top-level/inline markdown path a footnote is
+        // On the top-level/inline markdown path a footnote is
         // written AT its reference as `^[body]` (Pandoc/Obsidian inline
         // footnote). Look the body up by id in the pre-scanned definitions map
         // and render it inline. An ORPHAN reference (no matching definition) has
@@ -1320,7 +1447,7 @@ export function convertProseMirrorToMarkdown(
         return "";
 
       case "pageEmbed": {
-        // #293 canon #8 (standalone): a whole-page live embed serializes as a
+        // Standalone: a whole-page live embed serializes as a
         // lone discriminator comment on its own line — `<!--pageembed-->` or
         // `<!--pageembed {"sourcePageId":…}-->`. Readable markdown, invisible in
         // renderers, re-materialized on import. The div[data-type="pageEmbed"]
@@ -1332,7 +1459,7 @@ export function convertProseMirrorToMarkdown(
       }
 
       case "transclusionReference": {
-        // #293 canon #8 (standalone): a live block/page reference serializes as a
+        // Standalone: a live block/page reference serializes as a
         // lone `<!--transclusion {…}-->` comment carrying sourcePageId +
         // transclusionId (the data-loss-critical id links). The
         // div[data-type="transclusionReference"] form stays on the raw-HTML path
@@ -1357,33 +1484,29 @@ export function convertProseMirrorToMarkdown(
       default:
         // Unknown node type: no dedicated case, so the node's identity + attrs
         // have no lossless markdown form. Report the loss (throws in strict
-        // mode) then degrade by flattening to its children — the historical
-        // graceful fallback.
+        // mode) then degrade by flattening to its children.
         warnLoss("node", String(type));
         return nodeContent.map(processNode).join("");
     }
   };
 
   // ---------------------------------------------------------------------------
-  // #515 code-emphasis runs.
+  // Code-emphasis runs.
   //
-  // Now that the schema's `code` mark no longer excludes the other inline marks,
+  // The schema's `code` mark does not exclude the other inline marks, so
   // ADJACENT text runs can share an outer emphasis mark with an inline code span
   // (CommonMark: ``**`aaa` + `bbb`**`` is <strong><code>aaa</code> + <code>bbb
   // </code></strong>, i.e. three sibling runs all carrying `bold`). Rendering
   // those runs INDEPENDENTLY would close and re-open the `**` delimiters around
-  // every span (`` `aaa`** + **`bbb` ``) — the dangling-delimiter corruption from
-  // the bug report. So a bounded coalescing pass factors a SHARED emphasis out of
-  // such a run once.
+  // every span (`` `aaa`** + **`bbb` ``), so a bounded coalescing pass factors a
+  // SHARED emphasis out of such a run once.
   //
-  // The pass is deliberately narrow (data-loss-critical git-sync path): it only
-  // ever touches a maximal run of CONSECUTIVE text nodes that is SEEDED by a node
-  // carrying `code` TOGETHER WITH a bare-delimiter emphasis mark — the ONLY shape
-  // #515 newly made expressible, and the only one where an emphasis delimiter can
+  // The pass is deliberately narrow: it only touches a maximal run of
+  // CONSECUTIVE text nodes SEEDED by a node carrying `code` TOGETHER WITH a
+  // bare-delimiter emphasis mark — the only shape where an emphasis delimiter can
   // end up glued to a backtick. A plain `` `code` `` span next to an emphasized
-  // neighbour (`` **bold**`c` ``) was always legal, always round-tripped as
-  // markdown, and is left completely untouched (no seed => no run => the exact
-  // pre-#515 bytes). From a genuine seed the run only pulls in an
+  // neighbour (`` **bold**`c` ``) round-trips as markdown and is left untouched
+  // (no seed => no run). From a seed the run only pulls in an
   // IMMEDIATELY adjacent text node whose
   // emphasis mark emits a BARE delimiter (`**` / `*` / `~~` / `==`) — those are
   // exactly the delimiters that COLLIDE with a neighbouring span's delimiters
@@ -1392,15 +1515,12 @@ export function convertProseMirrorToMarkdown(
   // highlight, link) have self-delimiting boundaries and are NOT pulled in, so the
   // ordinary ``pre **`code`** post`` case stays clean markdown. Non-text inline
   // nodes (mathInline, mention, status, footnoteReference, hardBreak) render via
-  // processNode as before and BREAK any run.
+  // processNode and BREAK any run.
   // ---------------------------------------------------------------------------
 
-  /** Marks whose markdown form is a bare, collidable delimiter. */
-  const isBareDelimiterMark = (m: any): boolean =>
-    m.type === "bold" ||
-    m.type === "italic" ||
-    m.type === "strike" ||
-    (m.type === "highlight" && !m.attrs?.color);
+  // Marks whose markdown form is a bare, collidable delimiter — the module-level
+  // `isBareDelimiterMark` (see its contract there; it is also what decides edge-
+  // whitespace expulsion, so the two can never drift apart).
 
   const hasCodeMark = (n: any): boolean =>
     (n?.marks || []).some((m: any) => m.type === "code");
@@ -1412,13 +1532,10 @@ export function convertProseMirrorToMarkdown(
    * SEED of a code-emphasis run. A delimiter collision is only POSSIBLE when the
    * CODE node ITSELF carries a bare-delimiter emphasis mark: that is the only way
    * an emphasis delimiter ends up glued to a backtick (`` **`x`** ``). A code node
-   * with NO emphasis mark (plain `` `x` ``) has ALWAYS been representable next to
-   * any emphasized neighbour — the old `excludes: "_"` forbade code+mark on the
-   * SAME node, never on ADJACENT nodes — and those constructs (`` **bold**`c` ``,
-   * `` `c`**bold** ``, `` **a**`c`**b** ``) are valid CommonMark that re-imports
-   * losslessly. So an un-emphasized code node is NOT a seed and never starts a
-   * run: it keeps serializing through `case "text"` byte-for-byte as before, and
-   * the pre-#515 markdown in the git-sync repo does not degrade to HTML.
+   * with NO emphasis mark (plain `` `x` ``) next to an emphasized neighbour
+   * (`` **bold**`c` ``, `` `c`**bold** ``, `` **a**`c`**b** ``) is valid
+   * CommonMark that re-imports losslessly, so it is NOT a seed: it serializes
+   * through `case "text"` and does not degrade to HTML.
    */
   const isRunSeed = (n: any): boolean =>
     n?.type === "text" &&
@@ -1466,9 +1583,8 @@ export function convertProseMirrorToMarkdown(
    * outside that class — a letter, a digit, but ALSO a combining mark (U+0301),
    * a format character (ZWJ, SOFT HYPHEN) — is a word character to marked, so a
    * `**` opener sitting between it and a backtick is NOT left-flanking and the
-   * emphasis is dropped on re-import. An earlier `!/[\p{L}\p{N}]/u` formulation
-   * called those non-letter/non-digit characters BOUNDARIES and silently lost the
-   * mark (byte-stably, so the round-trip property could not see it).
+   * emphasis is dropped on re-import (byte-stably, so the round-trip property
+   * cannot see it). `!/[\p{L}\p{N}]/u` is therefore NOT an equivalent test.
    *
    * ASTRAL code points are treated as WORD characters (never a boundary), i.e.
    * conservatively pushed to the lossless HTML fallback, EVEN when their Unicode
@@ -1499,6 +1615,69 @@ export function convertProseMirrorToMarkdown(
     return cps.length ? cps[cps.length - 1] : "";
   };
   const firstCodePoint = (s: string): string => Array.from(s.slice(0, 2))[0] ?? "";
+
+  /**
+   * Does a bare `*` / `~` delimiter run at the OUTER edges of `out` still open
+   * and close once `out` sits between `prevPart` and `nextPart`?
+   *
+   * CommonMark: an opener FOLLOWED by punctuation is left-flanking only if it is
+   * PRECEDED by whitespace/punctuation; a closer PRECEDED by punctuation is
+   * right-flanking only if it is FOLLOWED by whitespace/punctuation. So
+   * `**x:**A`, `A**(x)**` and `**x🙂**A` (an emoji is a symbol, i.e.
+   * punctuation, to marked) never open/close and the mark is silently lost —
+   * measured for bold, italic and strike alike. The inner edge character is
+   * classified by its real code point (an astral LETTER such as U+1D400 is not
+   * punctuation, and measured fine).
+   *
+   * The OUTER neighbour is classified differently per side, as marked does it:
+   *   • before an opener, through isWordBoundaryChar (marked reads that char with
+   *     a UTF-16 `.slice(-1)`, so every astral counts as a word char);
+   *   • after a closer, by its real code point (`**Done!**🎉` closes), EXCEPT
+   *     that `~` counts as a word char (marked's GFM punctuation class for
+   *     right-flanking leaves it out), and so does `*` after a `*` closer (it
+   *     merges into the closing run) — both measured to lose the mark
+   *     (`**Итого:**~5`, `**a:***b*c`).
+   * `==` is not checked: this repo's highlight extension has no flanking rule.
+   */
+  const bareDelimitersFlank = (
+    out: string,
+    prevPart: string,
+    nextPart: string,
+  ): boolean => {
+    const isPunct = (c: string): boolean => c !== "" && /[\p{P}\p{S}]/u.test(c);
+    const open = /^[*~]+/.exec(out);
+    if (
+      open &&
+      isPunct(firstCodePoint(out.slice(open[0].length))) &&
+      !isWordBoundaryChar(lastCodePoint(prevPart))
+    ) {
+      return false;
+    }
+    // Trailing delimiter run, scanned from the end (a `/[*~]+$/` regex is
+    // quadratic on a long run of `*`/`~` that is not at the end).
+    let closeAt = out.length;
+    while (closeAt > 0 && (out[closeAt - 1] === "*" || out[closeAt - 1] === "~")) {
+      closeAt--;
+    }
+    if (closeAt < out.length && isPunct(lastCodePoint(out.slice(0, closeAt)))) {
+      const next = firstCodePoint(nextPart);
+      // A following `*` merges only into a closing run made of `*` (a `~~`
+      // closer followed by `**b**` is fine); a following `~` breaks both.
+      const merges = next === "~" || (next === "*" && out.endsWith("*"));
+      const nextIsBoundary =
+        next === "" || (!merges && /[\s\p{P}\p{S}]/u.test(next));
+      if (!nextIsBoundary) return false;
+    }
+    return true;
+  };
+
+  /** Nearest NON-EMPTY rendered part from `i` in direction `step` ("" if none). */
+  const nearestPart = (parts: string[], i: number, step: 1 | -1): string => {
+    for (let j = i + step; j >= 0 && j < parts.length; j += step) {
+      if (parts[j]) return parts[j];
+    }
+    return "";
+  };
 
   /**
    * Emit one detected code-emphasis run. `prevPart` / `nextPart` are the already
@@ -1545,9 +1724,11 @@ export function convertProseMirrorToMarkdown(
     // `case "text"` already emitted (2a: code span innermost, other marks around
     // it in mark-array order) — reuse that rendering verbatim rather than
     // duplicating it, so `case "text"` stays the single source for a single run.
-    let out = soloPart;
-    if (run.length > 1) {
-      out = run
+    const renderRun = (htmlDelimiters: boolean): string => {
+      if (run.length === 1) {
+        return htmlDelimiters ? renderTextRun(run[0], true) : soloPart;
+      }
+      let rendered = run
         .map((n: any) => {
           const raw = n.text || "";
           // `code` is the INNERMOST wrapper; its content is literal (unescaped).
@@ -1555,13 +1736,21 @@ export function convertProseMirrorToMarkdown(
         })
         .join("");
       for (const mark of nonCodeMarks(run[0])) {
-        out = applyInlineMark(mark, out);
+        rendered = applyInlineMark(mark, rendered, htmlDelimiters);
       }
-    }
+      return rendered;
+    };
+    const out = renderRun(false);
 
     // Flanking guard (see above). Only a BARE delimiter (`*`/`~`/`=`) that is
     // glued to a backtick can be disqualified; an HTML-form mark (<u>, <mark
     // style>, <span>, a link's brackets) is self-delimiting and always safe.
+    // Both tests are anchored, so they correctly STOP matching once edge
+    // whitespace has been expelled outside the delimiters (`out` then begins/ends
+    // with that space): a `**` separated from the backtick by a space is exactly
+    // the flanking-safe position this guard exists to avoid, so falling through
+    // to the plain markdown emission is the RIGHT answer, not a missed case.
+    // Pinned by mark-edge-whitespace.test.ts.
     const openerHitsCode = /^[*~=]+`/.test(out);
     const closerHitsCode = /`[*~=]+$/.test(out);
     const prevChar = lastCodePoint(prevPart);
@@ -1572,31 +1761,33 @@ export function convertProseMirrorToMarkdown(
     ) {
       return inlineToHtml(run);
     }
+    // Edge punctuation next to a word neighbour (bareDelimitersFlank): the same
+    // run with `<strong>`/`<em>`/`<s>` in place of the bare delimiters.
+    if (!bareDelimitersFlank(out, prevPart, nextPart)) return renderRun(true);
     return out;
   };
 
-  // Render a run of inline children to MARKDOWN, with the #293 canon #6
-  // inline-math guard. A `mathInline` serialized as `$…$` whose FOLLOWING
+  // Render a run of inline children to MARKDOWN, with the inline-math guard. A `mathInline` serialized as `$…$` whose FOLLOWING
   // sibling renders starting with a DIGIT would put a digit right after the
   // closing `$`, which the pandoc inline rule refuses to parse as math (the
   // currency guard) — so the node would re-import as literal text (data loss).
   // For that node ONLY we fall back to the lossless schema-HTML `<span>` form.
-  // Every other inline node is rendered exactly as processNode would, so output
-  // is unchanged whenever no math sits directly before a digit.
+  // The other per-neighbour rewrites below are the code-emphasis runs, the
+  // emphasis flanking guard (bareDelimitersFlank) and the position-aware
+  // hardBreak; every other inline node is rendered exactly as processNode would.
   const renderInlineChildren = (nodes: any[]): string => {
     const parts = nodes.map(processNode);
 
-    // #515 (2b/2c): coalesce code-emphasis runs BEFORE the math/hardBreak guards
+    // Coalesce code-emphasis runs BEFORE the math/hardBreak guards
     // below, so those guards see the FINAL rendering of their neighbours. A run's
     // whole output lands on its FIRST index and the remaining member indices are
     // blanked. A run can never start mid-way after a mathInline/hardBreak (those
     // node types break runs), so no guard ever looks at a blanked index.
     //
-    // The pass only ever TRIGGERS on a genuine seed (a code node that itself
-    // carries a bare-delimiter emphasis mark — see isRunSeed). Every inline shape
-    // that was already expressible before #515 therefore contains no seed at all
-    // and takes ZERO passes through here, keeping its historical markdown output
-    // byte-for-byte.
+    // The pass only TRIGGERS on a genuine seed (a code node that itself carries
+    // a bare-delimiter emphasis mark — see isRunSeed); any other inline shape
+    // takes zero passes through here.
+    const inCodeEmphasisRun = new Set<number>();
     for (let i = 0; i < nodes.length; ) {
       if (!isRunSeed(nodes[i])) {
         i++;
@@ -1606,6 +1797,7 @@ export function convertProseMirrorToMarkdown(
       while (start - 1 >= 0 && isRunMember(nodes[start - 1])) start--;
       let end = i;
       while (end + 1 < nodes.length && isRunMember(nodes[end + 1])) end++;
+      for (let j = start; j <= end; j++) inCodeEmphasisRun.add(j);
       // The neighbours are never run members (the run is maximal), so their parts
       // are already final markdown — safe to read for the flanking check.
       parts[start] = renderCodeEmphasisRun(
@@ -1619,6 +1811,27 @@ export function convertProseMirrorToMarkdown(
       i = end + 1;
     }
 
+    // The same flanking guard for PLAIN emphasis runs (code-emphasis runs got it
+    // above): a node whose bare `*`/`~` delimiter would sit between an edge
+    // punctuation character and a neighbouring word character is re-rendered
+    // with `<strong>`/`<em>`/`<s>` in place of those delimiters
+    // (`<strong>x:</strong>A`); its escaped content stays markdown. Left to right,
+    // so a neighbour already switched is seen as its final `<…>` rendering.
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (inCodeEmphasisRun.has(i) || n?.type !== "text") continue;
+      if (!(n.marks || []).some(isBareDelimiterMark)) continue;
+      if (
+        !bareDelimitersFlank(
+          parts[i],
+          nearestPart(parts, i, -1),
+          nearestPart(parts, i, 1),
+        )
+      ) {
+        parts[i] = renderTextRun(n, true);
+      }
+    }
+
     for (let i = 0; i < nodes.length - 1; i++) {
       if (
         nodes[i]?.type === "mathInline" &&
@@ -1628,7 +1841,7 @@ export function convertProseMirrorToMarkdown(
         parts[i] = mathInlineHtml(nodes[i].attrs?.text || "");
       }
     }
-    // #549: position-aware hardBreak. The two-space `  \n` form (emitted by the
+    // Position-aware hardBreak. The two-space `  \n` form (emitted by the
     // processNode hardBreak case) only re-imports to a hardBreak when it is
     // FOLLOWED by same-paragraph text. It is silently lost when the break is
     // (a) the last inline child — the top-level `.trim()` strips the trailing
@@ -1637,9 +1850,8 @@ export function convertProseMirrorToMarkdown(
     // intervening whitespace-only line reads as a paragraph separator on
     // re-parse, splitting the run. Emit `<br>` there instead: marked passes the
     // inline HTML break through and generateJSON rebuilds a hardBreak in every
-    // position. A safe mid-paragraph break keeps the `  \n` form so the existing
-    // golden output stays byte-stable. Skipped inside footnote bodies, whose
-    // `^[…]` inline form collapses breaks to spaces (unchanged; already lossy).
+    // position. A safe mid-paragraph break keeps the `  \n` form. Skipped inside
+    // footnote bodies, whose `^[…]` inline form collapses breaks to spaces.
     if (!inFootnoteBody) {
       for (let i = 0; i < nodes.length; i++) {
         if (nodes[i]?.type !== "hardBreak") continue;
@@ -1661,15 +1873,15 @@ export function convertProseMirrorToMarkdown(
     (inlineNodes || [])
       .map((n: any) => {
         if (n.type === "hardBreak") return "<br>";
-        // #293 canon #6: on the raw-HTML path (columns/spanned cells) marked does
+        // On the raw-HTML path (columns/spanned cells) marked does
         // NOT re-parse markdown, so inline math MUST stay the schema-HTML `<span>`
         // form here — a `$…$` fence would land as literal text on re-import.
         if (n.type === "mathInline") return mathInlineHtml(n.attrs?.text || "");
         if (n.type === "footnoteReference") {
-          // #293 canon #2 raw-HTML path (columns/spanned cells): marked does NOT
+          // Raw-HTML path (columns/spanned cells): marked does NOT
           // re-parse `^[…]` inside raw HTML, so the note text rides ON the <sup>
           // in a `data-fn-text` attribute (encoded exactly like the `^[…]`
-          // inner). NO id is emitted here (F1): the importer's footnote post-pass
+          // inner). NO id is emitted here: the importer's footnote post-pass
           // assigns ids by dedup-ing on the EXACT body text, so a column footnote
           // and an inline `^[…]` with the same body merge to one definition and
           // DIFFERENT bodies can never collide. The post-pass reads data-fn-text,
@@ -1684,14 +1896,14 @@ export function convertProseMirrorToMarkdown(
           return processNode(n);
         }
         let t = escapeHtmlText(n.text || "");
-        // #515: apply `code` FIRST so the <code> element is the INNERMOST wrapper
+        // Apply `code` FIRST so the <code> element is the INNERMOST wrapper
         // (`<strong><code>x</code></strong>`), regardless of where the mark sits
         // in this node's marks array. Required for byte stability: ProseMirror
         // re-orders a node's marks by schema rank on import, so honouring the
         // array order verbatim would flip <code> outside on the SECOND export and
         // md2 !== md1. Marks are a SET in ProseMirror, so the nesting order does
-        // not change what re-imports — only the bytes. A node with no `code` mark
-        // keeps the historical order exactly (the filter is order-preserving).
+        // not change what re-imports — only the bytes. The filter is
+        // order-preserving for the other marks.
         const orderedMarks = [
           ...(n.marks || []).filter((m: any) => m.type === "code"),
           ...(n.marks || []).filter((m: any) => m.type !== "code"),
@@ -1773,6 +1985,31 @@ export function convertProseMirrorToMarkdown(
       })
       .join("");
 
+  /**
+   * `inlineToHtml` for the inline content of a WHOLE BLOCK (`<p>`, `<hN>`,
+   * `<summary>`, the `<div>` fallback) on the raw-HTML path.
+   *
+   * An HTML parser DROPS whitespace at the start of a block's content, so
+   * emitting it produces markdown that is not a byte fixpoint: the re-imported
+   * doc has lost the space and re-exports one byte shorter (`<p>  a</p>` ->
+   * `<p>a</p>`, even for a plain unmarked run). This is the raw-HTML twin of the leading-indentation strip
+   * `escapeLeadingBlockTrigger` does on the markdown path, so both paths refuse
+   * to emit the same unrepresentable whitespace. Only space/tab, and only on the
+   * FIRST text run: a mid-block space is real content the parser keeps, and
+   * `inlineToHtml` itself is also used MID-LINE by the code-emphasis fallback,
+   * where it must never strip anything.
+   */
+  const blockInlineToHtml = (children: any[]): string => {
+    const nodes = children || [];
+    const first = nodes[0];
+    if (typeof first?.text !== "string") return inlineToHtml(nodes);
+    const text = first.text.replace(/^[ \t]+/, "");
+    if (text === first.text) return inlineToHtml(nodes);
+    return inlineToHtml(
+      text === "" ? nodes.slice(1) : [{ ...first, text }, ...nodes.slice(1)],
+    );
+  };
+
   // Emit the schema-matching <img> for an image node. Shared so the image is
   // emitted as real HTML wherever a raw-HTML container needs it (inside a column
   // or a spanned table cell), where markdown `![](...)` would NOT be re-parsed
@@ -1787,9 +2024,8 @@ export function convertProseMirrorToMarkdown(
     if (attrs.title) parts.push(`title="${escapeAttr(attrs.title)}"`);
     if (attrs.width != null) parts.push(`width="${escapeAttr(attrs.width)}"`);
     if (attrs.height != null) parts.push(`height="${escapeAttr(attrs.height)}"`);
-    // #293 canon #4: image align default is unified to "center", so a center
-    // (or unset) image no longer emits a redundant align="center" here — only a
-    // genuinely non-default alignment (left/right) is written.
+    // Image align default is "center", so only a non-default alignment
+    // (left/right) is written.
     if (attrs.align && attrs.align !== "center")
       parts.push(`align="${escapeAttr(attrs.align)}"`);
     if (attrs.size != null) parts.push(`data-size="${escapeAttr(attrs.size)}"`);
@@ -1797,7 +2033,7 @@ export function convertProseMirrorToMarkdown(
       parts.push(`data-attachment-id="${escapeAttr(attrs.attachmentId)}"`);
     if (attrs.aspectRatio != null)
       parts.push(`data-aspect-ratio="${escapeAttr(attrs.aspectRatio)}"`);
-    // Plain-text caption (issue #221). Markdown `![](src)` cannot carry it, so
+    // Plain-text caption. Markdown `![](src)` cannot carry it, so
     // emit it as data-caption; the schema's image `caption` attr parses it back.
     if (attrs.caption) parts.push(`data-caption="${escapeAttr(attrs.caption)}"`);
     return `<img ${parts.join(" ")}>`;
@@ -1824,7 +2060,7 @@ export function convertProseMirrorToMarkdown(
     return `<details${open}>${inner}</details>`;
   };
   const detailsSummaryToHtml = (node: any): string =>
-    `<summary data-type="detailsSummary">${inlineToHtml(node.content || [])}</summary>`;
+    `<summary data-type="detailsSummary">${blockInlineToHtml(node.content || [])}</summary>`;
   const detailsContentToHtml = (node: any): string => {
     const inner = (node.content || []).map(blockToHtml).join("");
     return `<div data-type="detailsContent">${inner}</div>`;
@@ -1864,7 +2100,7 @@ export function convertProseMirrorToMarkdown(
           pAlign && pAlign !== "left"
             ? ` style="text-align:${escapeAttr(pAlign)}"`
             : "";
-        return `<p${pStyle}>${inlineToHtml(children)}</p>`;
+        return `<p${pStyle}>${blockInlineToHtml(children)}</p>`;
       }
       case "heading": {
         // Same for a heading nested in an HTML container: emit the alignment as
@@ -1876,7 +2112,7 @@ export function convertProseMirrorToMarkdown(
           hAlign && hAlign !== "left"
             ? ` style="text-align:${escapeAttr(hAlign)}"`
             : "";
-        return `<h${level}${hStyle}>${inlineToHtml(children)}</h${level}>`;
+        return `<h${level}${hStyle}>${blockInlineToHtml(children)}</h${level}>`;
       }
       case "bulletList":
         return `<ul>${children
@@ -1885,7 +2121,7 @@ export function convertProseMirrorToMarkdown(
       case "orderedList": {
         // Carry a non-1 `start` on the raw-HTML path (columns/spanned cells) via
         // the <ol start="N"> attribute, which the tiptap parser reads back into
-        // attrs.start. A default (start=1) list stays a bare <ol>. See #351.
+        // attrs.start. A default (start=1) list stays a bare <ol>.
         // Use the SAME integer-≥-2 guard as the markdown path: a fractional start
         // would emit `start="2.5"` → parseInt→2 on import (path divergence), and a
         // 0/negative start is not a valid explicit start either.
@@ -1940,29 +2176,24 @@ export function convertProseMirrorToMarkdown(
         return taskListToHtml({ content: [block] });
       // A table nested in a raw-HTML block (e.g. inside a column) MUST be the
       // HTML <table> form — a GFM pipe table here would not be re-parsed by
-      // marked and would round-trip as literal "| a | b |" text (review #7).
+      // marked and would round-trip as literal "| a | b |" text.
       case "table":
         return tableToHtml(block.content || []);
-      // #293 canon #5: on the TOP-LEVEL path (processNode) subpages/pageBreak
-      // serialize as standalone `<!--...-->` comments, but a comment node is
-      // discarded by the DOM parse stage (jsdom/parse5) that reads back a raw-
-      // HTML block — so inside a column/cell the comment form would silently
-      // vanish (latent data loss; these atoms previously fell through to the
-      // `default` <div></div>). Here we KEEP the schema-matching div-form so the
-      // node survives the raw-HTML round trip.
+      // On the TOP-LEVEL path (processNode) subpages/pageBreak serialize as
+      // standalone `<!--...-->` comments, but a comment node is discarded by the
+      // DOM parse stage (jsdom/parse5) that reads back a raw-HTML block, so inside
+      // a column/cell we emit the schema-matching div-form instead.
       case "pageBreak":
         return `<div data-type="pageBreak"></div>`;
       case "subpages": {
         const recursive = block.attrs?.recursive ? ` data-recursive="true"` : "";
         return `<div data-type="subpages"${recursive}></div>`;
       }
-      // #293 canon #8: the media/discriminator family now serializes at TOP LEVEL
-      // (processNode) as md-target + `<!--name-->` comment. A comment node is
-      // DROPPED by the DOM parse stage that reads a raw-HTML block back, so inside
-      // a column/cell the comment form would silently vanish (data loss). Give
-      // each an EXPLICIT schema-HTML case here (via the shared media-html builders
-      // — the SAME output processNode used to emit, and the same the importer
-      // rebuilds) instead of delegating to processNode's md+comment form.
+      // The media/discriminator family serializes at TOP LEVEL (processNode) as
+      // md-target + `<!--name-->` comment. A comment node is DROPPED by the DOM
+      // parse stage that reads a raw-HTML block back, so inside a column/cell each
+      // gets an EXPLICIT schema-HTML case here (via the shared media-html
+      // builders, the same shape the importer rebuilds).
       case "video":
         return videoToHtml(block.attrs || {});
       case "audio":
@@ -1982,7 +2213,7 @@ export function convertProseMirrorToMarkdown(
         return pageEmbedToHtml(block.attrs || {});
       case "transclusionReference":
         return transclusionReferenceToHtml(block.attrs || {});
-      // #293 canon #6: on the TOP-LEVEL path (processNode) mathBlock now
+      // On the TOP-LEVEL path (processNode) mathBlock
       // serializes as a `$$…$$` fence, but marked does NOT re-parse markdown
       // inside a raw-HTML block, so inside a column/cell it MUST stay the
       // schema-HTML `<div>` form or it would land as literal `$$…$$` text on
@@ -1990,7 +2221,7 @@ export function convertProseMirrorToMarkdown(
       // rebuilds) instead of delegating to processNode's fence form.
       case "mathBlock":
         return mathBlockHtml(block.attrs?.text || "");
-      // #293 canon #2: on the markdown path a footnotesList emits nothing (the
+      // On the markdown path a footnotesList emits nothing (the
       // note body rides at each `^[…]` reference). But a raw-HTML container
       // drops comment/markdown reconstruction, so KEEP the schema-matching
       // <section>/<div> HTML here so a footnotesList that ever lands inside a
@@ -2022,7 +2253,7 @@ export function convertProseMirrorToMarkdown(
         if (children.length && children.some((c: any) => c.type !== "text")) {
           return `<div>${children.map(blockToHtml).join("")}</div>`;
         }
-        return `<div>${inlineToHtml(children)}</div>`;
+        return `<div>${blockInlineToHtml(children)}</div>`;
     }
   };
 

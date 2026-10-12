@@ -11,7 +11,7 @@ import {
 /**
  * Admin update payload for the workspace AI provider settings.
  *
- * `apiKey` / `embeddingApiKey` / `sttApiKey` are write-only (§8.2): provided →
+ * `apiKey` / `embeddingApiKey` / `sttApiKey` are write-only: provided →
  * stored encrypted, '' → cleared, absent → left untouched. They are NEVER
  * returned by any endpoint. The global ValidationPipe runs with
  * `whitelist: true`, so unknown fields are stripped.

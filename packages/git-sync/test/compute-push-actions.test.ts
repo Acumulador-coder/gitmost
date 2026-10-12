@@ -112,7 +112,7 @@ describe('computePushActions — M (modified)', () => {
 
   it('modified file that DROPPED its pageId recovers it from the pre-image -> update (bug C10-D1)', () => {
     // The current file lost its `gitmost_id` frontmatter (a tool rewrote the whole
-    // file), but the last-pushed version at this path still had it. Recover the id
+    // file), but the last-export version at this path still had it. Recover the id
     // and apply the body edit instead of silently skipping+reverting it.
     const changes: DiffEntry[] = [{ status: 'M', path: 'Doc.md' }];
     const metaAt = metaTable({
@@ -133,7 +133,7 @@ describe('computePushActions — D (deleted)', () => {
       'Gone.md|prev': meta({ pageId: 'p-gone' }),
     });
     const actions = computePushActions({ changes, metaAt });
-    expect(actions.deletes).toEqual([{ pageId: 'p-gone' }]);
+    expect(actions.deletes).toEqual([{ pageId: 'p-gone', path: 'Gone.md' }]);
     expect(actions.skipped).toEqual([]);
   });
 
@@ -160,7 +160,7 @@ describe('computePushActions — D (deleted)', () => {
       'Gone.md|prev': meta({ pageId: 'p-correct' }),
     });
     const actions = computePushActions({ changes, metaAt });
-    expect(actions.deletes).toEqual([{ pageId: 'p-correct' }]);
+    expect(actions.deletes).toEqual([{ pageId: 'p-correct', path: 'Gone.md' }]);
   });
 });
 
@@ -179,7 +179,7 @@ describe('computePushActions — R/C (renamed/moved)', () => {
     // It is ALSO recorded as an UPDATE for the new path (F4) so a body edit
     // riding along the rename in the same diff is pushed, not lost. The update
     // carries `basePath = oldPath` so the 3-way merge base is resolved from where
-    // the file lived at last-pushed (the OLD path), not the new path (which would
+    // the file lived at last-export (the OLD path), not the new path (which would
     // return null and degrade to a 2-way clobber). Never a create/delete though.
     expect(actions.creates).toEqual([]);
     expect(actions.updates).toEqual([
@@ -227,7 +227,7 @@ describe('computePushActions — R/C (renamed/moved)', () => {
     ]);
     // The body also rides along as an UPDATE for the new path (F4). For a COPY the
     // `basePath` is the SOURCE path (`Src.md`): the source still exists in the
-    // last-pushed tree, so the copy's body 3-way-merges against its source's
+    // last-export tree, so the copy's body 3-way-merges against its source's
     // last-synced text — a real common ancestor, not a null 2-way base.
     expect(actions.updates).toEqual([
       { pageId: 'p-copy', path: 'Copy.md', basePath: 'Src.md' },
@@ -274,7 +274,7 @@ describe('computePushActions — mixed batch', () => {
       // for an honest 3-way merge; the plain A/M updates carry no basePath.
       { pageId: 'p-mv', path: 'Dst.md', basePath: 'Srcc.md' },
     ]);
-    expect(actions.deletes).toEqual([{ pageId: 'p-rm' }]);
+    expect(actions.deletes).toEqual([{ pageId: 'p-rm', path: 'Removed.md' }]);
     expect(actions.renamesMoves).toEqual([
       { pageId: 'p-mv', oldPath: 'Srcc.md', newPath: 'Dst.md' },
     ]);
@@ -349,7 +349,7 @@ describe('computePushActions — ghost-move coalescing (data-loss guard)', () =>
       'Gone.md|prev': meta({ pageId: 'p9', title: 'Gone', spaceId: 'sp1' }),
     });
     const actions = computePushActions({ changes, metaAt });
-    expect(actions.deletes).toEqual([{ pageId: 'p9' }]);
+    expect(actions.deletes).toEqual([{ pageId: 'p9', path: 'Gone.md' }]);
     expect(actions.renamesMoves).toEqual([]);
   });
 
@@ -363,7 +363,7 @@ describe('computePushActions — ghost-move coalescing (data-loss guard)', () =>
       'B.md|current': meta({ pageId: 'pb', title: 'B', spaceId: 'sp1' }),
     });
     const actions = computePushActions({ changes, metaAt });
-    expect(actions.deletes).toEqual([{ pageId: 'pa' }]);
+    expect(actions.deletes).toEqual([{ pageId: 'pa', path: 'A.md' }]);
     expect(actions.updates).toEqual([{ pageId: 'pb', path: 'B.md' }]);
     expect(actions.renamesMoves).toEqual([]);
   });
@@ -402,7 +402,7 @@ describe('computePushActions — currentPageIds guard (cross-cycle move)', () =>
       metaAt,
       currentPageIds: new Set(['pOther']), // pY is NOT present -> genuinely deleted
     });
-    expect(actions.deletes).toEqual([{ pageId: 'pY' }]);
+    expect(actions.deletes).toEqual([{ pageId: 'pY', path: 'Removed.md' }]);
     expect(actions.skipped).toEqual([]);
   });
 });

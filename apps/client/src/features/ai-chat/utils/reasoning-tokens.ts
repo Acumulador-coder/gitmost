@@ -10,7 +10,7 @@ import type { UIMessage } from "@ai-sdk/react";
  * then that block can show the exact figure. With MULTIPLE reasoning parts (a
  * multi-step agent turn) every block must fall back to its own estimate —
  * attributing the turn total to one of them would double-count against the
- * others' estimates (#151 review anti-double-count rule). When there is no
+ * others' estimates. When there is no
  * authoritative usage at all, every part estimates.
  *
  * Returns the authoritative `reasoningTokens` only for the single-reasoning-part

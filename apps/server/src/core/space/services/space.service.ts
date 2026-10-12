@@ -23,12 +23,17 @@ import { CursorPaginationResult } from '@docmost/db/pagination/cursor-pagination
 import { ShareRepo } from '@docmost/db/repos/share/share.repo';
 import { WorkspaceRepo } from '@docmost/db/repos/workspace/workspace.repo';
 import { LicenseCheckService } from '../../../integrations/environment/license-check.service';
+import { EnvironmentService } from '../../../integrations/environment/environment.service';
 import { AuditEvent, AuditResource } from '../../../common/events/audit-events';
 import { diffAuditTrackedFields } from '../../../common/helpers';
 import {
   AUDIT_SERVICE,
   IAuditService,
 } from '../../../integrations/audit/audit.service';
+import {
+  GIT_SYNC_RESTRICTED_SPACE_REASON,
+  GitSyncRestrictionsService,
+} from '../../../integrations/git-sync/services/git-sync-restrictions.service';
 
 @Injectable()
 export class SpaceService {
@@ -41,6 +46,8 @@ export class SpaceService {
     @InjectKysely() private readonly db: KyselyDB,
     @InjectQueue(QueueName.ATTACHMENT_QUEUE) private attachmentQueue: Queue,
     @Inject(AUDIT_SERVICE) private readonly auditService: IAuditService,
+    private readonly environmentService: EnvironmentService,
+    private readonly gitSyncRestrictions: GitSyncRestrictionsService,
   ) {}
 
   async createSpace(
@@ -121,6 +128,27 @@ export class SpaceService {
     updateSpaceDto: UpdateSpaceDto,
     workspaceId: string,
   ): Promise<Space> {
+    if (
+      typeof updateSpaceDto.gitSyncEnabled !== 'undefined' &&
+      !this.environmentService.isGitSyncEnabled()
+    ) {
+      throw new BadRequestException('Git sync is disabled on this server');
+    }
+
+    // git-sync cannot enforce page-level restrictions (a clone exposes every
+    // page to every space member), so it refuses a space that has any.
+    if (
+      updateSpaceDto.gitSyncEnabled === true &&
+      (await this.gitSyncRestrictions.spaceHasRestrictedPages(
+        updateSpaceDto.spaceId,
+        workspaceId,
+      ))
+    ) {
+      throw new BadRequestException(
+        `Git sync cannot be enabled for this space: ${GIT_SYNC_RESTRICTED_SPACE_REASON}`,
+      );
+    }
+
     if (updateSpaceDto?.slug) {
       const slugExists = await this.spaceRepo.slugExists(
         updateSpaceDto.slug,
@@ -209,6 +237,22 @@ export class SpaceService {
           workspaceId,
           'allowViewerComments',
           updateSpaceDto.allowViewerComments,
+          trx,
+        );
+      }
+
+      if (typeof updateSpaceDto.gitSyncEnabled !== 'undefined') {
+        const prev = settingsBefore?.gitSync?.enabled ?? false;
+        if (prev !== updateSpaceDto.gitSyncEnabled) {
+          before.gitSyncEnabled = prev;
+          after.gitSyncEnabled = updateSpaceDto.gitSyncEnabled;
+        }
+
+        await this.spaceRepo.updateGitSyncSettings(
+          updateSpaceDto.spaceId,
+          workspaceId,
+          'enabled',
+          updateSpaceDto.gitSyncEnabled,
           trx,
         );
       }

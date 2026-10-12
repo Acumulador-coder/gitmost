@@ -47,8 +47,7 @@ import { EnvironmentService } from '../../../integrations/environment/environmen
 // before throwing, so the missing/disabled path takes about the same time as
 // the real-user wrong-password path. Without it, the "no bcrypt at all" branch
 // returns measurably faster, leaking whether an email is registered (a user-
-// enumeration timing oracle, now reachable via /mcp where throttling is only a
-// spoofable in-memory limiter). This is never used as a real credential.
+// enumeration timing oracle). This is never used as a real credential.
 // The cost factor MUST match the production saltRounds (12 — see
 // common/helpers/utils.ts hashPassword), otherwise the dummy compare runs
 // faster than a real wrong-password compare and the timing oracle survives.
@@ -79,10 +78,11 @@ export class AuthService {
    * user on success; throws UnauthorizedException (credentials) or whatever
    * `throwIfEmailNotVerified` throws otherwise.
    *
-   * Use this for repeated per-request credential re-validation (e.g. the /mcp
-   * anti-fixation check on subsequent requests) where minting a new DB session
-   * and audit row on every call would be audit spam / a session-table DoS. The
-   * full `login()` reuses it so there is no behaviour drift between the two.
+   * Use this for repeated per-request credential re-validation (e.g. git
+   * smart-HTTP Basic auth, the api-key reveal step-up) where minting a new DB
+   * session and audit row on every call would be audit spam / a session-table
+   * DoS. The full `login()` reuses it so there is no behaviour drift between the
+   * two.
    */
   async verifyUserCredentials(
     loginDto: LoginDto,

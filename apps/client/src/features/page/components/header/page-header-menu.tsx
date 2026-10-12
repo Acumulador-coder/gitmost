@@ -269,14 +269,13 @@ function PageActionMenu({ readOnly, onSaveVersion }: PageActionMenuProps) {
     }
   };
 
-  // #563 — the chrome now paints from the boot cache BEFORE this query resolves,
-  // so on a reload `page` is undefined here while the header is already on
-  // screen. Every item below needs the LIVE page (its id/slugId drive copy-link,
-  // export, move, delete, watch…), and the boot cache deliberately carries no
-  // authority to act. So render the trigger INERT until the response lands —
-  // never a throw (the unguarded `page.id` / `page.lastUpdatedBy` reads below
-  // used to blow up the whole page through the ErrorBoundary), and never an
-  // action that could fire against a page we have not re-validated.
+  // The chrome paints from the boot cache BEFORE this query resolves, so on a
+  // reload `page` is undefined here while the header is already on screen.
+  // Every item below needs the LIVE page (its id/slugId drive copy-link, export,
+  // move, delete, watch…), and the boot cache deliberately carries no authority
+  // to act. So render the trigger INERT until the response lands — never a throw
+  // on the `page.id` / `page.lastUpdatedBy` reads below, and never an action that
+  // could fire against a page we have not re-validated.
   if (!page) {
     return (
       <ActionIcon

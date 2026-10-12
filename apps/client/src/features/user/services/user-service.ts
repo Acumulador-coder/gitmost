@@ -1,6 +1,6 @@
 import api from "@/lib/api-client";
 import { ICurrentUser, IUser } from "@/features/user/types/user.types";
-import { offlineCriticalRequestConfig } from "@/lib/config";
+import { OFFLINE_CRITICAL_REQUEST_CONFIG } from "@/lib/config";
 
 export async function getMyInfo(): Promise<ICurrentUser> {
   // #641, part 5 — offline-critical: a per-request timeout so a hung /me settles
@@ -8,7 +8,7 @@ export async function getMyInfo(): Promise<ICurrentUser> {
   const req = await api.post<ICurrentUser>(
     "/users/me",
     undefined,
-    offlineCriticalRequestConfig(),
+    OFFLINE_CRITICAL_REQUEST_CONFIG,
   );
   return req.data as ICurrentUser;
 }

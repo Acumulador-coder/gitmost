@@ -27,7 +27,7 @@ describe('round-trip idempotency (SPEC §11)', () => {
 
     // The property git actually needs: a second export reproduces the first
     // byte-for-byte. We intentionally do NOT deep-equal doc vs doc2 — the
-    // converter reconstructs schema default attrs (e.g. indent:null), a known
+    // converter reconstructs schema default attrs (e.g. indent: 0), a known
     // SPEC §11 divergence that does not affect markdown stability.
     expect(md2).toBe(md1);
   });
@@ -35,8 +35,8 @@ describe('round-trip idempotency (SPEC §11)', () => {
 
 // ---------------------------------------------------------------------------
 // Full export -> import -> export round-trips for the schema's HTML-carried
-// atoms/blocks (math, mention, details). The existing markdown-converter unit
-// tests only assert the one-way emit string; here we additionally pin that the
+// atoms/blocks (math, mention, details). The markdown-converter unit tests
+// assert the one-way emit string; here we additionally pin that the
 // re-import (generateJSON via the docmost schema) rebuilds the correct node and
 // that a second export reproduces the first byte-for-byte. Helpers mirror the
 // converter unit tests (a single-node doc renders exactly that node, trimmed).
@@ -60,7 +60,7 @@ describe('math round-trip (mathBlock + mathInline)', () => {
     const source = { type: 'mathBlock', attrs: { text: 'a^2+b^2' } };
     const { md1, doc2, md2 } = await roundTrip(source);
 
-    // #293 canon #6: block math emits a `$$` fence on its own lines.
+    // Block math emits a `$$` fence on its own lines.
     expect(md1).toBe('$$\na^2+b^2\n$$');
     // Byte-stable: the second export reproduces the first exactly.
     expect(md2).toBe(md1);
@@ -79,7 +79,7 @@ describe('math round-trip (mathBlock + mathInline)', () => {
     const source = para({ type: 'mathInline', attrs: { text: 'x_i' } });
     const { md1, doc2, md2 } = await roundTrip(source);
 
-    // #293 canon #6: inline math emits the Obsidian-native `$LaTeX$` form.
+    // Inline math emits the Obsidian-native `$LaTeX$` form.
     expect(md1).toBe('$x_i$');
     expect(md2).toBe(md1);
 
@@ -210,14 +210,10 @@ describe('details open-attribute round-trip', () => {
     // Byte-stable: re-export reproduces the same fence.
     expect(md2).toBe(md1);
 
-    // NOTE(review): the spec text says doc2's details attrs.open should be
-    // `null` (the raw return of el.getAttribute('open') on a plain <details>,
-    // schema src ~L438). In practice generateJSON applies the schema attribute
-    // default when the parseHTML result is null, so the materialised node carries
-    // attrs.open === false (the declared default at src ~L437), NOT null. We
-    // assert the ACTUAL value. The load-bearing point of the spec still holds:
-    // a plain <details> import does NOT recover the open flag (no truthy value),
-    // so renderHTML's `attrs.open ? {open:''} : {}` keeps the round-trip clean.
+    // generateJSON applies the schema attribute default when parseHTML returns
+    // null, so a plain <details> imports with attrs.open === false (not null).
+    // The open flag is not recovered, so renderHTML's
+    // `attrs.open ? {open:''} : {}` keeps the round-trip clean.
     const details = doc2.content[0];
     expect(details.type).toBe('details');
     expect(details.attrs.open).toBe(false);

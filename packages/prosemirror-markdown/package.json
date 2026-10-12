@@ -1,7 +1,7 @@
 {
   "name": "@docmost/prosemirror-markdown",
   "version": "0.1.0",
-  "description": "Pure ProseMirror <-> Markdown converter + schema mirror (headless, framework-free).",
+  "description": "Pure ProseMirror <-> Markdown converter over the @docmost/editor-ext schema (headless).",
   "private": true,
   "type": "module",
   "main": "./build/index.js",
@@ -25,6 +25,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@docmost/editor-ext": "workspace:*",
     "@tiptap/core": "3.20.4",
     "@tiptap/extension-code": "3.20.4",
     "@tiptap/extension-highlight": "3.20.4",
@@ -42,7 +43,6 @@
     "zod": "4.3.6"
   },
   "devDependencies": {
-    "@docmost/editor-ext": "workspace:*",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^20.0.0",
     "fast-check": "^4.8.0",

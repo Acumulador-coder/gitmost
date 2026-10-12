@@ -11,6 +11,7 @@ import EmojiCommand from "@/features/editor/extensions/emoji-command";
 import mentionRenderItems from "@/features/editor/components/mention/mention-suggestion";
 import MentionView from "@/features/editor/components/mention/mention-view";
 import { platformModifierKey } from "@/lib";
+import { linkDomAttributes } from "@/features/editor/components/link/link-href.ts";
 
 interface CommentEditorProps {
   defaultContent?: any;
@@ -54,7 +55,17 @@ const CommentEditor = forwardRef(
         Placeholder.configure({
           placeholder: placeholder || t("Reply..."),
         }),
-        LinkExtension,
+        LinkExtension.extend({
+          // Same plain <a> as the page editor: a comment's own class/rel/target
+          // link attributes never reach the DOM (see linkDomAttributes).
+          renderHTML({ mark }) {
+            return [
+              "a",
+              linkDomAttributes(mark.attrs, window.location.pathname),
+              0,
+            ];
+          },
+        }),
         EmojiCommand,
         Mention.configure({
           suggestion: {

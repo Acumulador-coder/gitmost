@@ -24,6 +24,8 @@ import {
   AUDIT_SERVICE,
   IAuditService,
 } from '../../../integrations/audit/audit.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { emitCollabAccessChanged } from '../../../common/events/collab-access-changed';
 
 @Injectable()
 export class SpaceMemberService {
@@ -35,6 +37,7 @@ export class SpaceMemberService {
     private favoriteRepo: FavoriteRepo,
     @InjectKysely() private readonly db: KyselyDB,
     @Inject(AUDIT_SERVICE) private readonly auditService: IAuditService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async addUserToSpace(
@@ -173,6 +176,11 @@ export class SpaceMemberService {
     if (membersToAdd.length > 0) {
       await this.spaceMemberRepo.insertSpaceMember(membersToAdd);
 
+      emitCollabAccessChanged(this.eventEmitter, {
+        workspaceId,
+        spaceId: dto.spaceId,
+      });
+
       // Audit log for each member added
       for (const user of validUsers) {
         this.auditService.log({
@@ -282,6 +290,12 @@ export class SpaceMemberService {
       );
     });
 
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId,
+      spaceId: dto.spaceId,
+      userIds: affectedUserIds,
+    });
+
     this.auditService.log({
       event: AuditEvent.SPACE_MEMBER_REMOVED,
       resourceType: AuditResource.SPACE_MEMBER,
@@ -348,6 +362,13 @@ export class SpaceMemberService {
       spaceMember.id,
       dto.spaceId,
     );
+
+    // A group member's users are not looked up: the space narrows the re-check.
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId,
+      spaceId: dto.spaceId,
+      ...(spaceMember.userId ? { userIds: [spaceMember.userId] } : {}),
+    });
 
     this.auditService.log({
       event: AuditEvent.SPACE_MEMBER_ROLE_CHANGED,

@@ -12,15 +12,12 @@ import {
 } from './db';
 
 /**
- * #207 #7 — TOCTOU in PageService.movePage: two concurrent moves
- * ("A under B" + "B under A") must NOT be able to persist a parent/child cycle.
+ * TOCTOU in PageService.movePage: two concurrent moves ("A under B" + "B under
+ * A") must NOT be able to persist a parent/child cycle.
  *
- * Before the fix the cycle check (getPageBreadCrumbs) and the UPDATE were two
- * separate, unlocked statements, so both movers could read the same pre-write
- * acyclic snapshot, both pass the guard, and persist A.parentPageId=B AND
- * B.parentPageId=A. The fix runs the guard + UPDATE in one transaction behind a
- * per-space advisory lock, so the moves serialize: whichever commits second
- * sees the first's write and its guard rejects the cycle.
+ * The cycle check (getPageBreadCrumbs) and the UPDATE run in one transaction
+ * behind a per-space advisory lock, so the moves serialize: whichever commits
+ * second sees the first's write and its guard rejects the cycle.
  *
  * This test drives the real PageService.movePage against a real Postgres,
  * firing the two opposing moves concurrently, and asserts that no cycle ever

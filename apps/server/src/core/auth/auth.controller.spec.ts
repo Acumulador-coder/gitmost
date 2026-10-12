@@ -21,7 +21,7 @@ describe('AuthController', () => {
   });
 });
 
-// The collab-token handler is the ARM-SEAM of the #501 anti-laundering defense:
+// The collab-token handler is the ARM-SEAM of the api-key anti-laundering defense:
 // it derives the api-key origin args ({ apiKeyId }) from the SIGNED-derived
 // `req.raw` fields (stamped by jwt.strategy) and threads them into the collab
 // token mint, forcing principal='api_key' so a later key revoke rejects NEW

@@ -123,8 +123,8 @@ describe("CommentListItem — agent avatar stack", () => {
     );
     // The AGENT is the primary label (the flipped hierarchy).
     expect(screen.getByText("Researcher")).toBeDefined();
-    // The human launcher name shows exactly once — it is no longer duplicated as
-    // a separate creator name (that duplication is the bug this fixes).
+    // The human launcher name shows exactly once — not duplicated as a separate
+    // creator name.
     expect(screen.getAllByText("Alice").length).toBe(1);
   });
 

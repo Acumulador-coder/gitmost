@@ -1,5 +1,5 @@
 // Contract tests for the drawioGet / drawioCreate / drawioUpdate client
-// methods (issue #423). Follows the repo's seam-override pattern (see
+// methods. Follows the repo's seam-override pattern (see
 // full-doc-write-canonicalize.test.mjs): a DocmostClient subclass stubs the I/O
 // seams (auth, collab token, page read, attachment upload/fetch, the mutatePage
 // write) so the tool logic is exercised without a live Docmost or collab socket.
@@ -38,11 +38,11 @@ function compressedSvgFor(model) {
   return `<svg xmlns="http://www.w3.org/2000/svg" content="${content}"><image href="x"/></svg>`;
 }
 
-// The vendored `drawio` node schema (diagramAttributes) declares ONLY these
+// The editor-ext `drawio` node declares ONLY these
 // attributes; PMNode.fromJSON drops anything else on save. Mirror that here so
 // the mock write path behaves like the real one — in particular, a block `id`
 // set on a drawio node does NOT survive the save, so a handle keyed on it is
-// un-resolvable. This is exactly what the production bug (issue #423 Fix 1) was.
+// un-resolvable.
 const DRAWIO_SCHEMA_ATTRS = new Set([
   "src",
   "title",
@@ -170,12 +170,10 @@ test("drawioCreate: before/after requires exactly one anchor", async () => {
   );
 });
 
-// #494 — a NESTED insert (anchored inside a callout/table cell) lands a write
-// that "#<index>" cannot address. The tool used to THROW here even though the
-// diagram was already committed, so a retry-prone agent re-created a DUPLICATE.
-// It must now report SUCCESS (nodeId:null + a warning) so the agent never
-// blind-retries a landed write. This REDDENS if the throw is restored (the
-// assert.doesNotReject + success asserts would fail).
+// A NESTED insert (anchored inside a callout/table cell) lands a write that
+// "#<index>" cannot address. The diagram is already committed, so the tool must
+// report SUCCESS (nodeId:null + a warning) instead of throwing — otherwise a
+// retry-prone agent would re-create a DUPLICATE.
 test("drawioCreate: a NESTED insert succeeds with nodeId:null + a warning (no throw, no duplicate)", async () => {
   const pageDoc = {
     type: "doc",

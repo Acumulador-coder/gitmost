@@ -97,16 +97,12 @@ describe("arePropsEqual", () => {
     expect(arePropsEqual(props(a), props(b))).toBe(false);
   });
 
-  // REGRESSION (empty-render bug): the AI SDK streams deltas by mutating the SAME
-  // `parts` in place and handing back a message wrapper that SHARES them. So the
-  // PREVIOUS and NEXT props can carry the SAME (mutated) message object, and
-  // recomputing `messageSignature(message)` inside the comparator would read
-  // identical (latest) content on BOTH sides → always "equal" → the memo skips
-  // every streamed update and the assistant row freezes at its initial empty
-  // render. The comparator MUST instead trust the immutable `signature` SNAPSHOT
-  // the parent captured at each render. This fails against the old implementation
-  // (a `prev.message === next.message` fast path + a signature recomputed from the
-  // live objects).
+  // The AI SDK streams deltas by mutating the SAME `parts` in place and handing
+  // back a message wrapper that SHARES them, so PREVIOUS and NEXT props can carry
+  // the SAME (mutated) message object. Recomputing `messageSignature(message)`
+  // inside the comparator would read identical content on both sides and skip
+  // every streamed update; the comparator must trust the immutable `signature`
+  // snapshot the parent captured at each render.
   it("re-renders when parts were mutated in place but the snapshot changed", () => {
     const message = msg([{ type: "text", text: "" }]); // empty (renders null)
     const prevSig = messageSignature(message); // snapshot BEFORE the delta

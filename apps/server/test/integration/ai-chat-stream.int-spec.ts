@@ -16,10 +16,9 @@ import {
 } from './db';
 
 /**
- * #192 Section 3 — full integration of `AiChatService.stream` against a REAL
- * Postgres, driving the REAL `streamText` through a seeded SDK model
- * (`MockLanguageModelV3` from `ai/test`) and a REAL Node `ServerResponse` as the
- * hijacked socket. The three deferred scenarios:
+ * Full integration of `AiChatService.stream` against a REAL Postgres, driving the
+ * REAL `streamText` through a seeded SDK model (`MockLanguageModelV3` from
+ * `ai/test`) and a REAL Node `ServerResponse` as the hijacked socket. Scenarios:
  *
  *   1. onError — a turn that fails mid-stream still PERSISTS an assistant record
  *      (status 'error', the partial answer the user saw, the error in metadata).
@@ -173,7 +172,13 @@ describe('AiChatService.stream [integration]', () => {
         sessionId: 'sess-1',
         body: opts.body,
         res: { raw: res } as any,
-        signal: new AbortController().signal,
+        // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+        runHooks: {
+          begin: async () => ({
+            runId: 'run-1',
+            signal: new AbortController().signal,
+          }),
+        },
         model: opts.model as any,
         role: null,
       } as any);
@@ -322,9 +327,9 @@ describe('AiChatService.stream [integration]', () => {
   });
 
   /**
-   * #332 + #490 deferred tool loading, the ON path. Turn 1 starts COLD (CORE +
+   * Deferred tool loading, the ON path. Turn 1 starts COLD (CORE +
    * loadTools only) and activates a deferred tool via loadTools; that activation
-   * is PERSISTED into the chat's metadata.activatedTools (#490) so the NEXT turn
+   * is PERSISTED into the chat's metadata.activatedTools so the NEXT turn
    * SEEDS from it and the tool is active from the fresh turn's FIRST step — the
    * model never re-runs loadTools to re-activate the same tool. The unit tests
    * only exercise pure prepareAgentStep with hand-fed Sets; this pins the real
@@ -400,7 +405,13 @@ describe('AiChatService.stream [integration]', () => {
           sessionId: 'sess-1',
           body,
           res: { raw: res } as any,
-          signal: new AbortController().signal,
+          // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+          runHooks: {
+            begin: async () => ({
+              runId: 'run-1',
+              signal: new AbortController().signal,
+            }),
+          },
           model: model as any,
           role: null,
         } as any);

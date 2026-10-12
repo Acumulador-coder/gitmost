@@ -16,6 +16,7 @@ describe('GroupService', () => {
       {} as any, // favoriteRepo
       {} as any, // db
       {} as any, // auditService
+      {} as any, // eventEmitter
     );
   });
 

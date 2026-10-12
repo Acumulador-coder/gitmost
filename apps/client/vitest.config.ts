@@ -13,25 +13,23 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
-    // Coverage gate (issue #324). v8 provider (not istanbul) so ESM barrels
-    // like `@docmost/editor-ext` are not re-parsed/instrumented. Thresholds are
-    // set a few points below the level measured on develop, scoped to the files
-    // the suite exercises (`all: false`) rather than the whole app, so the gate
-    // passes today but fails on a genuine coverage regression.
+    // Node >= 25 ships a built-in global `localStorage` that is `undefined` without
+    // --localstorage-file and shadows jsdom's, so tests touching localStorage crash.
+    // Turn Node's Web Storage off in the workers (the flag also exists on Node 22).
+    execArgv: ['--no-experimental-webstorage'],
+    // Coverage gate. v8 provider (not istanbul) so ESM barrels like
+    // `@docmost/editor-ext` are not re-parsed/instrumented. Thresholds sit a few
+    // points below the measured level, scoped to the files the suite exercises
+    // (`all: false`), so the gate fails on a genuine coverage regression.
     //
-    // The editor component graph is scored SEPARATELY from the rest of the app
-    // (#564). Any test that touches the editor drags in every node view, menu and
-    // toolbar under `src/features/editor/components/**` — `extensions.ts` imports
-    // them statically, so BOTH `page-editor.local-first.test.tsx` (which mounts the
-    // real PageEditor) and `extensions.code-yjs-key.test.ts` (which only imports
-    // `mainExtensions`) load the whole graph. With `all: false` the DENOMINATOR is
-    // "files loaded during the run", so ~3.5k statements that no test EXECUTES
-    // joined it: that directory alone sits at ≈23% and drags the whole-app ratio
-    // from ≈61% down to ≈49%. The suite covers MORE code in absolute terms; only
-    // the ratio fell. Rather than weaken one gate for the whole app, each half
-    // gets the threshold it can actually hold: the app (≈61%) keeps the original
-    // 55/53/44/55, the loaded-but-unexercised component graph (≈23%) gets a floor
-    // that still fails if it rots.
+    // The editor component graph is scored SEPARATELY from the rest of the app.
+    // Any test that touches the editor drags in every node view, menu and
+    // toolbar under `src/features/editor/components/**` (`extensions.ts` imports
+    // them statically). With `all: false` the denominator is "files loaded
+    // during the run", so that directory (≈23%) would drag the whole-app ratio
+    // from ≈61% to ≈49%. Each half gets the threshold it can hold: the app keeps
+    // 55/53/44/55, the loaded-but-unexercised component graph gets a floor that
+    // still fails if it rots.
     //
     // The two globs PARTITION the report — note the LEADING `!` on the first key.
     // Vitest matches threshold globs with picomatch (negation supported) against the

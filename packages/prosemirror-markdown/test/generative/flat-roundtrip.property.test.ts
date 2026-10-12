@@ -6,7 +6,7 @@ import { convertProseMirrorToMarkdown } from '../../src/lib/markdown-converter.j
 // load (expected, required for @tiptap/html's generateJSON under Node).
 import { markdownToProseMirror } from '../../src/lib/markdown-to-prosemirror.js';
 import { docsCanonicallyEqual, canonicalizeContent } from '../../src/lib/index.js';
-import { firstDivergence } from '../roundtrip-helpers.js';
+import { canonicalizeMarkdownWhitespace, firstDivergence } from '../roundtrip-helpers.js';
 import {
   schema,
   allSchemaAttrKeys,
@@ -24,7 +24,7 @@ import { envInt } from './env-int.js';
 // The node/mark completeness contract guarantees every TYPE is generated, but
 // NOT that every attribute is exercised at a NON-DEFAULT value. An attribute
 // with no `arb` in attr-arbitraries.ts is only ever tested at absent/default —
-// an INVISIBLE coverage hole (the reviewer's concern). This allowlist makes that
+// an INVISIBLE coverage hole. This allowlist makes that
 // hole EXPLICIT: it is the exact set of attrs deliberately not value-fuzzed, so
 // a NEW attribute (or a newly-frozen one) that lands in this bucket flips the
 // snapshot test red and forces a reviewer to classify it. Each belongs to one of:
@@ -33,12 +33,10 @@ import { envInt } from './env-int.js';
 //     frozen: their value is an opaque token carried verbatim, not a round-trip
 //     shape worth fuzzing;
 //   - ACCEPTED limitations with no md representation (indent, callout.icon,
-//     orderedList.type, table spans/bg/colwidth).
-// The media dimension/family attrs (image/video/youtube/drawio/excalidraw/pdf/
-// embed width/height/align/size/aspectRatio/caption/title/alt) that were
-// previously "deferred to a later PR" are IMPLEMENTED (value-fuzzed) in THIS PR
-// via the OVERRIDES table in attr-arbitraries.ts — they ride in the discriminator
-// comment JSON and round-trip byte-stably, so they are no longer allowlisted.
+//     orderedList.type, table spans/bg/colwidth, youtube.start).
+// The media dimension/family attrs (width/height/align/size/aspectRatio/
+// caption/alt) are value-fuzzed via the OVERRIDES table in attr-arbitraries.ts,
+// so they are not allowlisted.
 const ATTR_VALUE_FUZZ_ALLOWLIST = new Set<string>([
   'attachment.attachmentId', 'attachment.mime', 'attachment.placeholder', 'attachment.size',
   'audio.attachmentId', 'audio.placeholder', 'audio.size',
@@ -55,6 +53,7 @@ const ATTR_VALUE_FUZZ_ALLOWLIST = new Set<string>([
   'tableHeader.backgroundColor', 'tableHeader.backgroundColorName', 'tableHeader.colspan',
   'tableHeader.colwidth', 'tableHeader.rowspan',
   'video.attachmentId', 'video.placeholder',
+  'youtube.start',
 ]);
 
 // ── MARK attribute-value coverage ───────────────────────────────────────────
@@ -82,6 +81,8 @@ const MARK_ATTR_ALLOWLIST = new Set<string>([
   'mark:link.target',
   'mark:link.rel',
   'mark:link.class',
+  // presentational palette name; the converter emits only the highlight color.
+  'mark:highlight.colorName',
 ]);
 
 // Each run does a real convert + marked + jsdom parse (~ms). Give ample headroom
@@ -90,7 +91,7 @@ const MARK_ATTR_ALLOWLIST = new Set<string>([
 vi.setConfig({ testTimeout: 30000 });
 
 // ---------------------------------------------------------------------------
-// #351 PR 1 — GENERATIVE (property-based) round-trip over FLAT (single-node)
+// GENERATIVE (property-based) round-trip over FLAT (single-node)
 // documents at the ATTRIBUTE level.
 //
 // We assert three invariants for ANY generated valid flat document `d`
@@ -111,8 +112,8 @@ vi.setConfig({ testTimeout: 30000 });
 // ---------------------------------------------------------------------------
 
 // Fixed seed so every failure is reproducible; fast-check also prints the
-// shrunk counterexample. numRuns starts modest to keep CI under budget — the
-// issue's CI target is ~300-500 per property. Both are overridable via the
+// shrunk counterexample. numRuns stays modest (~300-500 per property) to keep
+// CI under budget. Both are overridable via the
 // PROPERTY_SEED / PROPERTY_NUM_RUNS env vars (an invalid/empty value → NaN →
 // falls back to the default below): the nightly cron
 // (.github/workflows/nightly-property.yml) cranks NUM_RUNS to ~5000 with a
@@ -253,11 +254,20 @@ describe('#351 flat generative round-trip — properties', () => {
     await fc.assert(
       fc.asyncProperty(p1Union, async (doc) => {
         const { doc2 } = await roundTrip(doc);
-        if (!docsCanonicallyEqual(doc2, doc)) {
+        // Both sides go through canonicalizeMarkdownWhitespace, which forgives the
+        // TWO whitespace positions markdown cannot represent: inside a bare
+        // emphasis delimiter (`**x **` does not close) and as leading block
+        // indentation (dropped, or worse, an indented code block). Neither rule
+        // touches a mark, a mark's identity or a block's type, so mark LOSS and
+        // paragraph→list/heading/codeBlock still fail loudly — see the helper's
+        // contract. A no-op for every run without edge whitespace.
+        const got = canonicalizeMarkdownWhitespace(doc2);
+        const want = canonicalizeMarkdownWhitespace(doc);
+        if (!docsCanonicallyEqual(got, want)) {
           // Surface the precise divergence in the failure message.
           const div = firstDivergence(
-            JSON.parse(JSON.stringify(canonicalizeContent(doc2))),
-            JSON.parse(JSON.stringify(canonicalizeContent(doc))),
+            JSON.parse(JSON.stringify(canonicalizeContent(got))),
+            JSON.parse(JSON.stringify(canonicalizeContent(want))),
           );
           throw new Error(
             `P1 divergence @ ${div?.path}: got=${JSON.stringify(div?.a)} want=${JSON.stringify(div?.b)}`,

@@ -46,8 +46,8 @@ export function generateFootnoteId(): string {
 /**
  * Derive a DETERMINISTIC unique footnote id for the k-th (k >= 2) occurrence of
  * an original id `X` during collision resolution. The result is a pure function
- * of (`originalId`, `occurrence`, `taken`) so that every collaborating client —
- * and every import path — computes the SAME new id for the same input document.
+ * of (`originalId`, `occurrence`, `taken`) so that every collaborating client
+ * computes the SAME new id for the same input document.
  *
  * CRITICAL: this MUST NOT use Math.random()/Date.now()/uuid. Two clients that
  * each make a local edit on the same duplicate-id document have to converge on
@@ -62,12 +62,10 @@ export function generateFootnoteId(): string {
  * `taken` is consulted but NOT mutated here; the caller adds the returned id to
  * its own seen-set before requesting the next derived id.
  *
- * Used only inside editor-ext now (resolveCollisions for a re-id'd duplicate
- * DEFINITION, and footnotePastePlugin). The MCP / @docmost/prosemirror-markdown
- * import paths no longer derive ids — duplicate definitions there are
- * first-wins-dropped (#166) — so
- * there is no cross-package copy to keep in sync. The golden table in
- * footnote-util.derive-id.test.ts pins the scheme.
+ * Used only inside editor-ext (resolveCollisions for a re-id'd duplicate
+ * DEFINITION, and footnotePastePlugin); the MCP / @docmost/prosemirror-markdown
+ * import paths drop duplicate definitions first-wins instead. The golden table
+ * in footnote-util.derive-id.test.ts pins the scheme.
  */
 export function deriveFootnoteId(
   originalId: string,

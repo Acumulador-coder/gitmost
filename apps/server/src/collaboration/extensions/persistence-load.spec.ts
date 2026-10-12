@@ -1,20 +1,16 @@
 /**
- * gitmost #401 fix 2 — onLoadDocument applies the DB state directly into the
- * hook's target document and returns undefined (instead of building a NEW Y.Doc
- * and returning it, which made hocuspocus re-encode+apply the whole state a
- * SECOND time on every cold load).
+ * onLoadDocument applies the DB state directly into the hook's target document
+ * and returns undefined, so hocuspocus does not re-encode+apply the whole state
+ * a second time on a cold load.
  *
- * These tests assert:
+ * Asserts:
  *  - the hook mutates `data.document` in place so its content equals the DB doc,
  *  - onLoadDocument returns undefined (so hocuspocus keeps the mutated doc and
- *    does NOT run its own applyUpdate(encodeStateAsUpdate(...)) merge),
+ *    does not run its own applyUpdate(encodeStateAsUpdate(...)) merge),
  *  - both the raw-ydoc branch and the json→ydoc conversion branch behave so.
  *
- * Returning undefined is the observable signal that the double-encode is gone
- * (the old code returned a new Y.Doc, which made hocuspocus re-encode+apply the
- * state a second time); we assert that contract rather than counting internal
- * encode calls, which is brittle given the encodes inside toYdoc and the test's
- * own `expected` fixtures.
+ * The undefined return is the contract asserted; counting internal encode calls
+ * would be brittle given the encodes inside toYdoc and the `expected` fixtures.
  */
 import * as Y from 'yjs';
 import { Document } from '@hocuspocus/server';
@@ -44,6 +40,7 @@ describe('PersistenceExtension.onLoadDocument — #401 fix 2 (apply-into-hook-do
     pageRepo = { findById: jest.fn() };
     ext = new PersistenceExtension(
       pageRepo as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,

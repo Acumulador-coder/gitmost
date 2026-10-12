@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { sanitizeTitle, disambiguate } from '../src/engine/sanitize.js';
+import {
+  sanitizeTitle,
+  disambiguate,
+} from '../src/engine/sanitize.js';
 
 describe('sanitizeTitle', () => {
   it('passes a plain title through unchanged', () => {
@@ -71,6 +74,19 @@ describe('sanitizeTitle', () => {
     expect(sanitizeTitle(' .. ')).toBe('_..');
   });
 
+  it('neutralizes the names git refuses as a path component: .git in any case and its NTFS aliases', () => {
+    expect(sanitizeTitle('.git')).toBe('_.git');
+    expect(sanitizeTitle('.GIT')).toBe('_.GIT');
+    expect(sanitizeTitle('.git.')).toBe('_.git.');
+    expect(sanitizeTitle('.Git . .')).toBe('_.Git . .');
+    expect(sanitizeTitle('git~1')).toBe('_git~1');
+    expect(sanitizeTitle('GIT~12')).toBe('_GIT~12');
+    // Only the whole name: a title merely containing it is untouched.
+    expect(sanitizeTitle('.gitignore')).toBe('.gitignore');
+    expect(sanitizeTitle('git')).toBe('git');
+    expect(sanitizeTitle('my .git')).toBe('my .git');
+  });
+
   it('is deterministic — the same input yields the same output', () => {
     const title = 'Some / weird : title?';
     expect(sanitizeTitle(title)).toBe(sanitizeTitle(title));
@@ -78,23 +94,16 @@ describe('sanitizeTitle', () => {
 });
 
 describe('sanitizeTitle — boundary trim and nullish input', () => {
-  // Spec case 1: the length-cap branch (sanitize.ts lines ~79-81) does
-  // `slice(0, MAX_LENGTH).trim()`. The inner `.trim()` after the cap only
-  // does observable work when the 120-char slice boundary lands on whitespace.
-  // Existing length tests use all-'x' input where that trim is a no-op, so the
-  // "trim after cap" sub-branch is otherwise unexercised.
+  // The length-cap branch does `slice(0, MAX_LENGTH).trim()`. The inner
+  // `.trim()` after the cap only does observable work when the 120-char slice
+  // boundary lands on whitespace.
   //
-  // NOTE(review): The spec's literal example input
-  //   'x'.repeat(118) + '   ' + 'yyyyyyyyyy'
-  // does NOT yield the spec's stated expected output 'x'.repeat(118). Whitespace
-  // runs are collapsed (`/\s+/g` -> single space) BEFORE the length cap, so the
-  // three spaces fold to one: the collapsed string is
+  // Whitespace runs are collapsed (`/\s+/g` -> single space) BEFORE the length
+  // cap, so 'x'.repeat(118) + '   ' + 'y'.repeat(10) collapses to
   //   'x'.repeat(118) + ' ' + 'y'.repeat(10)   (length 129)
-  // and the char at the slice boundary (index 119) is a 'y', not whitespace.
-  // The actual result is 'x'.repeat(118) + ' y' (length 120) — the inner trim is
-  // a no-op for that exact input. We assert that ACTUAL behavior first (so the
-  // discrepancy is documented and locked down), then use a corrected input that
-  // genuinely lands the cut inside whitespace to exercise the intended sub-branch.
+  // with a 'y' at the slice boundary (index 119): the result is
+  // 'x'.repeat(118) + ' y' and the inner trim is a no-op. The first test pins
+  // that; the second uses an input whose cut lands inside whitespace.
   it('collapses the spec literal before capping, so its inner trim is a no-op', () => {
     const input = 'x'.repeat(118) + '   ' + 'y'.repeat(10);
     const out = sanitizeTitle(input);

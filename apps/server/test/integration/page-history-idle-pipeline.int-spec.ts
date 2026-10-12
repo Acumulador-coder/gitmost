@@ -3,13 +3,13 @@ import { Queue, Worker } from 'bullmq';
 import { PersistenceExtension } from '../../src/collaboration/extensions/persistence.extension';
 
 /**
- * #370 — integration property of the idle-snapshot pipeline against REAL BullMQ.
+ * Integration property of the idle-snapshot pipeline against REAL BullMQ.
  *
  * This is deliberately NOT a unit test of computeHistoryJob (that lives in
  * compute-history-job.spec.ts). The point here is the OBSERVABLE end-to-end
  * behaviour of the production `enqueuePageHistory` remove-then-add debounce
- * driving a real Redis-backed delayed queue + worker (the #431→#439 class: a
- * locally-correct function whose queue/timer property was never exercised):
+ * driving a real Redis-backed delayed queue + worker (a locally-correct function
+ * can still have a broken queue/timer property):
  *
  *   - a CONTINUOUS burst of stores lasting several caps yields periodic idle
  *     snapshots — at least one per max-wait cap, NOT one-per-store; and
@@ -91,6 +91,7 @@ describe('#370 idle-snapshot pipeline (real BullMQ)', () => {
       null as any, // notificationQueue
       null as any, // collabHistory
       null as any, // transclusionService
+      null as any, // environmentService
     );
   });
 

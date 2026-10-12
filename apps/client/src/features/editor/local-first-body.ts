@@ -4,7 +4,7 @@ import { isChangeOrigin } from "@tiptap/extension-collaboration";
 import * as Y from "yjs";
 
 /**
- * Local-first body (#564): the two mechanisms that make an "instant body from
+ * Local-first body: the two mechanisms that make an "instant body from
  * the local ydoc" safe.
  *
  *  1. `isYdocBodyNonEmpty` — do NOT trust the IndexedDB "synced" event as proof
@@ -52,12 +52,6 @@ export function isYdocBodyNonEmpty(ydoc: Y.Doc): boolean {
 }
 
 export interface BodyWriteGuardOptions {
-  /**
-   * Whether the guard is armed at all. Off when the local-first flag is off, so
-   * the flag-off path behaves byte-identically to today (the editor is created
-   * at mount and its plugins may seed the ydoc exactly as they do now).
-   */
-  isActive: () => boolean;
   /** Whether local writes are allowed (the remote room confirmed a sync). */
   canWrite: () => boolean;
 }
@@ -66,7 +60,7 @@ export const bodyWriteGuardPluginKey = new PluginKey("gitmostBodyWriteGuard");
 
 /**
  * Blocks every LOCAL doc mutation until the remote collab room has confirmed a
- * sync (#564, guard 2 — the Yjs-level half).
+ * sync (guard 2 — the Yjs-level half).
  *
  * Passed through:
  *  - transactions that don't change the doc (selection, decorations, awareness),
@@ -74,8 +68,8 @@ export const bodyWriteGuardPluginKey = new PluginKey("gitmostBodyWriteGuard");
  *    hydrating the editor and later remote updates merging in. Blocking those
  *    would leave the body blank.
  *
- * Rejected: anything else that changes the doc while read-only. The predicates
- * are read live (refs), so arming/disarming the guard never recreates the editor.
+ * Rejected: anything else that changes the doc while read-only. The predicate
+ * is read live (refs), so opening the guard never recreates the editor.
  */
 export function createBodyWriteGuard(options: BodyWriteGuardOptions) {
   return Extension.create({
@@ -85,7 +79,6 @@ export function createBodyWriteGuard(options: BodyWriteGuardOptions) {
         new Plugin({
           key: bodyWriteGuardPluginKey,
           filterTransaction: (tr) => {
-            if (!options.isActive()) return true;
             if (options.canWrite()) return true;
             if (!tr.docChanged) return true;
             // Yjs -> ProseMirror (local ydoc hydration, remote merges).

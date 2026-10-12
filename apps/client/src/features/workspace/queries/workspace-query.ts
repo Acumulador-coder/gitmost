@@ -112,7 +112,7 @@ export function useDeactivateWorkspaceMemberMutation() {
       queryClient.invalidateQueries({
         queryKey: ["workspaceMembers"],
       });
-      // Notify on success so the action gives visible feedback (issue #128)
+      // Notify on success so the action gives visible feedback
       notifications.show({ message: t("Member deactivated") });
     },
     onError: (error) => {
@@ -138,7 +138,7 @@ export function useActivateWorkspaceMemberMutation() {
       queryClient.invalidateQueries({
         queryKey: ["workspaceMembers"],
       });
-      // Notify on success so the action gives visible feedback (issue #128)
+      // Notify on success so the action gives visible feedback
       notifications.show({ message: t("Member activated") });
     },
     onError: (error) => {

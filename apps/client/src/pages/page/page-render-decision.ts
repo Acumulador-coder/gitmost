@@ -1,19 +1,17 @@
 import { isAuthError, isTransportError } from "@/lib/http-error";
 
 /**
- * How page.tsx should render when the page query has NOT produced usable data
- * (#641, Ф5). Splits the pre-Ф5 single "error → EmptyState" return into the
- * offline-first taxonomy:
+ * How page.tsx should render when the page query has NOT produced usable data:
  *
  *  - "not-found"     — the server gave an access verdict (401/403/404): the page
  *    is gone / revoked. Renders not-found; the global evictors drop the local
- *    copy (unchanged from today — preserves the #564/#640 revocation criterion).
+ *    copy.
  *  - "offline-local" — unreachable network AND we have the cached chrome AND a
  *    local body: render chrome + read-only body from the ydoc + offline banner.
  *  - "offline-empty" — unreachable network AND cached chrome BUT no local body:
  *    an explicit "not available offline" empty-state, NOT a silent skeleton.
  *  - "error-screen"  — everything else: no cache to fall back on, OR a RESPONSE
- *    with an error status (5xx / non-auth 4xx). Today's error screen.
+ *    with an error status (5xx / non-auth 4xx).
  */
 export type PageErrorDecision =
   | "not-found"
@@ -22,18 +20,10 @@ export type PageErrorDecision =
   | "error-screen";
 
 export function classifyPageError(opts: {
-  localFirst: boolean;
   error: unknown;
   hasChromeMeta: boolean;
   hasLocalBody: boolean;
 }): PageErrorDecision {
-  // Flag OFF — byte-for-behavior identical to pre-Ф5: an auth status (401/403/404)
-  // shows not-found, everything else shows today's error screen. No offline
-  // branches exist, so no cached render can happen with the flag off.
-  if (!opts.localFirst) {
-    return isAuthError(opts.error) ? "not-found" : "error-screen";
-  }
-
   // The server ANSWERED with an access verdict → not-found + (global) evict.
   if (isAuthError(opts.error)) return "not-found";
 

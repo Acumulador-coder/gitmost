@@ -255,20 +255,21 @@ describe('TokenService.generateCollabToken', () => {
  * API-key token minting MUST carry NO `exp` claim — the ONLY source of truth for
  * a key's lifetime/revocation is its `api_keys` row, checked on every request.
  *
- * This is a LIVE-bug regression: the shared JwtService is registered with a
- * global `signOptions.expiresIn` (default '90d') that merges into every sign(),
- * so an api-key minted through it silently gets exp=now+90d and an "unlimited"
- * key dies in 90 days. TokenService.generateApiToken mints through a dedicated
- * no-expiry signer instead. These tests construct the REAL signer (a real secret
- * via the stubbed EnvironmentService) and decode the produced JWT to assert the
- * observable property: no `exp`.
+ * The shared JwtService is registered with a global `signOptions.expiresIn`
+ * (default '90d') that merges into every sign(), so an api-key minted through it
+ * would get exp=now+90d and an "unlimited" key would die in 90 days.
+ * TokenService.generateApiToken mints through a dedicated no-expiry signer
+ * instead. These tests construct the REAL signer (a real secret via the stubbed
+ * EnvironmentService) and decode the produced JWT to assert the observable
+ * property: no `exp`.
  */
 describe('TokenService.generateApiToken (no exp claim ever)', () => {
   const APP_SECRET_LOCAL = 'apikey-secret';
 
   function makeRealSignerService() {
     // Give the SHARED jwtService a global expiresIn so a regression (minting
-    // through it) would show up as an exp claim — the exact live bug.
+    // through it) would show up as an exp claim.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { JwtService } = require('@nestjs/jwt');
     const sharedJwt = new JwtService({
       secret: APP_SECRET_LOCAL,
@@ -342,6 +343,7 @@ describe('TokenService.generateApiToken (no exp claim ever)', () => {
   });
 
   it('demonstrates the live bug it guards: the SHARED signer WOULD add exp', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { JwtService } = require('@nestjs/jwt');
     const sharedJwt = new JwtService({
       secret: APP_SECRET_LOCAL,

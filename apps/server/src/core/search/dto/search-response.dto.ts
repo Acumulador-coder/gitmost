@@ -13,7 +13,8 @@ export class SearchResultDto {
   icon: string;
   title: string;
   space?: Partial<Space>;
-  creatorId: string;
+  // Omitted (with `space`) for an anonymous share reader.
+  creatorId?: string;
   createdAt: Date;
   updatedAt: Date;
   // ts_rank_cd of the FTS branch; null for substring-only hits.
@@ -32,7 +33,7 @@ export class SearchResultDto {
   matchedTerms: string[];
 }
 
-// #530 Phase B — the semantic (vector) layer's per-request status.
+// Semantic (vector) layer's per-request status.
 //  - `state`:
 //      'off'   — the vector arm did not run at all: kill-switch, no embedding
 //                provider, or a degrade (sidecar down / embed timeout).
@@ -45,7 +46,7 @@ export class SearchResultDto {
 //                    keeps serving) -> `available: true`, real vector hits;
 //                (b) the arm was deliberately NOT raised because the configured
 //                    MODEL differs from the one that produced the served
-//                    generation's rows (#599 D2): a cosine across two independently
+//                    generation's rows: a cosine across two independently
 //                    trained embedding spaces is noise, so search serves lexical
 //                    only until the reindex completes -> `available: false`.
 //      'full'  — the arm ran and the active generation covers every page that
@@ -54,7 +55,7 @@ export class SearchResultDto {
 //    a 'stale' of sub-case (a); FALSE on (b).
 //  - `reason`: why the arm did NOT run — 'no-provider' / 'degraded' — or, on a
 //    'stale' state, simply 'stale'.
-//  - `indexed`/`total`: coverage of the ACTIVE generation (#599). `total` is the
+//  - `indexed`/`total`: coverage of the ACTIVE generation. `total` is the
 //    number of pages that actually produce >= 1 chunk, NOT the raw embeddable
 //    count (see EmbeddingGenerationService.computeCoverage). Present only when the
 //    vector arm ran.
@@ -67,13 +68,16 @@ export class SearchSemanticDto {
 }
 
 // The paginated envelope (A5). `total` is the permission-filtered count of the
-// candidate UNION (lexical ∪ vector top-N, fail-closed) — a deliberate, #530
-// documented change from Phase A's exact-lexical count (on a semantic degrade it
-// falls back to exactly that lexical count). `hasMore` is true when more results
-// exist WITHIN the fusion window; `truncatedAtCap` signals the match set exceeded
+// LEXICAL matches (fail-closed, #701) — pages that actually match the query; the
+// vector arm only re-ranks them. `hasMore` is true when more results exist WITHIN
+// the fusion window; `truncatedAtCap` signals the match set exceeded
 // CANDIDATE_CAP and the tail is unreachable by pagination.
 export class SearchResponseDto {
   items: SearchResultDto[];
+  // #701 — vector-only semantic neighbours: NOT matches, never counted in
+  // `total`, permission-filtered, returned on the first page only (offset 0),
+  // at most 5.
+  related: SearchResultDto[];
   total: number;
   hasMore: boolean;
   truncatedAtCap: boolean;
@@ -90,6 +94,11 @@ export class SearchResponseDto {
     match: string;
   };
   // Absent on the early-exit paths (empty/garbage query); present once search
-  // actually runs. Optional so those short-circuit responses stay valid.
+  // actually runs. Optional so those short-circuit responses stay valid. Never
+  // sent to an anonymous share reader: its coverage counters are workspace-wide.
   semantic?: SearchSemanticDto;
+  // Share search only: why search is unavailable on this share (an approved-mode
+  // share publishes only saved versions, while the index holds the live draft).
+  // Set together with an empty result.
+  disabledReason?: string;
 }

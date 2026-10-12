@@ -9,20 +9,12 @@ import { AiService } from './ai.service';
 import { AiEmbeddingNotConfiguredException } from './ai-embedding-not-configured.exception';
 
 /**
- * #599 (Search phase B, PR-2) — the EMBEDDING FINGERPRINT LIFECYCLE.
+ * The EMBEDDING FINGERPRINT LIFECYCLE.
  *
- * PR-1 (#530/#567) gave every embedding row a deterministic `fingerprint` =
- * sha256(model id + revision + prefix scheme + dimensions) and made both readers
- * (the search vector arm and the RAG hybrid CTE) filter by "the" fingerprint —
- * which was simply DERIVED from the live provider config. That is fine while the
- * config never changes, and broken the moment it does:
- *
- *   config change -> derived fingerprint changes INSTANTLY -> the filter matches
- *   zero rows -> total loss of semantic recall until every page happens to be
- *   re-indexed by an edit event. Legacy rows (fingerprint NULL, written before
- *   PR-1) are in that hole permanently.
- *
- * This service introduces the missing indirection: TWO fingerprints.
+ * Every embedding row carries a deterministic `fingerprint` = sha256(model id +
+ * revision + prefix scheme + dimensions), and readers filter by it. Filtering by
+ * the fingerprint derived from the live config would match zero rows the moment
+ * the config changes, so there are TWO fingerprints:
  *
  *   ACTIVE  — the generation the readers SERVE. Persisted in the workspace
  *             settings (`settings.ai.embedding.activeFingerprint`). It only moves
@@ -38,40 +30,25 @@ import { AiEmbeddingNotConfiguredException } from './ai-embedding-not-configured
  * owns the pointer). Old generations are reclaimed by an idempotent generational
  * GC capped at 2 live generations.
  *
- * Everything here is workspace-scoped and driver-agnostic (SEARCH_DRIVER=database).
+ * Everything here is workspace-scoped.
  */
 
 /**
- * #599 (review F1) — the reindex run finished building generation X, but the live
- * config has since moved to a DIFFERENT fingerprint (the admin changed the model
- * again while the run was in flight). X must NOT be published (the pointer belongs
- * to the newest config), yet the new target has NO rows and NO job.
+ * The reindex run finished building generation X, but the live config has since
+ * moved to a DIFFERENT fingerprint (the admin changed the model again while the
+ * run was in flight). X must NOT be published, yet the new target has NO rows
+ * and NO job: `AiSettingsService.reindex()` calls `aiQueue.remove(jobId)` — a
+ * NO-OP on an ACTIVE job — and then `add(jobId)`, which BullMQ DE-DUPLICATES
+ * against the still-running job, and there is no reconciler.
  *
- * The lost-generation chain this exists to break: `AiSettingsService.reindex()`
- * calls `aiQueue.remove(jobId)` — a NO-OP on an ACTIVE job — and then `add(jobId)`,
- * which BullMQ DE-DUPLICATES against that still-running job. So the config change
- * enqueues nothing. The running job then completes fp1 successfully, correctly
- * declines to flip (its target is stale), and is dropped by `removeOnComplete`.
- * End state: config = fp2, pointer on fp1, zero rows for fp2, no job in any queue,
- * and nothing anywhere re-triggers a reindex on `config != active` (there is no
- * reconciler cron). On a MODEL change that is permanent: `modelChanged` keeps the
- * vector arm down, so semantic search is lexical-only FOREVER, while the settings
- * panel shows a green, complete "Indexed N of N, reindexing: false" — the pointer
- * really is on a complete generation. Silent and invisible.
+ * Throwing makes BullMQ RETRY this job (`attempts: 3` + exponential backoff, see
+ * workspaceReindexJobOptions — the same policy PartialReindexError relies on);
+ * the retry re-resolves the provider at the top of runReindex, builds the
+ * current target and flips onto it.
  *
- * THROWING is what fixes it: the run's own job fails, BullMQ RETRIES it (`attempts:
- * 3` + exponential backoff, see workspaceReindexJobOptions — the same policy
- * PartialReindexError relies on), and the retry re-resolves the provider at the top
- * of runReindex, so it picks up the NOW-current target (fp2), builds it and flips
- * onto it. The retry is the re-trigger the dedupe swallowed — and it cannot be
- * deduped away, because it IS the same job.
- *
- * Retries are BOUNDED, so a config that keeps moving cannot loop forever: after the
- * last attempt the job stays failed and the workspace is left with the OLD, COMPLETE
- * generation still serving search — degraded (`stale` / lexical-only) but never
- * corrupt, and loudly logged. The alternative (enqueueing a fresh job from inside
- * the departing one, delayed past `removeOnComplete` so it cannot dedupe) buys
- * nothing over this and adds a race with the very dedupe window it is dodging.
+ * Retries are BOUNDED: after the last attempt the job stays failed and the OLD,
+ * COMPLETE generation keeps serving search — degraded (`stale` / lexical-only)
+ * but never corrupt, and loudly logged.
  */
 export class StaleReindexTargetError extends Error {
   constructor(
@@ -98,7 +75,7 @@ export interface EmbeddingGeneration {
   /** True while a target reindex is pending/in flight (active != target). */
   swapping: boolean;
   /**
-   * #599 (D2) — TRUE when the active generation's rows were produced by a
+   * TRUE when the active generation's rows were produced by a
    * DIFFERENT MODEL than the one the live config embeds queries with (including
    * "we cannot prove they were produced by the same model", see
    * generationForTarget). The vector arm MUST NOT be raised in that case: cosine
@@ -109,14 +86,11 @@ export interface EmbeddingGeneration {
    * to lexical-only (`available: false`, `state: 'stale'`) until the reindex of the
    * new model completes and the pointer flips.
    *
-   * KNOWN GAP (#599 R8b — follow-up): this guard can only see changes the
-   * FINGERPRINT sees, and the fingerprint does not encode the provider ENDPOINT
-   * (see computeEmbeddingFingerprint). Repointing the workspace at a different
-   * service that serves a same-named model keeps the fingerprint identical ->
-   * `swapping: false` -> `modelChanged: false`, and the cross-space cosine D2
-   * exists to prevent is served anyway. D2 closes the "admin picks another model
-   * from the dropdown" hole (the common one); the endpoint hole needs the
-   * fingerprint itself to change and is filed as a follow-up.
+   * KNOWN GAP: this guard can only see changes the FINGERPRINT sees, and the
+   * fingerprint does not encode the provider ENDPOINT (see
+   * computeEmbeddingFingerprint). Repointing the workspace at a different service
+   * that serves a same-named model keeps `modelChanged: false`, and the
+   * cross-space cosine is served anyway.
    */
   modelChanged: boolean;
   /** Bare model name of the ACTIVE generation's rows; null when unknown. */
@@ -145,8 +119,7 @@ export interface EmbeddingCoverage {
  *
  * The cache is per PROCESS: a flip performed by the BullMQ worker is not seen by
  * the API process's cache until its entry expires, so "reindexing -> full" can lag
- * by up to one TTL in the UI. Deliberate: a cross-process invalidation channel is
- * not worth it for an indicator.
+ * by up to one TTL in the UI.
  */
 function coverageTtlMs(): number {
   const raw = Number(process.env.SEARCH_COVERAGE_TTL_MS);
@@ -172,10 +145,9 @@ function coverageTtlMs(): number {
  * The denominator cannot be the raw `embeddable` count: that predicate is an
  * OPTIMISTIC over-approximation — a page whose only content is a math block or an
  * image looks embeddable but yields NO chunk, so `indexed` could never reach
- * `embeddable` and the state would be pinned at `stale` FOREVER (the trap the issue
- * calls out).
+ * `embeddable` and the state would be pinned at `stale` FOREVER.
  *
- * It cannot be the completed run's produced count either (#599 D3): that number is
+ * It cannot be the completed run's produced count either: that number is
  * FROZEN at the run, so pages ADDED afterwards are in neither the numerator nor the
  * denominator, and a workspace with 100 indexed pages and 1000 brand-new un-indexed
  * ones would happily report `full`.
@@ -184,9 +156,8 @@ function coverageTtlMs(): number {
  * completedTotal` — how many pages of this workspace look embeddable but produce
  * nothing) and the rule subtracts that gap from the LIVE embeddable count.
  *
- * #599 (review F2) — but the gap may only be spent on the pages it was MEASURED
- * over. Subtracting it from the whole live count lets a stale gap excuse pages the
- * run never saw:
+ * But the gap may only be spent on the pages it was MEASURED over. Subtracting it
+ * from the whole live count lets a stale gap excuse pages the run never saw:
  *
  *     run: 10 embeddable, 6 produced a chunk        -> gap 4
  *     the 4 chunk-less pages are DELETED            -> embeddable 6, indexed 6
@@ -204,7 +175,7 @@ function coverageTtlMs(): number {
  *     The frozen gap belongs here and here only, and is additionally capped at the
  *     bucket's un-indexed pages: the run's chunk-less pages are old pages that hold
  *     no rows, so there can never be more of them than that (this is also what keeps
- *     `total >= indexed`, #599 R4).
+ *     `total >= indexed`).
  *   CHANGED bucket — pages created/edited since the run (`changedSince`). The run
  *     never measured them, so NOTHING excuses them: they count in full, and are
  *     covered only by really holding rows of the active generation
@@ -220,21 +191,21 @@ function coverageTtlMs(): number {
  *   (b) pages DELETED -> `embeddable` shrinks and so does `indexed` (both exclude
  *       trashed pages) -> converges to `full`, never a perpetual `stale`;
  *   (c) a workspace whose pages produce NO chunks at all (gap == embeddable) gets
- *       total 0 -> `full`, not the perpetual `stale` of #599 D5;
- *   (d) a shrunken corpus can no longer leave stale slack behind: the gap is spent
- *       only over pages that still exist AND are still un-indexed (review F2).
+ *       total 0 -> `full`, not a perpetual `stale`;
+ *   (d) a shrunken corpus cannot leave stale slack behind: the gap is spent
+ *       only over pages that still exist AND are still un-indexed.
  *
- * Known imprecision (deliberate, unchanged): a chunk-less page created/edited after
+ * Known imprecision: a chunk-less page created/edited after
  * the run sits in the CHANGED bucket and can never raise `indexed`, so the state
  * reads `stale` until the next completed run re-measures the gap. That errs on the
  * side of "a reindex would help" — the safe direction; the opposite error (claiming
  * `full` while pages are missing from the index) is the one that matters.
  *
- * Back-compat: `changedSince`/`indexedChangedSince` default to 0, which is exactly
- * "nothing changed since the run" and reduces the rule to the pure frozen-gap form —
- * what a pointer flipped by a build that predates `coverageAt` gets.
+ * `changedSince`/`indexedChangedSince` default to 0, which is exactly "nothing
+ * changed since the run" and reduces the rule to the pure frozen-gap form (a
+ * pointer with no recorded `coverageAt`).
  *
- * Bootstrap (`completedTotal == null`: legacy/fresh instance, or a config change
+ * Bootstrap (`completedTotal == null`: fresh instance, or a config change
  * whose run has not completed) falls back to `embeddable`, so an un-indexed
  * workspace reports `stale` — which is exactly right: it needs a reindex.
  */
@@ -274,7 +245,7 @@ export function computeCoverage(params: {
   const oldIndexed = Math.max(0, indexed - indexedChanged);
 
   // Pages that look embeddable but produce no chunk, as MEASURED by the run that
-  // built the active generation. A pre-D3 record has no `completedEmbeddable`: gap
+  // built the active generation. A record without `completedEmbeddable` gets gap
   // 0 is the conservative choice (it can only make the state read `stale`, never a
   // false `full`), and the next completed run records both keys and self-heals.
   const rawGap =
@@ -285,7 +256,7 @@ export function computeCoverage(params: {
   // The chunk-less pages the run measured are OLD pages that hold NO rows of the
   // active generation, so the gap can never exceed the old bucket's un-indexed
   // pages. Capping it here is what stops a FROZEN gap from out-living the pages it
-  // measured (#599 R4 / review F2): delete them and the excuse dies with them,
+  // measured: delete them and the excuse dies with them,
   // instead of silently excusing whatever un-indexed page shows up next. It also
   // guarantees total >= indexed on this path (an "indexed 7 / total 4" is never
   // printable).
@@ -293,14 +264,14 @@ export function computeCoverage(params: {
 
   // The run's bucket keeps its measured excuse; the changed bucket gets none.
   //
-  // The final clamp to `indexed` (#599 R4) is kept as a belt-and-braces invariant:
+  // The final clamp to `indexed` is a belt-and-braces invariant:
   // the gap cap above already guarantees total >= indexed whenever the live counts
   // are CONSISTENT, but `indexed` and `embeddable` are separate COUNTs taken a
   // moment apart, so a page deleted between them can momentarily put the numerator
   // above the corpus. An "indexed 7 / total 4" must never be printable. It can only
   // ever RAISE the denominator to the numerator, so it cannot manufacture a false
   // `full` (it never lowers `indexed`, and it never lowers a denominator that the
-  // rule above put ABOVE `indexed` — which is exactly the review-F2 case).
+  // rule above put ABOVE `indexed`).
   const total = Math.max(Math.max(0, oldEmbeddable - gap) + changed, indexed);
 
   // total === 0 = every embeddable page is chunk-less (or the workspace is empty):
@@ -349,7 +320,7 @@ export class EmbeddingGenerationService {
    * Same as resolveGeneration, but with an ALREADY resolved target fingerprint +
    * model id (the indexer resolves the provider once per run and threads them in).
    *
-   * #599 (D2) — this is where `modelChanged` is decided. A fingerprint covers
+   * This is where `modelChanged` is decided. A fingerprint covers
    * {model, revision, prefix scheme, dimensions}, so `active != target` alone says
    * NOTHING about whether the old rows are still comparable with a query embedded
    * by the CURRENT model:
@@ -367,8 +338,8 @@ export class EmbeddingGenerationService {
    *     first then displaces valid lexical hits through RRF. So the model change is
    *     detected HERE and the vector arm is not raised at all.
    *
-   * `activeModel == null` while swapping = a pointer flipped by a build that predates
-   * the `activeModel` key, i.e. we cannot PROVE the old rows come from the current
+   * `activeModel == null` while swapping = a pointer flipped without a recorded
+   * `activeModel`, i.e. we cannot PROVE the old rows come from the current
    * model -> treated as changed (conservative: lexical-only until the next completed
    * run records the model). Outside a swap (active === target) the fingerprints are
    * equal, hence the model is equal by construction, and `modelChanged` is false
@@ -395,7 +366,7 @@ export class EmbeddingGenerationService {
   }
 
   /**
-   * #599 (D4) — run `fn` under a per-workspace POSTGRES ADVISORY LOCK, or skip it
+   * Run `fn` under a per-workspace POSTGRES ADVISORY LOCK, or skip it
    * (returning false) when another run already holds the lock.
    *
    * The BullMQ `jobId = ai-reindex-${workspaceId}` dedupe is NOT sufficient: a job
@@ -428,9 +399,7 @@ export class EmbeddingGenerationService {
    *      duration (minutes on a large workspace), while its body still asks the pool
    *      for connections of its own (every per-page `executeTx` / repo call). With a
    *      pool of exactly 1 the run holds the only connection and then waits forever
-   *      for a second one — a self-deadlock. Any realistic pool (the default is well
-   *      above 2) is fine; 1 is the pathological setting, and it is worth stating
-   *      because "one worker, one connection" looks like a sane thing to configure.
+   *      for a second one — a self-deadlock. The default pool is well above 2.
    *   2. SESSION pooling, not pgbouncer TRANSACTION pooling. In transaction mode
    *      every statement may land on a DIFFERENT backend, so `pg_advisory_unlock`
    *      would run on a session that never took the lock: the unlock is a no-op that
@@ -460,7 +429,7 @@ export class EmbeddingGenerationService {
         await fn();
         return true;
       } finally {
-        // #599 (R6) — the unlock must NOT be able to hijack the run's outcome. An
+        // The unlock must NOT be able to hijack the run's outcome. An
         // unguarded `await` in a `finally` that throws would (a) REPLACE the real
         // error of the run (a partial-run retry signal, a fatal provider error) with
         // an opaque unlock error, destroying the diagnosis and the retry semantics,
@@ -486,8 +455,8 @@ export class EmbeddingGenerationService {
    * Embed a search/RAG query and return it together with the fingerprint the
    * candidate rows MUST be filtered by — the ACTIVE generation, not the config's.
    *
-   * This is the single funnel for every READER (SearchService's vector arm and the
-   * agent's hybrid RAG CTE). `AiService.embedQuery` stays the raw primitive: it
+   * This is the single funnel for every READER (SearchService's vector arm, which
+   * also backs the agent's searchPages). `AiService.embedQuery` stays the raw primitive: it
    * embeds with the CURRENT provider and reports the config (= target) fingerprint;
    * this wrapper overrides the filter fingerprint with the active pointer.
    *
@@ -503,7 +472,7 @@ export class EmbeddingGenerationService {
    *     generation (`modelChanged: false`).
    *   - DIFFERENT model -> different space; the CALLER must not raise the vector arm
    *     at all (`modelChanged: true`) and must serve lexical-only. Returning the
-   *     vector anyway would let a caller cosine two unrelated spaces (#599 D2).
+   *     vector anyway would let a caller cosine two unrelated spaces.
    *
    * Two further guardrails remain: (1) the vector arm also filters
    * `model_dimensions = queryDim`, so any dimension change matches zero rows
@@ -563,15 +532,10 @@ export class EmbeddingGenerationService {
    * a generation nobody is maintaining and that is already superseded (the "second
    * swap during the first" hazard). The pointer belongs to the newest config.
    *
-   * #599 (review F1) — but we must NOT skip QUIETLY. The comment that used to sit
-   * here claimed "a second reindex is already queued for it", and that was FALSE:
-   * the config change went through `AiSettingsService.reindex()`, whose
-   * `remove(jobId)` is a no-op on an ACTIVE job and whose `add(jobId)` is then
-   * DE-DUPLICATED against this very run. Nothing was queued. Returning false here
-   * therefore completed the job successfully, `removeOnComplete` dropped it, and the
-   * new target was left with zero rows, no job, and no reconciler to notice (see
-   * StaleReindexTargetError). We THROW instead, so THIS job is retried and its retry
-   * rebuilds the now-current target.
+   * A drift THROWS rather than skipping quietly: no second reindex is queued for
+   * the new target (its `add(jobId)` was de-duplicated against this run, see
+   * StaleReindexTargetError), so THIS job must be retried to rebuild the
+   * now-current target.
    *
    * Returns true when the pointer was flipped (or re-affirmed on the no-swap path,
    * where active already equals target — the coverage total still has to be
@@ -582,7 +546,7 @@ export class EmbeddingGenerationService {
   async completeRun(params: {
     workspaceId: string;
     target: string;
-    /** Bare model name of the rows this run wrote (recorded with the pointer, #599 D2). */
+    /** Bare model name of the rows this run wrote (recorded with the pointer). */
     targetModel: string;
     coverageTotal: number;
     /** Pages this run CONSIDERED embeddable — the gap measurement of #599 D3. */
@@ -684,12 +648,12 @@ export class EmbeddingGenerationService {
     // pure frozen-gap rule.
     const since = forActive ? stored.coverageAt : null;
 
-    // #599 D3 — the LIVE embeddable count is needed on EVERY path, not only on
+    // The LIVE embeddable count is needed on EVERY path, not only on
     // bootstrap: it is what makes the denominator grow when pages are ADDED (the
     // frozen completed-run total never does, so the state could never leave `full`
     // no matter how many un-indexed pages appeared).
     //
-    // #599 (review F2) — the two `changedSince` counts split that corpus into the
+    // The two `changedSince` counts split that corpus into the
     // pages the completed run measured and the pages it did not, so its frozen
     // chunk-less gap can only excuse the former. All of it is TTL-cached, so these
     // COUNTs are not paid per keystroke.

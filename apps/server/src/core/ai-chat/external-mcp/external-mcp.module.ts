@@ -16,7 +16,7 @@ import { AccountMcpServersController } from './account-mcp-servers.controller';
  * without explicit imports. McpClientsService is exported so the agent loop can
  * merge external tools into the toolset.
  *
- * The `Account*` pair (#686) exposes the personal-server CRUD API
+ * The `Account*` pair exposes the personal-server CRUD API
  * (`account/mcp-servers`) — no admin gate, owner-scoped, kill-switch guarded.
  */
 @Module({

@@ -17,7 +17,7 @@ import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 import { stripBlockIds } from './roundtrip-helpers.js';
 
 // ---------------------------------------------------------------------------
-// WHY THIS TEST EXISTS (SPEC §11 / "Задача №0")
+// WHY THIS TEST EXISTS (SPEC §11)
 //
 // git is the state store, and git diffs byte-for-byte. The sync daemon does
 // `export(markdown) -> import(ProseMirror) -> export(markdown)` on every pull,
@@ -35,7 +35,7 @@ import { stripBlockIds } from './roundtrip-helpers.js';
 //
 // A NAIVE generator surfaces two different kinds of `md2 !== md1`:
 //
-//   (a) GENUINE converter limitations — documented below as `it.fails` repros.
+//   (a) GENUINE converter limitations.
 //   (b) Inputs the converter LEGITIMATELY normalizes, i.e. markdown that is
 //       ambiguous or that the schema rewrites to a canonical form. These are
 //       NOT byte-stable by construction and are NOT bugs; the fix is to keep
@@ -55,20 +55,17 @@ import { stripBlockIds } from './roundtrip-helpers.js';
 //       - a lone backtick is a code-span delimiter and re-pairs globally.
 //     -> The text arbitrary emits space-joined tokens that BEGIN and END with an
 //        alphanumeric word, with any single special char confined to the middle
-//        (space-flanked). Every char the task requires (* _ [ ] ( ) | < > &, and
-//        more) is covered this way; the backtick is exercised via code spans.
+//        (space-flanked). The special chars (* _ [ ] ( ) | < > &, and more) are
+//        covered this way; the backtick is exercised via code spans.
 //   * A purely numeric image `alt` ("0") or link `title` ("0") is parsed back as
 //     a NUMBER and dropped by the converter's `value || ""` -> alt/title always
 //     carry at least one letter.
 //   * Callout types other than info/success/warning/danger normalize to `info`
 //     (schema only knows those four) -> generator restricts to those four.
-//   * A list item / callout / blockquote with MULTIPLE block children: the
-//     converter joins them with a single "\n", which marked re-parses as ONE
-//     merged paragraph ("- p1\n  p2" -> "- p1 p2"). -> container bodies hold a
-//     SINGLE paragraph, optionally plus ONE nested list for lists.
-//   * `orderedList.start` / `1)` markers normalize to `1.` -> not emitted.
-//   * Two sibling lists sharing a marker family (bullet/task use "-", ordered
-//     uses "1.") MERGE into one list -> no two list blocks are adjacent.
+//   * Container bodies hold a SINGLE paragraph, optionally plus ONE nested list
+//     for lists (multi-block bodies are covered by the nested generative suite).
+//   * `orderedList.start` / `1)` markers -> not emitted.
+//   * No two list blocks are adjacent (covered by the nested generative suite).
 //   * TWO consecutive hard breaks render a blank line that marked eats as a
 //     paragraph break, and a trailing hard break is trimmed -> consecutive/
 //     trailing hard breaks are collapsed/removed.
@@ -76,21 +73,9 @@ import { stripBlockIds } from './roundtrip-helpers.js';
 //     A real ProseMirror doc never stores split same-mark runs (the editor
 //     coalesces them) -> the generator merges them too (normalizeInline).
 //
-// The GENUINE, real-but-intentional non-roundtrip limitations are documented as
-// dedicated blocks below (so the suite never goes green by hiding them):
-//
-//   1. FIXED in #515 (was: the `code` mark COMBINED with any other mark did not
-//      round-trip, because the schema's `code` mark declared `excludes: "_"` and
-//      import dropped every co-occurring mark -> the run came back as `code`
-//      only). The mark now declares `excludes: ""`, the serializer nests the
-//      backtick span INSIDE the other marks (``**`x`**``), and both marks survive
-//      the cycle. The block below is now a REAL round-trip property (marks +
-//      bytes), no longer a documented bug.
-//   2. A BLOCK-level `image` placed BETWEEN other blocks. The Docmost image node
-//      is block-level but `![](url)` is inline; marked wraps it in a <p>, the
-//      schema hoists the <img> out and leaves an empty paragraph sibling, which
-//      injects an extra blank gap on the second export. An image IS byte-stable
-//      as the sole block (edge artifacts get trimmed) — covered by a green test.
+// Dedicated blocks below cover two shapes kept out of the random generator: the
+// `code` mark COMBINED with another mark, and a BLOCK-level `image` placed
+// BETWEEN other blocks.
 // ---------------------------------------------------------------------------
 
 // Run a full export -> import -> export cycle and return both markdown strings.
@@ -114,8 +99,7 @@ const wordArb = fc
   .filter((w) => w.length > 0);
 
 // A SINGLE markdown-significant character, emitted only as an isolated,
-// space-flanked token. Every char the task calls out plus a few more; each was
-// verified byte-stable in this position.
+// space-flanked token; each was verified byte-stable in this position.
 //
 // NOTE: the backtick (`) is DELIBERATELY excluded from free-floating plain
 // text. A lone backtick is a markdown code-span DELIMITER, so its round-trip
@@ -167,8 +151,8 @@ const letterPhraseArb: fc.Arbitrary<string> = fc
 
 
 // A text run with an OPTIONAL single non-code mark (bold/italic/strike), a
-// `code` mark ALONE or COMBINED with another mark (#515 — `code` no longer
-// excludes the other marks; the combination is byte-stable, either as nested
+// `code` mark ALONE or COMBINED with another mark (`code` does not exclude the
+// other marks; the combination is byte-stable, either as nested
 // markdown or, for a heterogeneous neighbour pair, via the lossless HTML
 // fallback), or a link. Marks wrap safe text, which stays stable even when it
 // contains isolated specials.
@@ -183,7 +167,7 @@ const markedTextRunArb: fc.Arbitrary<any> = fc.oneof(
   // code span content cannot contain an inner backtick (which would be
   // ambiguous to re-parse).
   safeTextArb.map((t) => ({ type: 'text', text: t, marks: [{ type: 'code' }] })),
-  // #515: `code` COMBINED with another mark on the same run.
+  // `code` COMBINED with another mark on the same run.
   fc
     .tuple(
       safeTextArb,
@@ -637,21 +621,10 @@ describe('markdown <-> ProseMirror round-trip (property-based)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // KNOWN, DOCUMENTED non-roundtrip bug #2 (kept honest as it.fails).
-  //
-  // BUG: a block-level `image` placed BETWEEN other blocks is not byte-stable.
-  // The Docmost image node is BLOCK-level but its markdown form `![](url)` is
-  // INLINE. marked wraps the inline image in a <p>; the schema then hoists the
-  // block <img> out of that <p>, leaving an EMPTY paragraph as a sibling. On the
-  // second export that empty paragraph renders as "" and the "\n\n" doc join
-  // injects an extra blank gap:
-  //   "p\n\n![x](u)\n\nq"  ->  "p\n\n\n\n![x](u)\n\nq"   (=> md2 !== md1).
-  // Minimal repro doc:
-  //   { type:'doc', content:[
-  //       { type:'paragraph', content:[{type:'text',text:'p'}] },
-  //       { type:'image', attrs:{ src:'http://a.aa', alt:'x' } },
-  //       { type:'paragraph', content:[{type:'text',text:'q'}] } ] }
-  // Not "fixed" — the source must not change; documented and exercised here.
+  // A block-level `image` placed BETWEEN other blocks. Its markdown form
+  // `![](url)` is INLINE, so marked wraps it in a <p> and the schema hoists the
+  // block <img> out, leaving an EMPTY paragraph sibling; the importer's
+  // stripEmptyParagraphs removes it so no extra blank gap appears on re-export.
   // -------------------------------------------------------------------------
   it('a block image between other blocks is byte-stable', async () => {
     const doc = {
@@ -667,12 +640,9 @@ describe('markdown <-> ProseMirror round-trip (property-based)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // #515: the `code` mark COMBINED with another mark. Formerly documented bug #1
-  // (the schema's `code` mark declared `excludes: "_"`, so import dropped every
-  // co-occurring mark and the run came back code-only). Now a REAL round-trip
-  // property: the combination must be byte-stable AND both marks must survive the
-  // import (a byte-stable-but-lossy export would silently pass the byte check, so
-  // the mark set is asserted explicitly).
+  // The `code` mark COMBINED with another mark: the combination must be
+  // byte-stable AND both marks must survive the import (a byte-stable-but-lossy
+  // export would pass the byte check, so the mark set is asserted explicitly).
   // -------------------------------------------------------------------------
   it('the code mark combined with another mark round-trips (bytes + marks)', async () => {
     const codeComboArb = fc
@@ -732,7 +702,7 @@ describe('markdown <-> ProseMirror round-trip (property-based)', () => {
     expect(new Set(marks)).toEqual(new Set(['code', 'link']));
   });
 
-  // #515 case 2 from the bug report: a HOMOGENEOUS code-emphasis run (code spans
+  // A HOMOGENEOUS code-emphasis run (code spans
   // and their separator all carry the same bold) is factored to ONE pair of `**`
   // delimiters — never the dangling `` `aaa`** + **`bbb` `` form.
   it('a homogeneous code-emphasis run factors the shared mark out once', async () => {
@@ -755,7 +725,7 @@ describe('markdown <-> ProseMirror round-trip (property-based)', () => {
     expect(md2).toBe(md1);
   });
 
-  // #515 ANTI-COLLISION: a `[code,bold]` run IMMEDIATELY followed (no separator)
+  // ANTI-COLLISION: a `[code,bold]` run IMMEDIATELY followed (no separator)
   // by an `[italic]` run is a HETEROGENEOUS code-emphasis run. Emitting each node
   // as markdown would produce ``**`a`***b*`` — whose `***` re-parses as a single
   // (mis-nested) emphasis delimiter run, losing the bold. The converter must take
@@ -787,20 +757,15 @@ describe('markdown <-> ProseMirror round-trip (property-based)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// #515 review F1 — a code node with NO emphasis is NOT a run seed.
+// A code node with NO emphasis is NOT a run seed.
 //
-// The coalescing pass above exists because a code node that ITSELF carries a
+// The coalescing pass exists because a code node that ITSELF carries a
 // bare-delimiter emphasis mark can glue an emphasis delimiter to a backtick.
-// A code node WITHOUT an emphasis mark can never do that, and the shapes below
-// (an emphasized run ADJACENT to a plain code span) were ALWAYS representable —
-// `excludes: "_"` only ever forbade code+mark on the SAME node. They live in the
-// git-sync repos as plain markdown today, and re-import losslessly.
-//
-// If they were pulled into a code-emphasis run they would take the HTML fallback,
-// and EVERY existing markdown file carrying such a construct would rewrite itself
-// to HTML on the next sync — a mass phantom diff and a violation of the design's
-// "non-code output stays byte-identical" promise. So each shape is pinned to the
-// EXACT legacy markdown it has always produced.
+// A code node WITHOUT an emphasis mark cannot, and the shapes below (an
+// emphasized run ADJACENT to a plain code span) re-import losslessly as plain
+// markdown. Pulling them into a run would switch them to the HTML fallback and
+// rewrite every git-synced file carrying such a construct, so each shape is
+// pinned to its EXACT markdown.
 // ---------------------------------------------------------------------------
 describe('#515 F1: a plain code span next to an emphasized run stays MARKDOWN', () => {
   const t = (text: string, ...marks: string[]) => ({
@@ -854,22 +819,22 @@ describe('#515 F1: a plain code span next to an emphasized run stays MARKDOWN', 
 });
 
 // ---------------------------------------------------------------------------
-// #515 review F2 — the flanking guard must work on CODE POINTS.
+// The flanking guard must work on CODE POINTS.
 //
 // The guard decides whether an emphasis delimiter glued to a backtick can still
 // flank, by inspecting the neighbouring character. Reading it with `slice(-1)` /
 // `slice(0, 1)` returns a lone SURROGATE half of an astral character; the lone
-// half matches neither `\s` nor `\p{P}`/`\p{S}`, so the guard used to call it a
-// word boundary, emit markdown — and `marked` then refused to open the emphasis,
-// SILENTLY DROPPING the mark on re-import.
+// half matches neither `\s` nor `\p{P}`/`\p{S}`; treating it as a word boundary
+// would emit markdown whose emphasis `marked` refuses to open, SILENTLY DROPPING
+// the mark on re-import.
 //
-// The export is BYTE-STABLE in that state (`md2 === md1`), so the byte-stability
+// Such an export is BYTE-STABLE (`md2 === md1`), so the byte-stability
 // property CANNOT see the loss: the document just quietly mutates. These tests
 // therefore assert the MARK SET survives the md -> pm import, not just the bytes.
 //
 // The same hole applies to any character marked does not count as whitespace or
-// punctuation — a combining mark, a ZWJ, a soft hyphen — which the old
-// `!/[\p{L}\p{N}]/u` formulation also mislabelled as a boundary.
+// punctuation — a combining mark, a ZWJ, a soft hyphen (a `!/[\p{L}\p{N}]/u`
+// test would mislabel those as a boundary).
 // ---------------------------------------------------------------------------
 describe('#515 F2: astral / non-punctuation neighbours never silently drop a mark', () => {
   const NEIGHBOURS: [string, string][] = [

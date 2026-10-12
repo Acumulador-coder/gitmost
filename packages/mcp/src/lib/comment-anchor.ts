@@ -82,10 +82,8 @@ function makeCommentMark(commentId: string): any {
  * the FIRST raw whitespace char of the run), and DO NOT lowercase (anchoring is
  * case-sensitive to match the exact document text).
  *
- * Whitespace class + glyph tables come from the shared fold canon (#658,
- * `@docmost/prosemirror-markdown`) — `isLegacySpace` is byte-identical to the
- * former local `isWhitespaceChar` (U+FEFF stays a SPACE here), so this rebuild
- * is provably equivalent to the historic normalizer (golden test).
+ * Whitespace class + glyph tables come from the shared fold canon
+ * (`@docmost/prosemirror-markdown`); `isLegacySpace` keeps U+FEFF a SPACE here.
  */
 export function normalizeForMatch(s: string): { norm: string; map: number[] } {
   let norm = "";
@@ -113,8 +111,8 @@ export function normalizeForMatch(s: string): { norm: string; map: number[] } {
 }
 
 /**
- * FOLD variant of {@link normalizeForMatch} for the createComment fold TIER
- * (#658): fold invisible characters (delete SHY/ZWSP/ZWJ/WJ/BOM, collapse
+ * FOLD variant of {@link normalizeForMatch} for the createComment fold TIER:
+ * fold invisible characters (delete SHY/ZWSP/ZWJ/WJ/BOM, collapse
  * NBSP-family runs) AND typographic quotes/dashes, returning the same
  * `{ norm, map }` shape so every anchoring call site can consume it identically.
  * Built on the canonical `foldInvisibles` for the invisible-char + run-collapse
@@ -429,14 +427,14 @@ function rawCanAnchorInDoc(
  * so callers can explain WHY anchoring is refused instead of claiming the text
  * is missing. `found` stays false either way.
  *
- * FOLD TIER (#658): the fallback lattice is two-axis — { verbatim, md-strip } ×
+ * FOLD TIER: the fallback lattice is two-axis — { verbatim, md-strip } ×
  * { pass-1, fold } — tried in the fixed order pass-1/verbatim → pass-1/md-strip
- * → fold/verbatim → fold/md-strip. pass-1 tiers run FIRST and byte-for-byte
- * unchanged, so an existing anchor's first match never shifts; the fold tiers
+ * → fold/verbatim → fold/md-strip. pass-1 tiers run FIRST, so a pass-1
+ * anchor's first match never shifts; the fold tiers
  * add anchors only where pass-1 found ZERO (a selection built from searchInPage
  * output — which carries the document's invisibles — still anchors). The winning
  * normalizer is returned so uniqueness counting runs in the SAME tier's space
- * (no count-vs-anchor drift, #494).
+ * (no count-vs-anchor drift).
  */
 export function resolveAnchorSelection(
   doc: any,
@@ -654,15 +652,10 @@ function rawCountAnchorMatches(
  * Uniqueness gate for suggestions. Delegates the exact-wins / markdown-strip
  * FALLBACK DECISION to `resolveAnchorSelection` — the single resolver every
  * other entry point (canAnchorInDoc / getAnchoredText / applyAnchorInDoc) shares
- * — then counts occurrences of the resolved form. This removes the parallel
- * exact-wins control flow (#494): counting can no longer drift from anchoring
- * about WHICH selection form wins, because both ask the same resolver. Behaviour
- * is unchanged: `resolveAnchorSelection` reports `found` iff the verbatim (else
- * stripped) selection anchors — the same condition under which the old
- * raw>0 / strippedCount>0 branches fired — and it returns the same winning form,
- * whose raw occurrence count is what we return (EXACT WINS: a raw match yields the
- * raw count, so a selection unique raw stays unique; only an absent verbatim
- * selection falls back to the stripped form's count).
+ * — then counts occurrences of the resolved form, so counting cannot drift
+ * from anchoring about WHICH selection form wins. EXACT WINS: a raw match
+ * yields the raw count, so a selection unique raw stays unique; only an absent
+ * verbatim selection falls back to the stripped form's count.
  */
 export function countAnchorMatches(doc: any, selection: string): number {
   const { selection: effective, found, normalizer } = resolveAnchorSelection(
@@ -822,7 +815,7 @@ function resolvedCommentMarkOf(node: any): any | null {
  * selection used to re-anchor it elsewhere. Active (unresolved) comment marks are
  * ignored — they survive a markdown round-trip on their own (a page read emits
  * their `<span data-comment-id>` wrapper), whereas resolved anchors are hidden
- * from agent reads (#337) and would be erased by a full-body markdown rewrite.
+ * from agent reads and would be erased by a full-body markdown rewrite.
  */
 export function collectResolvedCommentSpans(doc: any): ResolvedCommentSpan[] {
   const spans: ResolvedCommentSpan[] = [];
@@ -863,14 +856,14 @@ export function collectResolvedCommentSpans(doc: any): ResolvedCommentSpan[] {
  * Re-graft RESOLVED comment marks from `oldDoc` onto matching text ranges in
  * `newDoc`, returning a NEW doc (never mutates the inputs).
  *
- * WHY (#493): an agent read hides resolved-comment anchors (#337), so the
- * markdown it sends to a FULL-body rewrite (`updatePageMarkdown`) no longer
- * carries them — a naive full write would erase every resolved comment mark.
+ * WHY: an agent read hides resolved-comment anchors, so the
+ * markdown it sends to a FULL-body rewrite (`updatePageMarkdown`) does not
+ * carry them — a naive full write would erase every resolved comment mark.
  * This restores them: each resolved span from the previous document is re-anchored
  * onto the SAME text in the newly-imported body (using the shared anchoring /
  * markdown-strip fallback), preserving `resolved:true` and the stored attrs.
  *
- * DISTINCT OCCURRENCES (#514 review / #555): two DIFFERENT resolved anchors can
+ * DISTINCT OCCURRENCES: two DIFFERENT resolved anchors can
  * carry IDENTICAL text (e.g. the word "note" was commented twice, in two places).
  * A naive first-occurrence re-anchor lands both on occurrence #0, and only ONE
  * survives: `spliceCommentMark` strips any pre-existing comment mark before adding
@@ -882,20 +875,19 @@ export function collectResolvedCommentSpans(doc: any): ResolvedCommentSpan[] {
  * not already carrying a comment mark (findFreeAnchorInBlock) — so N identical-text
  * spans spread over N occurrences in document order.
  *
- * MARK-FORBIDDING BLOCKS (#603): the free-occurrence search is gated by the same
+ * MARK-FORBIDDING BLOCKS: the free-occurrence search is gated by the same
  * `canMatchIn` guard as every other anchoring path, so it never places a comment
  * mark inside a mark-forbidding block (e.g. a codeBlock) — even when the identical
  * text also appears in such a block earlier in document order. A resolved span
  * whose text now survives ONLY inside a mark-forbidding block does not re-anchor
  * (its occurrence there is invisible to the guarded search) and is dropped.
  *
- * DROP DIAGNOSTICS (#514 review / #555): an anchor that cannot be placed is no
- * longer dropped silently. When the text is gone or survives only in a
- * mark-forbidding block (`no-match`), or every allowed occurrence is already taken
- * (`collision` — fewer allowed occurrences than distinct anchors on identical
- * text), a structured {@link RegraftWarning} is emitted through the optional
- * `onWarn` sink. The doc is still returned; the drop is non-fatal (the anchor was
- * already resolved), only now it is observable.
+ * DROP DIAGNOSTICS: an anchor that cannot be placed is reported. When the
+ * text is gone or survives only in a mark-forbidding block (`no-match`), or
+ * every allowed occurrence is already taken (`collision` — fewer allowed
+ * occurrences than distinct anchors on identical text), a structured
+ * {@link RegraftWarning} is emitted through the optional `onWarn` sink. The doc
+ * is still returned; the drop is non-fatal (the anchor was already resolved).
  *
  * Active comments are untouched — they ride through the markdown themselves.
  */

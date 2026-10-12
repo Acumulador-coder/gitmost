@@ -2,7 +2,7 @@ import { AiChatPageSnapshotRepo } from './ai-chat-page-snapshot.repo';
 import type { KyselyDB } from '../../types/kysely.types';
 
 /**
- * Unit tests for AiChatPageSnapshotRepo (#274). These build the scoping /
+ * Unit tests for AiChatPageSnapshotRepo. These build the scoping /
  * conflict query, so we assert the EXACT predicates + upsert shape over a
  * chainable builder mock (no live DB): findByChatPage scopes chat + page +
  * workspace; upsert writes the values, targets the (chatId, pageId) conflict key,

@@ -228,7 +228,7 @@ export class EnvironmentService {
   }
 
   /**
-   * Operator toggle for the public client-telemetry sink (#355). DEFAULT OFF:
+   * Operator toggle for the public client-telemetry sink. DEFAULT OFF:
    * the unauthenticated POST /api/telemetry/vitals endpoint + client vitals
    * collection are only wired when this is explicitly true. Kept SEPARATE from
    * METRICS_PORT (the server Prometheus half) because Grafana reads the
@@ -244,20 +244,7 @@ export class EnvironmentService {
   }
 
   /**
-   * Operator toggle for the local-first page boot cache (#563). DEFAULT OFF:
-   * mirrored into window.CONFIG so the client only persists/restores the
-   * localStorage page-meta cache when the operator opts in. Off => the client
-   * keeps today's behavior (skeleton until the page query resolves).
-   */
-  isLocalFirstEnabled(): boolean {
-    const enabled = this.configService
-      .get<string>('LOCAL_FIRST_ENABLED', 'false')
-      .toLowerCase();
-    return enabled === 'true';
-  }
-
-  /**
-   * #640 — network-independent session boundary. Mirrored into window.CONFIG so
+   * Network-independent session boundary. Mirrored into window.CONFIG so
    * the client refuses to draw ANY local content (chrome, tree, ydoc body) once
    * more than this has elapsed since the last successful `/me`, even offline.
    * Defaults to JWT_TOKEN_EXPIRES_IN (the server treats the session dead after
@@ -334,12 +321,11 @@ export class EnvironmentService {
   }
 
   /**
-   * Deferred tool loading for the in-app AI chat (#332). When enabled, the agent
+   * Deferred tool loading for the in-app AI chat. When enabled, the agent
    * sees a compact <tool_catalog> and only CORE tools + the loadTools meta-tool
    * are active each step; deferred tools (the fat/rare ones + all external MCP
-   * tools) load on demand. Defaults to ENABLED — the issue treats deferred
-   * loading as the new behavior; set AI_CHAT_DEFERRED_TOOLS=false to restore the
-   * old "all tools always active" behavior.
+   * tools) load on demand. Defaults to ENABLED; AI_CHAT_DEFERRED_TOOLS=false
+   * keeps all tools always active.
    */
   isAiChatDeferredToolsEnabled(): boolean {
     const enabled = this.configService
@@ -349,11 +335,10 @@ export class EnvironmentService {
   }
 
   /**
-   * Final-step lockdown for the in-app agent loop (#444). When ON (legacy), the
-   * LAST allowed step forces a text-only answer: tools are stripped
-   * (toolChoice:'none') and a synthesis instruction is appended. Defaults to OFF:
-   * stripping the tools mid-work triggered a token-loop degeneration incident
-   * (the model, robbed of its tools on the final step, emitted a 255KB block
+   * Final-step lockdown for the in-app agent loop. When ON, the LAST allowed
+   * step forces a text-only answer: tools are stripped (toolChoice:'none') and a
+   * synthesis instruction is appended. Defaults to OFF: stripping the tools
+   * mid-work can push the model into token-loop degeneration (a 255KB block
    * repeating a single token). With the toggle OFF the last step keeps its tools
    * and gets only a SOFT nudge to finish with a text summary; the universal
    * anti-babble guard is the token-degeneration detector instead. Enable this
@@ -367,14 +352,14 @@ export class EnvironmentService {
   }
 
   /**
-   * In-app AI-chat `viewImage` vision tool (#588, Phase B of #585). When enabled,
+   * In-app AI-chat `viewImage` vision tool. When enabled,
    * the agent gains a read-only `viewImage({pageId, node})` tool that delivers a
    * node's image to the model AS VISION on any provider: raster images
    * (png/jpeg/webp/gif) pass through as-is, SVG / draw.io diagrams are rasterized
-   * to PNG (Phase A #586). Defaults to OFF (fail-closed): with the flag off the
-   * tool is not registered and the per-step image injection never runs, so the
-   * agent surface is byte-identical to before. Set AI_CHAT_VIEW_IMAGE=true to
-   * enable. The public-share chat toolset (`forShare`) never gets this tool.
+   * to PNG. Defaults to OFF (fail-closed): with the flag off the tool is not
+   * registered and the per-step image injection never runs. Set
+   * AI_CHAT_VIEW_IMAGE=true to enable. The public-share chat toolset
+   * (`forShare`) never gets this tool.
    */
   isAiChatViewImageEnabled(): boolean {
     const enabled = this.configService
@@ -384,12 +369,11 @@ export class EnvironmentService {
   }
 
   /**
-   * Kill-switch for personal external MCP servers (#686). When enabled (the
+   * Kill-switch for personal external MCP servers. When enabled (the
    * default), members may attach their OWN external MCP servers via
    * `account/mcp-servers`, and the agent's toolset unions the workspace-admin
-   * servers with the calling user's personal ones. Defaults to ENABLED — the
-   * feature ships on. This is a SANCTIONED kill-switch, NOT a rollout fork:
-   * flip MCP_PERSONAL_SERVERS_ENABLED=false to disable the personal CRUD API
+   * servers with the calling user's personal ones. Set
+   * MCP_PERSONAL_SERVERS_ENABLED=false to disable the personal CRUD API
    * (the account endpoints answer 403) and drop personal rows from the agent
    * union, without a code revert. Kept as an explicit ENABLED flag rather than
    * a MAX=0 because getMcpPersonalServersMax discards <=0 (so a 0 cap cannot
@@ -403,7 +387,7 @@ export class EnvironmentService {
   }
 
   /**
-   * Per-user cap on personal external MCP servers (#686). A member may create
+   * Per-user cap on personal external MCP servers. A member may create
    * at most this many personal servers in a workspace; the personal-create path
    * takes a row lock, counts the user's existing rows, and rejects at the cap.
    * Defaults to 10. A non-integer or <= 0 value falls back to the default (see
@@ -414,51 +398,12 @@ export class EnvironmentService {
     return this.getPositiveIntEnv('MCP_PERSONAL_SERVERS_MAX', 10);
   }
 
-  /**
-   * Resumable SSE transport for durable agent runs (#184 phase 1.5). When
-   * enabled, a run tees its SSE frames into the in-memory run-stream registry so
-   * a late/reloaded tab can attach (replay + live tail) via
-   * `GET /ai-chat/runs/:chatId/stream`. Defaults to DISABLED: PR 1 ships the
-   * server code dormant — with the flag off, `open`/`bind`/`generateMessageId`
-   * are never called and attach always answers 204, so the legacy and #184
-   * phase-1 wire paths stay byte-for-byte identical. Set
-   * AI_CHAT_RESUMABLE_STREAM=true to activate it (paired with the PR 2 client).
-   */
-  isAiChatResumableStreamEnabled(): boolean {
-    const enabled = this.configService
-      .get<string>('AI_CHAT_RESUMABLE_STREAM', 'false')
-      .toLowerCase();
-    return enabled === 'true';
-  }
-
   getPostHogHost(): string {
     return this.configService.get<string>('POSTHOG_HOST');
   }
 
   getPostHogKey(): string {
     return this.configService.get<string>('POSTHOG_KEY');
-  }
-
-  getSearchDriver(): string {
-    return this.configService
-      .get<string>('SEARCH_DRIVER', 'database')
-      .toLowerCase();
-  }
-
-  getTypesenseUrl(): string {
-    return this.configService
-      .get<string>('TYPESENSE_URL', 'http://localhost:8108')
-      .toLowerCase();
-  }
-
-  getTypesenseApiKey(): string {
-    return this.configService.get<string>('TYPESENSE_API_KEY');
-  }
-
-  getTypesenseLocale(): string {
-    return this.configService
-      .get<string>('TYPESENSE_LOCALE', 'en')
-      .toLowerCase();
   }
 
   // NOTE: AI_*/OPENAI_*/GEMINI_*/OLLAMA_* env getters were removed (D8/§14[M3]):
@@ -470,7 +415,7 @@ export class EnvironmentService {
     // The image ships a per-branch default for this baked in at build time
     // (Dockerfile ARG AI_AGENT_ROLES_CATALOG_URL, set per-branch in CI), but it
     // is overridable at runtime via the env var (this getter returns that
-    // runtime value). Local-filesystem sources are no longer supported.
+    // runtime value). Local-filesystem sources are not supported.
     // Empty/unset => the catalog is unavailable (the provider returns 502).
     // This is INFRA config (where the catalog lives), not provider/model
     // config, so an env var is appropriate.
@@ -507,6 +452,79 @@ export class EnvironmentService {
       .split(',')
       .map((o) => o.trim())
       .filter(Boolean);
+  }
+
+  // --- git-sync ----------------------------------------------------------------
+
+  /** Global master switch for the git-sync control plane (default false). */
+  isGitSyncEnabled(): boolean {
+    return (
+      this.configService.get<string>('GIT_SYNC_ENABLED', 'false').toLowerCase() ===
+      'true'
+    );
+  }
+
+  /**
+   * Whether gitmost serves the per-space vaults over smart-HTTP (the /git host).
+   * When GIT_SYNC_HTTP_ENABLED is UNSET it DEFAULTS to isGitSyncEnabled() — so
+   * enabling sync also enables the host unless explicitly disabled. When set, it
+   * is honored verbatim ('true' -> on, anything else -> off).
+   */
+  isGitSyncHttpEnabled(): boolean {
+    const raw = this.configService.get<string>('GIT_SYNC_HTTP_ENABLED');
+    if (raw === undefined) return this.isGitSyncEnabled();
+    return raw.toLowerCase() === 'true';
+  }
+
+  /**
+   * Root directory holding the per-space vault repos. Defaults to
+   * `<DATA_DIR or ./data>/git-sync`. `DATA_DIR` is read directly (no dedicated
+   * getter exists in this codebase) so the vault root tracks the data volume.
+   */
+  getGitSyncDataDir(): string {
+    const explicit = this.configService.get<string>('GIT_SYNC_DATA_DIR');
+    if (explicit) return explicit;
+    const dataDir = this.configService.get<string>('DATA_DIR') || './data';
+    return `${dataDir.replace(/\/+$/, '')}/git-sync`;
+  }
+
+  /**
+   * Poll-safety interval in ms (default 15000). A non-integer / non-positive
+   * value is warned about once and falls back to the default (getPositiveIntEnv),
+   * so a bad override can never disable or zero the poll loop.
+   */
+  getGitSyncPollIntervalMs(): number {
+    return this.getPositiveIntEnv('GIT_SYNC_POLL_INTERVAL_MS', 15000);
+  }
+
+  /**
+   * Spawned `git http-backend` watchdog window in ms (default 120000): a hard cap
+   * for a `git-receive-pack` (it runs under the per-space lock, so a stalled push
+   * cannot hold the lock forever), and an idle/no-progress window for every other
+   * request. On expiry the child is killed. A non-integer / non-positive value is
+   * warned about once and falls back to the default (getPositiveIntEnv), so a bad
+   * override can never disable the watchdog.
+   */
+  getGitSyncBackendTimeoutMs(): number {
+    return this.getPositiveIntEnv('GIT_SYNC_BACKEND_TIMEOUT_MS', 120000);
+  }
+
+  /**
+   * Event debounce window in ms (default 2000). A non-integer / non-positive
+   * value is warned about once and falls back to the default (getPositiveIntEnv),
+   * so a bad override can never disable the debounce.
+   */
+  getGitSyncDebounceMs(): number {
+    return this.getPositiveIntEnv('GIT_SYNC_DEBOUNCE_MS', 2000);
+  }
+
+
+  /**
+   * The service user id git-sync writes are attributed to. Required when sync is
+   * enabled (validated in environment.validation.ts); optional otherwise.
+   */
+  getGitSyncServiceUserId(): string | undefined {
+    return this.configService.get<string>('GIT_SYNC_SERVICE_USER_ID');
   }
 
   // --- Blob sandbox (in-RAM ephemeral blob transfer; see SandboxModule) ---

@@ -75,7 +75,7 @@ export function decodeHtmlEmbedSource(encoded: string): string {
  * Returns null (auto-resize) when the value is absent, empty, or non-numeric.
  * A non-numeric `data-height` (e.g. a crafted/corrupted import) must NOT become
  * NaN: NaN is typeof "number" and would disable auto-resize and yield an
- * unclamped iframe height downstream. The Number.isFinite guard pins that fix.
+ * unclamped iframe height downstream, hence the Number.isFinite guard.
  */
 export function parseHtmlEmbedHeight(value: string | null): number | null {
   if (!value) return null;

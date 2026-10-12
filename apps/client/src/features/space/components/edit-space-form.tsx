@@ -1,11 +1,21 @@
-import { Group, Box, Button, TextInput, Stack, Textarea } from "@mantine/core";
-import React from "react";
+import {
+  Group,
+  Box,
+  Button,
+  TextInput,
+  Stack,
+  Textarea,
+  Divider,
+  Switch,
+} from "@mantine/core";
+import React, { useState } from "react";
 import { useForm } from "@mantine/form";
 import { zod4Resolver } from "mantine-form-zod-resolver";
 import { z } from "zod/v4";
 import { useUpdateSpaceMutation } from "@/features/space/queries/space-query.ts";
 import { ISpace } from "@/features/space/types/space.types.ts";
 import { useTranslation } from "react-i18next";
+import { isGitSyncEnabled } from "@/lib/config.ts";
 
 const formSchema = z.object({
   name: z.string().min(2).max(100),
@@ -28,6 +38,32 @@ interface EditSpaceFormProps {
 export function EditSpaceForm({ space, readOnly }: EditSpaceFormProps) {
   const { t } = useTranslation();
   const updateSpaceMutation = useUpdateSpaceMutation();
+
+  const [gitSyncEnabled, setGitSyncEnabled] = useState<boolean>(
+    space?.settings?.gitSync?.enabled ?? false,
+  );
+
+  // Handler for the git-sync space toggle. The update is optimistic and reverts
+  // the local state on failure (the mutation surfaces a toast via onError; the
+  // raw error is still logged per AGENTS.md).
+  const handleToggle = async (
+    field: "gitSyncEnabled",
+    value: boolean,
+    previous: boolean,
+    setLocal: (next: boolean) => void,
+    errorLabel: string,
+  ) => {
+    setLocal(value); // optimistic update
+    try {
+      await updateSpaceMutation.mutateAsync({
+        spaceId: space.id,
+        [field]: value,
+      });
+    } catch (err) {
+      setLocal(previous); // revert on failure
+      console.error(errorLabel, err);
+    }
+  };
 
   const form = useForm<FormValues>({
     validate: zod4Resolver(formSchema),
@@ -104,6 +140,28 @@ export function EditSpaceForm({ space, readOnly }: EditSpaceFormProps) {
             </Group>
           )}
         </form>
+
+        {isGitSyncEnabled() && (
+          <>
+            <Divider my="lg" />
+
+            <Switch
+              label={t("Enable Git sync")}
+              description={t("Sync this space's pages to a Git repository.")}
+              checked={gitSyncEnabled}
+              disabled={readOnly || updateSpaceMutation.isPending}
+              onChange={(event) =>
+                handleToggle(
+                  "gitSyncEnabled",
+                  event.currentTarget.checked,
+                  gitSyncEnabled,
+                  setGitSyncEnabled,
+                  "Failed to toggle git-sync for space",
+                )
+              }
+            />
+          </>
+        )}
       </Box>
     </>
   );

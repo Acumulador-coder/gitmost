@@ -7,7 +7,7 @@ import {
  * Unit tests for the two security-critical surfaces of McpClientsService that the
  * sibling specs (ssrf-guard / validate-resolved-addresses / lease) do NOT cover:
  *
- *  1. `decryptHeaders` (private) — FAIL-CLOSED behavior (#686). A decrypt/parse
+ *  1. `decryptHeaders` (private) — FAIL-CLOSED behavior. A decrypt/parse
  *     failure of a PRESENT blob (e.g. APP_SECRET rotated, tampered blob) must
  *     NEVER return undefined (which would connect the server ANONYMOUSLY) and
  *     must NEVER log the blob: it throws McpAuthUnreadableError so buildEntry
@@ -73,12 +73,12 @@ describe('McpClientsService.decryptHeaders', () => {
     expect(callDecrypt(service, 'cipher')).toBeUndefined();
   });
 
-  // #686: fail-CLOSED. A PRESENT-but-undecryptable blob (e.g. APP_SECRET rotated)
+  // Fail closed: a PRESENT-but-undecryptable blob (e.g. APP_SECRET rotated)
   // must NOT return undefined (which would connect the server ANONYMOUSLY, silently
   // dropping its credentials). It throws McpAuthUnreadableError so buildEntry skips
   // the server with a clear `auth-unreadable` outcome. The blob is never in the
-  // error, and decryptHeaders itself no longer warns (the WARN, carrying the
-  // server/workspace ids, moved to the skip site in buildEntry).
+  // error, and decryptHeaders itself does not warn (the WARN, carrying the
+  // server/workspace ids, is logged at the skip site in buildEntry).
   it('FAILS CLOSED: a decrypt error throws McpAuthUnreadableError (no anonymous connect)', () => {
     const { service } = buildService(() => {
       throw new Error('Failed to decrypt secret — APP_SECRET may have changed');

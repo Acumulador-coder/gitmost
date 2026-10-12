@@ -1,13 +1,9 @@
 name: Test
 
-# NO `paths:` filter on purpose (issue #447). The tool-spec REGISTRY is split
-# across two packages that MUST stay in sync: the specs live in `packages/mcp`
-# but the parity/tier guard tests that read them live in the `apps/server` jest
-# suite. A PR touching only `packages/mcp/**` must therefore still run the SERVER
-# suite (and vice-versa), or an in-app wiring break slips through green and only
-# surfaces on develop after merge. The `test` job below runs BOTH suites via
-# `pnpm -r test` on every PR; the dedicated `mcp-server-parity` job makes that
-# cross-package gate explicit and fast. Do not add a `paths:` filter here.
+# No `paths:` filter: the tool-spec registry lives in `packages/mcp` but its
+# parity/tier guard tests live in the `apps/server` jest suite, so a change to
+# either package must run both suites (the `test` job via `pnpm -r test`, plus the
+# `mcp-server-parity` job).
 on:
   pull_request:
   workflow_call:
@@ -21,16 +17,12 @@ permissions:
   contents: read
 
 jobs:
-  # Guard against a long-lived branch adding a migration whose timestamped
-  # filename sorts BEFORE migrations already applied on the target branch (and
-  # thus in prod). The Kysely startup migrator rejects that as "corrupted
-  # migrations" and crash-loops the app on boot (incident #361). This gate fails
-  # the PR so the migration is renamed to a current timestamp before merge.
-  # Runs for pull_request (diff against the base branch) AND for push (#476
-  # retrospective: a DIRECT push to develop used to bypass this PR-only gate
-  # entirely — now the push is diffed against its `before` SHA; workflow_call
-  # from develop.yml inherits the caller's push event). workflow_dispatch has
-  # nothing to diff against and still skips the job.
+  # Fails when a migration's timestamped filename sorts BEFORE migrations already
+  # applied on the target branch: the Kysely startup migrator rejects that as
+  # "corrupted migrations" and crash-loops the app on boot. pull_request diffs
+  # against the base branch, push against its `before` SHA (workflow_call from
+  # develop.yml inherits the caller's push event); workflow_dispatch has nothing to
+  # diff against and skips the job.
   migration-order:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -95,15 +87,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Real Postgres + Redis so the server integration suite (`*.int-spec.ts`,
-    # behind `pnpm --filter server test:int`) runs in CI (red-team finding #7).
-    # Without it, cost-cap / FK-cascade / jsonb-round-trip / real-apply tests
-    # only ran locally, so regressions in those paths stayed green in CI.
-    # Postgres uses the pgvector image because migrations create vector columns
-    # and global-setup runs `CREATE EXTENSION vector`. Credentials/db match the
-    # defaults in apps/server/test/integration/db.ts + global-setup.ts
-    # (docmost / docmost_dev_pw, maintenance db `docmost`, redis on 6379), so no
-    # TEST_*_URL overrides are needed.
+    # Real Postgres + Redis for the server integration suite (`*.int-spec.ts`,
+    # behind `pnpm --filter server test:int`). Postgres uses the pgvector image
+    # because migrations create vector columns and global-setup runs `CREATE
+    # EXTENSION vector`. Credentials/db match the defaults in
+    # apps/server/test/integration/db.ts + global-setup.ts (docmost / docmost_dev_pw,
+    # maintenance db `docmost`, redis on 6379), so no TEST_*_URL overrides are needed.
     services:
       postgres:
         # via mirror.gcr.io (Docker Hub pull-through cache; avoids Hub anonymous
@@ -155,7 +144,7 @@ jobs:
       # build/ is gitignored, and plain `pnpm -r test` does NOT honour nx
       # `dependsOn: ^build`, so its consumers (mcp `pretest: tsc`, git-sync vitest
       # typecheck) fail with TS2307 Cannot find module '@docmost/prosemirror-markdown'
-      # unless it is built first. Build it before the recursive test run.
+      # unless it is built first. Build it BEFORE git-sync/mcp (which import it).
       - name: Build prosemirror-markdown
         run: pnpm --filter @docmost/prosemirror-markdown build
 
@@ -167,18 +156,32 @@ jobs:
       - name: Build token-estimate
         run: pnpm --filter @docmost/token-estimate build
 
-      # The client's `test` script is `vitest run` — esbuild, which STRIPS types
-      # without checking them. Its `build` script (the release path, and what the
-      # Docker image runs) is `... && tsc && vite build`. So a type error in any
-      # client file sails through this workflow green and only surfaces when the
-      # image is built. That is not hypothetical: #624 shipped 4 TS errors in new
-      # test files with a fully green PR gate (#625). Typecheck the client
-      # explicitly, after the workspace packages it resolves are built (tsc reads
-      # their .d.ts from dist/, so this step MUST stay below the build steps).
-      # tsconfig `include` covers src/**, so *.spec/*.test files are checked too —
-      # that is the point: #624's four errors were all in test files.
+      # The client's `test` script is `vitest run` (esbuild strips types without
+      # checking them), while its `build` script, used by the Docker image, runs
+      # `tsc && vite build`. Typecheck explicitly here; tsc reads the workspace
+      # packages' .d.ts from dist/, so this step MUST stay below the build steps.
+      # tsconfig `include` covers src/**, so test files are checked too.
       - name: Typecheck client
         run: pnpm --filter client typecheck
+
+      # git-sync and mcp build/ is gitignored and the server resolves both via their
+      # built build/index.js. The server pretest also builds them, but building here
+      # keeps it explicit and independent of pnpm lifecycle ordering.
+      - name: Build git-sync and mcp
+        run: pnpm --filter @docmost/git-sync build && pnpm --filter @docmost/mcp build
+
+      # Same reason as the client typecheck above: ts-jest only checks the files
+      # a spec imports (main.ts is imported by none), so a type error elsewhere
+      # in the server reaches the image build green. tsconfig.json has no
+      # `include`, so src/** AND test/** (the integration specs) are checked.
+      # Below the build steps: tsc reads the workspace packages' .d.ts.
+      - name: Typecheck server
+        run: pnpm --filter server exec tsc --noEmit
+
+      # The server `lint` script runs `eslint --fix`; the gate must report, not
+      # rewrite, so call eslint directly on the same glob.
+      - name: Lint server
+        run: pnpm --filter server exec eslint "{src,apps,libs,test}/**/*.ts"
 
       - name: Run unit tests
         run: pnpm -r test
@@ -190,15 +193,11 @@ jobs:
       - name: Run server integration tests
         run: pnpm --filter server test:int
 
-  # Cross-package tool-spec parity gate (issue #447). The tool-spec registry lives
-  # in `packages/mcp` but its parity/tier guard tests live in the `apps/server`
-  # jest suite, so a PR touching ONLY one of the two packages must still run BOTH
-  # sides — otherwise an in-app wiring break (e.g. PR #434 drawio) passes the mcp
-  # suite green and only surfaces on develop after merge. The `test` job already
-  # runs everything via `pnpm -r test`; this job is a fast, explicitly-named guard
-  # that runs the mcp `node --test` suite AND the server tool-guard jest specs
-  # together, so the coupling is visible and can never be accidentally split by a
-  # path filter. No Postgres/Redis needed: these specs mock the DB/loader.
+  # Cross-package tool-spec parity gate: the registry lives in `packages/mcp` but
+  # its parity/tier guard tests live in the `apps/server` jest suite. This job runs
+  # the mcp `node --test` suite and the server tool-guard jest specs together so the
+  # coupling is explicit and no path filter can split it. No Postgres/Redis needed:
+  # these specs mock the DB/loader.
   mcp-server-parity:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -239,3 +238,144 @@ jobs:
       # and assert the in-app AI-chat wiring matches it.
       - name: Run server tool-spec guard specs
         run: pnpm --filter server exec jest shared-tool-specs.contract tool-tiers ai-chat-tools.service --runInBand
+
+  # The production git-sync path (TP-1): the root-mounted /git smart-HTTP host,
+  # the ESM loader of the built @docmost/git-sync, and a real `git http-backend`
+  # run in no other job — the unit and integration suites mock all three. Boot
+  # the BUILT server with git-sync on and drive it with the live-stand suites in
+  # apps/server/test (clone/push/pull/delete/3-way merge, the auth/authz gate,
+  # the held-lock 503, rename/reparent/delete-cap).
+  git-sync-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: postgresql://docmost:docmost@localhost:5432/docmost
+      REDIS_URL: redis://localhost:6379
+      APP_SECRET: ci-e2e-secret-change-me-min-32-characters
+      APP_URL: http://localhost:3000
+      NODE_ENV: production
+      # The suites' fixtures: the admin they log in as, and the vault root they
+      # assert on (must equal the server's GIT_SYNC_DATA_DIR below).
+      EMAIL: admin@test.local
+      PASSWORD: Test12345!
+      SERVER: http://localhost:3000
+      VAULT_DIR: /tmp/gitmost-vaults
+    services:
+      postgres:
+        # via mirror.gcr.io (see the `test` job).
+        image: mirror.gcr.io/pgvector/pgvector:pg18
+        env:
+          POSTGRES_DB: docmost
+          POSTGRES_USER: docmost
+          POSTGRES_PASSWORD: docmost
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U docmost"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: mirror.gcr.io/library/redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build editor-ext
+        run: pnpm --filter @docmost/editor-ext build
+
+      - name: Build server
+        run: pnpm server:build
+
+      # The server loads the BUILT git-sync engine over the ESM bridge (and mcp
+      # for the embedded /mcp); build/ is gitignored, so build both explicitly.
+      - name: Build git-sync and mcp
+        run: pnpm --filter @docmost/git-sync build && pnpm --filter @docmost/mcp build
+
+      - name: Run migrations
+        run: pnpm --filter ./apps/server migration:latest
+
+      # GIT_SYNC_SERVICE_USER_ID is required at boot once git-sync is on, and
+      # the user only exists after setup: boot once with git-sync off, create
+      # the admin, take its id as the service user, stop.
+      - name: Seed the admin (first boot, git-sync off)
+        working-directory: apps/server
+        env:
+          DB_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          node dist/main > /tmp/server-seed.log 2>&1 &
+          SERVER_PID=$!
+          for i in $(seq 1 60); do
+            curl -fsS "$SERVER/api/health" > /dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -fsS "$SERVER/api/health" > /dev/null
+          curl -fsS -X POST "$SERVER/api/auth/setup" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\":\"E2E Admin\",\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"workspaceName\":\"E2E\"}" \
+            > /dev/null
+          ADMIN_ID=$(docker exec "$DB_CONTAINER" psql -U docmost -d docmost -tAc \
+            "select id from users where email = '$EMAIL'" | tr -d '[:space:]')
+          test -n "$ADMIN_ID"
+          echo "GIT_SYNC_SERVICE_USER_ID=$ADMIN_ID" >> "$GITHUB_ENV"
+          kill "$SERVER_PID"
+          wait "$SERVER_PID" || true
+
+      - name: Start the server with git-sync on
+        working-directory: apps/server
+        env:
+          GIT_SYNC_ENABLED: 'true'
+          GIT_SYNC_HTTP_ENABLED: 'true'
+          GIT_SYNC_DATA_DIR: /tmp/gitmost-vaults
+        run: |
+          node dist/main > /tmp/server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS "$SERVER/api/health" > /dev/null 2>&1; then
+              echo "Server is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Server did not become healthy in time"
+          exit 1
+
+      - name: Run git-sync e2e
+        env:
+          DB_CONTAINER: ${{ job.services.postgres.id }}
+          DB_USER: docmost
+          DB_NAME: docmost
+        run: bash apps/server/test/git-sync-e2e.sh
+
+      - name: Run git-sync advanced e2e
+        env:
+          DB_CONTAINER: ${{ job.services.postgres.id }}
+          REDIS_CONTAINER: ${{ job.services.redis.id }}
+          DB_USER: docmost
+          DB_NAME: docmost
+        run: bash apps/server/test/git-sync-e2e-advanced.sh
+
+      - name: Dump server logs on failure
+        if: failure()
+        run: |
+          echo "--- first boot (seed) ---"; tail -200 /tmp/server-seed.log || true
+          echo "--- git-sync boot ---"; tail -300 /tmp/server.log || true

@@ -1,14 +1,13 @@
 /**
- * Schema-DERIVED attribute-state fast-check arbitraries (#351, PR 1).
+ * Schema-DERIVED attribute-state fast-check arbitraries.
  *
- * This GENERALIZES the #350 stability-matrix helper (roundtrip-stability.helper.ts)
- * to fast-check. Where that helper sweeps a HAND-WRITTEN 2-state matrix for one
- * node spec, this module reads the attribute list straight from
- * `schema.nodes[type].spec.attrs` (never a hand list) and, per attribute,
- * generates over the FOUR states the issue calls for:
+ * The fast-check counterpart of the stability-matrix helper
+ * (roundtrip-stability.helper.ts): instead of a HAND-WRITTEN 2-state matrix for
+ * one node spec, this module reads the attribute list straight from
+ * `schema.nodes[type].spec.attrs` and, per attribute, generates over FOUR states:
  *
  *   - `absent`      : the attribute is OMITTED entirely (the empty-string-vs-
- *                     absent churn class the #350 fix targets).
+ *                     absent churn class).
  *   - `default`     : the schema default value, authored explicitly.
  *   - `nonDefault`  : a representative legal non-default value.
  *   - `degenerate`  : `""` for strings, `0`/negative for numbers, the flipped
@@ -25,9 +24,8 @@
  *     `status.color`, `orderedList.start ≥ 1`, etc. A generic "default + 1"
  *     would emit an ILLEGAL value, so these get an explicit legal domain.
  *  2. ROUND-TRIP-safety, established EMPIRICALLY by probing the live converter
- *     (the classification captured in flat-roundtrip.property.test.ts). A frozen
- *     attribute falls into ONE of TWO explicitly-distinguished classes — never a
- *     silent "it just doesn't round-trip":
+ *     (the classification captured in flat-roundtrip.property.test.ts). Each
+ *     attribute falls into one explicitly-distinguished class:
  *
  *       (a) ACCEPTED LIMITATION — the attribute has NO markdown representation,
  *           so the loss is inherent to targeting markdown, not a converter
@@ -37,26 +35,19 @@
  *           tagged `// ACCEPTED:` inline. Freezing them is correct — there is
  *           nothing to preserve in the target format.
  *
- *       (b) FIXED & VALUE-FUZZED — attributes that were once PINNED converter
- *           bugs (representable in markdown but dropped) and are now FIXED in
- *           src/, so they are value-fuzzed here at legal non-default values like
- *           any healthy attr. `orderedList.start` (the non-1 start once rendered
- *           as `1.`; the converter now emits the start marker / `<ol start="N">`)
- *           and `column.width` (a unitless flex-grow number that round-trips via
- *           parseFloat) are both fuzzed in OVERRIDES below. The former held-out
- *           `it.fails` cases are gone; `ordered-list-start.json` +
- *           counterexamples.test.ts now stand as PASSING regression pins (per the
- *           epic guardrail, the minimal doc stays forever to guard re-regression).
- *           The #351 media-family sizing attrs (image/video/youtube/pdf/drawio/
- *           excalidraw/embed width/height/size/aspectRatio) are likewise fuzzed
- *           now that they ride round-trip-safely in the per-node `<!--…-->` JSON.
+ *       (b) VALUE-FUZZED — representable attributes fuzzed at legal non-default
+ *           values: e.g. `orderedList.start` (start marker / `<ol start="N">`),
+ *           `column.width` (a unitless flex-grow number that round-trips via
+ *           parseFloat), and the media-family sizing attrs (image/video/youtube/
+ *           pdf/drawio/excalidraw/embed width/height/size/aspectRatio), which ride
+ *           in the per-node `<!--…-->` JSON. counterexamples.test.ts keeps the
+ *           minimal docs for orderedList.start as regression pins.
  *
  *       (c) DEFERRED-BUG — representable AND round-trips, frozen only because the
  *           flat generator can't yet build a valid instance. Table
  *           `colspan`/`rowspan` round-trip via the raw-<table> fallback, but a
  *           geometrically-valid spanned table is PR-2 structural work; the flat
- *           generator hardcodes span = 1. Tagged `// DEFERRED-BUG:` inline so a
- *           maintainer does not read them as an inherent limitation.
+ *           generator hardcodes span = 1. Tagged `// DEFERRED-BUG:` inline.
  *       - Several non-null-default attrs are MATERIALIZED on import but are not
  *         in canonicalize's KNOWN_DEFAULTS (`callout.type`, `status.color`,
  *         table `colspan`/`rowspan`, `columns.layout`/`widthMode`,
@@ -64,15 +55,9 @@
  *         `details.open`, `subpages.recursive`, `orderedList.start`). If left
  *         `absent` they re-materialize as a non-canonical default and diverge
  *         under P1. We mark them `always` so they are authored explicitly.
- *       - The documented numeric→string coercion set (`width height size
- *         aspectRatio`) is generated as STRINGS for the media family (a stored
- *         number re-parses as a string), EXCEPT `embed.width/height` which the
- *         embed schema keeps numeric — handled per-attr.
- *
- * The two former PINNED-BUG attrs (`column.width` P2 churn, `orderedList.start`
- * P1 loss) are now FIXED and value-fuzzed; `ordered-list-start.json` in
- * counterexamples.test.ts is a permanent PASSING regression pin, not an
- * `it.fails` hold-out.
+ *       - Media `width`/`height` parse back as NUMBERS, so they are generated as
+ *         numbers; `size`/`aspectRatio` and `embed.width/height` parse back as
+ *         strings (getAttribute), so they are generated as numeric STRINGS.
  */
 import fc from 'fast-check';
 import { getSchema } from '@tiptap/core';
@@ -126,10 +111,10 @@ interface AttrPolicy {
 
 const num = (...xs: number[]) => fc.constantFrom(...xs);
 const str = (...xs: string[]) => fc.constantFrom(...xs);
-const widthStr = str('120', '320', '640');
-// Media `aspectRatio`/`size` are stringified numerics too (converter emits
+const widthNum = num(120, 320, 640);
+// Media `aspectRatio`/`size` are stringified numerics (converter emits
 // String(value)); the schema parseHTML reads them back as strings. Fuzz as
-// plausible numeric strings so they round-trip byte-stably like widthStr.
+// plausible numeric strings so they round-trip byte-stably.
 const aspectRatioStr = str('1.5', '0.75', '1');
 const sizeStr = str('320', '640');
 
@@ -146,67 +131,64 @@ const OVERRIDES: Record<string, AttrPolicy> = {
   'heading.textAlign': { arb: str('center', 'right', 'justify') },
   'heading.indent': { frozen: true }, // ACCEPTED: no md representation
   // ── lists ────────────────────────────────────────────────────────────────
-  // FIXED (#351): the converter now emits the start marker ("5." / <ol start="5">)
-  // and it round-trips, so the start number is value-fuzzed. See
+  // The converter emits the start marker ("5." / <ol start="5">) and it
+  // round-trips, so the start number is value-fuzzed. See
   // counterexamples.test.ts (ordered-list-start.json) for the regression pin.
   'orderedList.start': { always: true, arb: num(2, 3, 5, 42) },
   'orderedList.type': { frozen: true }, // ACCEPTED: a/A/i markers not expressible in GFM
   'taskItem.checked': { always: true, arb: fc.constant(true) }, // boolean, default false
   // ── codeBlock ────────────────────────────────────────────────────────────
   'codeBlock.language': { arb: str('js', 'ts', 'python', 'go', 'rust', 'bash') },
-  // ── image / media (numeric→string width family) ──────────────────────────
+  // ── image / media ────────────────────────────────────────────────────────
   'image.src': { noDefault: true, arb: urlArb, degen: '' },
   'image.align': { arb: str('left', 'right') },
   'image.alt': { arb: letterPhraseArb, degen: '' },
-  'image.title': { arb: letterPhraseArb },
-  'image.width': { arb: widthStr, degen: '' },
-  'image.height': { arb: widthStr, degen: '' },
-  // #351 (this PR): media sizing/family attrs ride in the `<!--img {…}-->`
-  // comment JSON via String(value); parseHTML reads them back as strings, so a
-  // numeric string round-trips byte-stably (mirrors image.width).
+  'image.width': { arb: widthNum, degen: 0 },
+  'image.height': { arb: widthNum, degen: 0 },
+  // Media sizing/family attrs ride in the `<!--img {…}-->`
+  // comment JSON via String(value); parseHTML reads size/aspectRatio back as
+  // strings, so a numeric string round-trips byte-stably.
   'image.size': { arb: sizeStr, degen: '' },
   'image.aspectRatio': { arb: aspectRatioStr },
   // caption is text carried verbatim in the comment JSON (mirrors image.alt).
   'image.caption': { arb: letterPhraseArb, degen: '' },
   'video.src': { noDefault: true, arb: urlArb, degen: '' },
   'video.alt': { arb: letterPhraseArb },
-  'video.width': { arb: widthStr },
-  'video.height': { arb: widthStr },
-  // #351 (this PR): video sizing/align ride in the `<!--video {…}-->` comment.
+  'video.width': { arb: widthNum },
+  'video.height': { arb: widthNum },
+  // Video sizing/align ride in the `<!--video {…}-->` comment.
   'video.size': { arb: sizeStr },
   'video.aspectRatio': { arb: aspectRatioStr },
   // align default "center" is dropped on export; fuzz non-center only.
   'video.align': { arb: str('left', 'right') },
   'audio.src': { noDefault: true, arb: urlArb, degen: '' },
   'youtube.src': { noDefault: true, arb: urlArb },
-  // #351 (this PR): youtube width/height/align ride in the `<!--youtube {…}-->`
-  // comment JSON (String()-coerced dimensions, non-center align only).
-  'youtube.width': { arb: widthStr },
-  'youtube.height': { arb: widthStr },
-  'youtube.align': { arb: str('left', 'right') },
+  // Youtube width/height ride in the `<!--youtube {…}-->`
+  // comment JSON.
+  'youtube.width': { arb: widthNum },
+  'youtube.height': { arb: widthNum },
   'pdf.src': { noDefault: true, arb: urlArb },
   'pdf.name': { arb: phraseArb },
-  // #351 (this PR): pdf size/width/height ride in the `<!--pdf {…}-->` comment
-  // (String()-coerced dimensions, read back as strings).
+  // Pdf size/width/height ride in the `<!--pdf {…}-->` comment.
   'pdf.size': { arb: sizeStr },
-  'pdf.width': { arb: widthStr },
-  'pdf.height': { arb: widthStr },
+  'pdf.width': { arb: widthNum },
+  'pdf.height': { arb: widthNum },
   'drawio.src': { noDefault: true, arb: urlArb },
-  // #351 (this PR): drawio family attrs ride in the `<!--drawio {…}-->` comment.
-  // Dimensions/size/aspectRatio are String()-coerced numeric strings; title/alt
-  // are text carried verbatim; align fuzzed non-center only.
-  'drawio.width': { arb: widthStr },
-  'drawio.height': { arb: widthStr },
+  // Drawio family attrs ride in the `<!--drawio {…}-->` comment.
+  // Dimensions are numbers, size/aspectRatio numeric strings; title/alt are text
+  // carried verbatim; align fuzzed non-center only.
+  'drawio.width': { arb: widthNum },
+  'drawio.height': { arb: widthNum },
   'drawio.size': { arb: sizeStr },
   'drawio.aspectRatio': { arb: aspectRatioStr },
   'drawio.align': { arb: str('left', 'right') },
   'drawio.title': { arb: letterPhraseArb },
   'drawio.alt': { arb: letterPhraseArb },
   'excalidraw.src': { noDefault: true, arb: urlArb },
-  // #351 (this PR): excalidraw family attrs ride in the `<!--excalidraw {…}-->`
+  // Excalidraw family attrs ride in the `<!--excalidraw {…}-->`
   // comment (same shape as the drawio family above).
-  'excalidraw.width': { arb: widthStr },
-  'excalidraw.height': { arb: widthStr },
+  'excalidraw.width': { arb: widthNum },
+  'excalidraw.height': { arb: widthNum },
   'excalidraw.size': { arb: sizeStr },
   'excalidraw.aspectRatio': { arb: aspectRatioStr },
   'excalidraw.align': { arb: str('left', 'right') },
@@ -254,7 +236,7 @@ const OVERRIDES: Record<string, AttrPolicy> = {
   // ── embed (schema keeps width/height NUMERIC, not string-coerced) ─────────
   'embed.src': { noDefault: true, arb: urlArb, degen: '' },
   'embed.provider': { noDefault: true, arb: str('iframe', 'youtube', 'vimeo') },
-  // #351 (this PR): the embed schema defaults width/height to the NUMBERS 800/600
+  // The embed schema defaults width/height to the NUMBERS 800/600
   // and the converter only emits them when they differ. But the value round-trips
   // as a STRING: export stringifies into the comment JSON (String(width)) and the
   // import path (embedToHtml -> data-width -> embed parseHTML) reads it back as a

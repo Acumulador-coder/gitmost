@@ -9,22 +9,22 @@ import { ProvenanceSource } from '../../core/auth/dto/jwt-payload';
  * cannot fake an 'agent' marker.
  */
 export interface AuthProvenanceData {
+  // ProvenanceSource includes 'git-sync' — set by the in-process git-sync data
+  // plane when it drives PageService writes; never from a request token.
   actor: ProvenanceSource;
   aiChatId: string | null;
-  // #559 — the api_key that authenticated this write, when it came in over an
-  // api-key principal (an EXTERNAL MCP agent). Non-null ⇒ the write is attributed
-  // to the "External MCP" persona named after the key, regardless of aiChatId
-  // (which is always null on this path — an api key has no internal ai_chats row).
-  // Null for a normal user/session write and for the internal AI agent (whose
-  // provenance is carried by aiChatId instead). Optional so the many existing
-  // test/manual constructions of this shape stay valid; the decorator and
-  // resolveProvenance always populate it (null when absent).
+  // The api_key that authenticated this write, when it came in over an api-key
+  // principal (an external MCP agent). Non-null ⇒ the write is attributed to the
+  // "External MCP" persona named after the key; aiChatId is always null on this
+  // path. Null for a normal user/session write and for the internal AI agent
+  // (carried by aiChatId). Optional so hand-built test shapes stay valid; the
+  // decorator and resolveProvenance always populate it.
   apiKeyId?: string | null;
 }
 
 /**
  * Single source of truth for deriving a write's provenance from the SIGNED
- * server-side identity (#143 review, Arch A). Used by BOTH transport seams — the
+ * server-side identity. Used by BOTH transport seams — the
  * REST access-token strategy and the collab websocket auth — so they can't drift:
  *
  *   - A `user.isAgent` service account (e.g. the MCP bot) stamps 'agent' on every
@@ -32,12 +32,11 @@ export interface AuthProvenanceData {
  *     (usually null).
  *   - Otherwise honor the actor claim minted into the internal AI agent's token
  *     (actor='agent' + aiChatId); a normal user token carries no claim → 'user'.
- *   - #559 — a write that authenticated over an api-key principal (an EXTERNAL
- *     MCP agent) is ALWAYS 'agent', even for an ordinary (non-is_agent) user's
- *     PERSONAL key. That is intentional and honest: the access was programmatic
- *     via an api_key, so the edit is attributed to the "External MCP" persona
- *     named after the key rather than shown as if the human typed it. The key id
- *     is threaded through as `apiKeyId`; aiChatId stays null on this path.
+ *   - A write that authenticated over an api-key principal (an external MCP
+ *     agent) is ALWAYS 'agent', even for an ordinary user's personal key: the
+ *     access was programmatic, so the edit is attributed to the "External MCP"
+ *     persona named after the key. The key id is threaded through as
+ *     `apiKeyId`; aiChatId stays null on this path.
  *
  * Provenance is NEVER read from a client body field, so a normal user cannot fake
  * an 'agent' marker — `apiKeyId` too is the SERVER-verified key id, not client input.
@@ -61,7 +60,7 @@ export function resolveProvenance(
 }
 
 /**
- * Agent-edit write-stamp fields for a repository insert/update (#143 review).
+ * Agent-edit write-stamp fields for a repository insert/update.
  * Spread into the row being written: for an agent it stamps the `*Source`
  * column 'agent' and the AI-chat id; for a normal user it returns `{}` — on an
  * INSERT the omitted column falls back to its DB default ('user'); on an UPDATE
@@ -74,7 +73,7 @@ export function resolveProvenance(
  *   insertComment({ ..., ...agentSourceFields(p, 'createdSource', 'aiChatId', 'createdApiKeyId') })
  *   updatePage({ ..., ...agentSourceFields(p, 'lastUpdatedSource', 'lastUpdatedAiChatId', 'lastUpdatedApiKeyId') })
  *
- * #559 — the optional `apiKeyKey` names the external-MCP api_key column for this
+ * The optional `apiKeyKey` names the external-MCP api_key column for this
  * table. When provided, it is ALWAYS written for an agent action (to the verified
  * key id, or null for the internal AI agent, which has none) so the aiChatId /
  * apiKeyId pair is mutually exclusive and internally consistent: an internal
@@ -99,6 +98,16 @@ export function agentSourceFields<
     Record<C, string | null> &
     Record<K, string | null>
 > {
+  // git-sync data-plane write: stamp the source 'git-sync' with NO
+  // aiChatId (it has no internal ai_chats row). Mirrors the agent branch; each
+  // write has a single actor, so precedence is irrelevant here.
+  if (provenance?.actor === 'git-sync') {
+    return { [sourceKey]: 'git-sync' } as Partial<
+      Record<S, ProvenanceSource> &
+        Record<C, string | null> &
+        Record<K, string | null>
+    >;
+  }
   if (provenance?.actor !== 'agent') return {};
   const fields: Record<string, ProvenanceSource | string | null> = {
     [sourceKey]: 'agent',

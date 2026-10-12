@@ -113,11 +113,9 @@ describe('compactToolOutput', () => {
 
 /**
  * Tests for assistantParts: the pure function that rebuilds the persisted
- * UIMessage parts for a turn. Its output decides whether the conversation
- * replays correctly on the next turn. The crux: a tool-call WITHOUT a paired
- * result must become a synthetic `output-error` part, so convertToModelMessages
- * never throws MissingToolResultsError. This test MUST fail on pre-fix logic
- * that persisted a bare input-available call.
+ * UIMessage parts for a turn. A tool call WITHOUT a paired result must become a
+ * synthetic `output-error` part, so convertToModelMessages never throws
+ * MissingToolResultsError.
  */
 describe('assistantParts', () => {
   type AnyPart = Record<string, unknown>;
@@ -287,10 +285,10 @@ describe('assistantParts', () => {
   });
 });
 
-// #490 trace format v2: per call the trace stores { input } for the call and an
+// Trace format v2: per call the trace stores { input } for the call and an
 // OUTCOME element — { ok: true } on success, { error, kind: 'thrown' } on a
 // thrown tool-error, { error, kind: 'interrupted' } on a mid-step abort. The tool
-// OUTPUT is no longer duplicated here (it lives once in metadata.parts).
+// OUTPUT is not stored here (it lives in metadata.parts).
 describe('serializeSteps (trace v2)', () => {
   it('returns null when there are no calls or results', () => {
     expect(serializeSteps([])).toBeNull();
@@ -641,12 +639,11 @@ describe('lastAssistantReplayOverflowCount', () => {
     expect(resolveEffectiveReplayThreshold(base, 2)).toBe(25_000);
     expect(resolveEffectiveReplayThreshold(base, 3)).toBe(12_500);
 
-    // Residual-brick regression (#520): with the flat-default base (100k) and a real
-    // model window of ~40k, the OLD fixed 0.5× stuck at 50k forever (> 40k -> 400s
-    // again, never recovers). The escalating cut drops BELOW 40k after enough
-    // consecutive overflows -> the history finally fits -> the chat un-bricks.
+    // With the flat-default base (100k) and a real model window of ~40k, a fixed
+    // 0.5× would stay at 50k forever. The escalating cut drops below 40k after
+    // enough consecutive overflows, so the history finally fits.
     const realWindow = 40_000;
-    // k=1 (50k) still exceeds the window — the old behavior's terminal state.
+    // k=1 (50k) still exceeds the window.
     expect(resolveEffectiveReplayThreshold(base, 1)).toBeGreaterThan(realWindow);
     // But escalation converges under the window within a couple more turns.
     const converged = [2, 3, 4, 5].some(
@@ -711,15 +708,15 @@ describe('rowToUiMessage', () => {
 
 /**
  * Unit tests for prepareAgentStep: the pure helper that decides per-step
- * overrides for the agent loop (#332 deferred tools, #444 final-step lockdown
- * toggle + step-budget warning). Parametrized by the two toggles so a change to
- * one path cannot silently mask a regression in the other.
+ * overrides (deferred tools, final-step lockdown toggle, step-budget warning).
+ * Parametrized by the two toggles so one path cannot mask a regression in the
+ * other.
  *
- * Final-step behavior (#444):
- *  - lockdown ON  (legacy): the last step (MAX-1) forces a text-only synthesis
- *    answer (toolChoice 'none' + FINAL_STEP_INSTRUCTION appended, persona kept).
- *  - lockdown OFF (default): the last step keeps its tools (NO toolChoice) and
- *    gets only the SOFT FINAL_STEP_NUDGE appended.
+ * Final step:
+ *  - lockdown ON: the last step (MAX-1) forces a text-only answer
+ *    (toolChoice 'none' + FINAL_STEP_INSTRUCTION appended, persona kept).
+ *  - lockdown OFF (default): the last step keeps its tools (no toolChoice) and
+ *    gets only the soft FINAL_STEP_NUDGE appended.
  */
 // Narrowing helpers for the prepareAgentStep union return type.
 const asLockdown = (r: ReturnType<typeof prepareAgentStep>) =>
@@ -894,12 +891,11 @@ describe('stepBudgetWarning boundaries', () => {
 });
 
 /**
- * flushAssistant (#183): the PURE row builder behind the step-granular durable
- * write path. It runs identically for the upfront insert (empty steps,
- * 'streaming'), every per-step update, and the terminal finalize — so a future
- * background worker can call the same function. These tests pin the four status
- * shapes and the `metadata.parts` shape that rowToUiMessage/findAllByChat depend on
- * (per-step text + tool parts via assistantParts, in-progress text appended).
+ * flushAssistant: the pure row builder behind the step-granular durable write
+ * path, used for the upfront insert (empty steps, 'streaming'), every per-step
+ * update and the terminal finalize. Pins the four status shapes and the
+ * `metadata.parts` shape that rowToUiMessage/findAllByChat depend on (per-step
+ * text + tool parts via assistantParts, in-progress text appended).
  */
 describe('flushAssistant', () => {
   type AnyPart = Record<string, unknown>;
@@ -1286,13 +1282,11 @@ describe('accumulateStepUsage', () => {
 });
 
 /**
- * Contract test for the #180 wiring in AiChatService.handle: the external MCP
- * toolset must be built BEFORE the system prompt, and its per-server guidance
- * threaded into buildSystemPrompt({ mcpInstructions }). The full streaming
- * handle() is not unit-testable, so this reproduces the exact prompt-build call
- * the service makes with a connected-server toolset and asserts the guidance is
- * present. The toolsFor->buildSystemPrompt ordering is additionally enforced at
- * compile time (the prompt input now consumes external.instructions).
+ * AiChatService.handle must build the external MCP toolset BEFORE the system
+ * prompt and thread its per-server guidance into
+ * buildSystemPrompt({ mcpInstructions }). handle() is not unit-testable, so this
+ * reproduces the exact prompt-build call with a connected-server toolset and
+ * asserts the guidance is present.
  */
 describe('AiChatService system prompt wiring (#180)', () => {
   const workspace = { name: 'Acme' } as unknown as Workspace;
@@ -1523,13 +1517,12 @@ describe('sameInstant', () => {
 });
 
 /**
- * Page-change lifecycle (#274): detectPageChange (turn start) + snapshotOpenPage
- * (turn end) exercised with in-memory fakes (Object.create — no Nest graph, no
- * DB). Covers detection happy path / no-change / first-turn-seed-only / fast
- * path, the snapshot seed + deleted-page skip, and — the key regression — the
- * abort/error branch: after an aborted turn where the AGENT edited the page, the
- * snapshot must advance so the next turn does NOT mis-report the agent's own edit
- * as a user edit.
+ * Page-change lifecycle: detectPageChange (turn start) + snapshotOpenPage (turn
+ * end) with in-memory fakes (Object.create — no Nest graph, no DB). Covers
+ * detection happy path / no-change / first-turn-seed-only / fast path, the
+ * snapshot seed + deleted-page skip, and the abort/error branch: after an aborted
+ * turn where the agent edited the page, the snapshot must advance so the next
+ * turn does not report the agent's own edit as a user edit.
  */
 describe('AiChatService page-change lifecycle (#274)', () => {
   const workspace = { id: 'ws-1' } as Workspace;
@@ -1832,15 +1825,11 @@ describe('isInterruptResume', () => {
 });
 
 /**
- * #184 phase 1.5 — the run-wrapped pipe options (unit). Drives stream() to the
+ * The run-wrapped pipe options (unit). Drives stream() to the
  * pipe call with streamText mocked, capturing the options object, and asserts:
- *  - flag OFF while a runId IS present -> the LEGACY option shape (no
- *    consumeSseStream, no generateMessageId), and the registry is never touched.
- *    This is the exact dormancy guarantee this PR rests on.
- *  - flag ON + runId -> consumeSseStream tees into the registry and
- *    generateMessageId returns the seeded assistant DB row id.
- *  - flag ON but no runHooks (runId undefined) -> legacy (the runId gate).
- *  - flag ON + runId -> the outer catch releases the entry via abortEntry.
+ *  - consumeSseStream tees into the registry and generateMessageId returns
+ *    the seeded assistant DB row id.
+ *  - the outer catch releases the entry via abortEntry.
  */
 describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -1881,7 +1870,7 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
   }
 
   // Wire only the deps reached on the way to the pipe call, plus a spy registry.
-  function makeService(opts: { resumable: boolean; history?: unknown[] }) {
+  function makeService(opts: { history?: unknown[] } = {}) {
     const aiChatRepo = {
       findById: jest.fn(async () => ({ id: 'chat-1', workspaceId: 'ws-1' })),
       insert: jest.fn(),
@@ -1925,7 +1914,6 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
         isAiChatDeferredToolsEnabled: () => false,
         isAiChatFinalStepLockdownEnabled: () => false,
         isAiChatViewImageEnabled: () => false,
-        isAiChatResumableStreamEnabled: () => opts.resumable,
       } as never,
       streamRegistry as never,
     );
@@ -1956,28 +1944,14 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
       sessionId: 's1',
       body: body as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       runHooks: hooks as never,
     });
   }
 
-  it('flag OFF + runId present: LEGACY option shape (no consumeSseStream / generateMessageId); registry untouched', async () => {
-    const { svc, streamRegistry } = makeService({ resumable: false });
-    await drive(svc, makeRunHooks());
-    expect(pipeMock).toHaveBeenCalledTimes(1);
-    const options = pipeMock.mock.calls[0][1];
-    // The dormancy guarantee: a live run with the flag off tees NOTHING and does
-    // not stamp a message id — byte-for-byte the pre-1.5 wire.
-    expect(options.consumeSseStream).toBeUndefined();
-    expect(options.generateMessageId).toBeUndefined();
-    expect(streamRegistry.bind).not.toHaveBeenCalled();
-    expect(streamRegistry.abortEntry).not.toHaveBeenCalled();
-  });
-
-  it('flag ON + runId: consumeSseStream tees into the registry; generateMessageId returns the seeded row id', async () => {
-    const { svc, streamRegistry } = makeService({ resumable: true });
+  it('runId: consumeSseStream tees into the registry; generateMessageId returns the seeded row id', async () => {
+    const { svc, streamRegistry } = makeService();
     await drive(svc, makeRunHooks());
     const options = pipeMock.mock.calls[0][1];
     expect(typeof options.consumeSseStream).toBe('function');
@@ -1995,17 +1969,8 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
     );
   });
 
-  it('flag ON but NO runHooks (runId undefined): pipe options stay legacy (the runId gate)', async () => {
-    const { svc, streamRegistry } = makeService({ resumable: true });
-    await drive(svc, undefined);
-    const options = pipeMock.mock.calls[0][1];
-    expect(options.consumeSseStream).toBeUndefined();
-    expect(options.generateMessageId).toBeUndefined();
-    expect(streamRegistry.bind).not.toHaveBeenCalled();
-  });
-
-  it('flag ON + runId: the outer catch calls abortEntry when the stream throws', async () => {
-    const { svc, streamRegistry } = makeService({ resumable: true });
+  it('runId: the outer catch calls abortEntry when the stream throws', async () => {
+    const { svc, streamRegistry } = makeService();
     streamTextMock.mockImplementation(() => {
       throw new Error('boom');
     });
@@ -2013,16 +1978,12 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
     expect(streamRegistry.abortEntry).toHaveBeenCalledWith('chat-1', 'run-1');
   });
 
-  // #489 REGRESSION (against the REAL convertToModelMessages — not mocked here):
-  // a persisted history row whose parts contain a `null` element makes the real
-  // convertToModelMessages THROW ("Cannot read properties of null"). Pre-fix that
-  // 500-ed every turn forever and each retry appended a duplicate user row. The
-  // fix converts BEFORE the insert and isolates the poisoned row per-row, degrading
-  // it to text with a "[tool context omitted]" marker. Assert the turn still runs,
-  // the marker reaches the model, and exactly ONE user row is inserted.
+  // Against the REAL convertToModelMessages: a history row whose parts contain a
+  // `null` element makes it throw. The turn must still run, the poisoned row is
+  // degraded to text with a "[tool context omitted]" marker that reaches the
+  // model, and exactly ONE user row is inserted.
   it('#489: a poisoned OLD-history row keeps the chat working; the marker reaches the model; one user insert', async () => {
     const { svc, aiChatMessageRepo } = makeService({
-      resumable: false,
       history: [
         {
           id: 'old-1',
@@ -2055,7 +2016,7 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
   // exact "bricking" payload) are dropped ON RECEIPT — never persisted — so they
   // can never poison future turns. Only the text survives into metadata.parts.
   it('#489: a non-text client part is stripped before persist (only text survives)', async () => {
-    const { svc, aiChatMessageRepo } = makeService({ resumable: false });
+    const { svc, aiChatMessageRepo } = makeService();
     await svc.stream({
       user: { id: 'u1' } as never,
       workspace: { id: 'ws-1' } as never,
@@ -2080,7 +2041,6 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
         ],
       } as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       runHooks: makeRunHooks() as never,
@@ -2095,22 +2055,17 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
 });
 
 /**
- * #444 — the token-degeneration SAFETY REACTION path (integration).
+ * The token-degeneration reaction path. output-degeneration.spec.ts proves the
+ * detector detects; this proves the reaction: a degenerate stream must (1) trip
+ * the detector in onChunk, (2) abort the turn via the internal degeneration
+ * controller (distinct from a user Stop), (3) truncate the runaway tail before
+ * persist in onAbort, (4) persist status 'error' with OUTPUT_DEGENERATION_ERROR,
+ * and (5) still release the leased external MCP clients.
  *
- * output-degeneration.spec.ts proves the detector DETECTS; this proves the wired
- * REACTION: a degenerate stream must (1) trip the detector in onChunk, (2) abort
- * the turn via the INTERNAL degeneration controller (distinct from a user Stop),
- * (3) truncate the runaway tail before persist in onAbort, (4) persist status
- * 'error' with the OUTPUT_DEGENERATION_ERROR message (not a bare 'aborted' and not
- * a swept 'streaming'), and (5) still release the leased external MCP clients.
- *
- * Harness: streamText is the SAME jest.fn mocked at the top of this file. Unlike
- * the pipe-options suite above (which only inspects the pipe call), this mock
- * CAPTURES the streamText options (onChunk/onAbort/onFinish + abortSignal) so the
- * test can drive the callbacks exactly as the AI SDK would — feeding degenerate
- * text-delta chunks through onChunk until the service's own AbortController fires,
- * then invoking onAbort (which the SDK does on an aborted signal). No new mocking
- * style is invented; it reuses the makeRes / service-construction shape above.
+ * The streamText mock captures its options (onChunk/onAbort/onFinish +
+ * abortSignal) so the test drives the callbacks as the AI SDK would: degenerate
+ * text-delta chunks through onChunk until the service's AbortController fires,
+ * then onAbort.
  */
 describe('AiChatService.stream — token-degeneration reaction (#444)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -2221,7 +2176,6 @@ describe('AiChatService.stream — token-degeneration reaction (#444)', () => {
         // lockdown OFF => the degeneration detector is the anti-babble guard.
         isAiChatFinalStepLockdownEnabled: () => false,
         isAiChatViewImageEnabled: () => false,
-        isAiChatResumableStreamEnabled: () => false,
       } as never,
       streamRegistry as never,
     );
@@ -2262,10 +2216,15 @@ describe('AiChatService.stream — token-degeneration reaction (#444)', () => {
       sessionId: 's1',
       body: body as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
-      runHooks: undefined as never,
+      // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+      runHooks: {
+        begin: async () => ({
+          runId: 'run-1',
+          signal: new AbortController().signal,
+        }),
+      },
     });
   }
 
@@ -2275,7 +2234,7 @@ describe('AiChatService.stream — token-degeneration reaction (#444)', () => {
     await drive(svc);
 
     const opts = cap.opts();
-    // The turn's abort signal is the UNION of the socket/run signal and the
+    // The turn's abort signal is the UNION of the run signal and the
     // internal degeneration controller — untripped before any output.
     expect(opts.abortSignal.aborted).toBe(false);
 

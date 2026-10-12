@@ -3,8 +3,7 @@
  *
  * Importing this module for its SIDE EFFECT installs a jsdom-backed
  * {@link HtmlDocumentParser}. It is loaded by the package's default entry
- * (`index.ts`) so every existing Node consumer (server, mcp, git-sync) keeps
- * the identical jsdom behaviour with no code change. This is the ONLY module in
+ * (`index.ts`) for every Node consumer (server, mcp, git-sync). This is the ONLY module in
  * the import chain that imports `jsdom`; the browser entry never loads it, so
  * `jsdom` cannot reach the client bundle.
  */

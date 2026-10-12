@@ -1,4 +1,4 @@
-// Mock-HTTP tests for DocmostClient.getPageContext — the #443 "where am I /
+// Mock-HTTP tests for DocmostClient.getPageContext — the "where am I /
 // what's around" read tool. A local http.createServer stands in for Docmost
 // (same harness style as pagination-cursor.test.mjs) so everything is
 // deterministic and offline.
@@ -268,8 +268,8 @@ test("getPageContext: a slugId input is resolved via /pages/info", async () => {
 });
 
 // -----------------------------------------------------------------------------
-// 4) >20 children: cursor pagination returns ALL of them, no dupes (regression
-//    on the #442 bug class — getPageContext must not re-introduce a cap).
+// 4) >20 children: cursor pagination returns ALL of them, no dupes
+//    (getPageContext must not cap children).
 // -----------------------------------------------------------------------------
 test("getPageContext: a page with >20 children returns ALL of them (no cap, no dupes)", async () => {
   // 45 children spread over three cursor pages.

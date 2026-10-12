@@ -1,12 +1,11 @@
 import { parseToolAllowlist, blankToNull } from './ai-mcp-server.repo';
 
 /**
- * The `tool_allowlist` jsonb column historically round-trips as a JSON STRING
- * (rows written by the old double-encoding `jsonbArray`), so the driver hands
- * back `'["a","b"]'` instead of an array. `parseToolAllowlist` normalizes both
- * shapes to the `string[] | null` the entity type promises — fixing the settings
- * UI crash (TagsInput `.map` on a string) and the tool-allowlist enforcement
- * (which did `Array.isArray(allow)` and silently allowed ALL tools for a string).
+ * The `tool_allowlist` jsonb column can round-trip as a JSON STRING
+ * (double-encoded rows), so the driver hands back `'["a","b"]'` instead of an
+ * array. `parseToolAllowlist` normalizes both shapes to the `string[] | null`
+ * the entity type promises, which the settings UI (TagsInput `.map`) and the
+ * allowlist enforcement (`Array.isArray`) rely on.
  */
 describe('parseToolAllowlist', () => {
   it('passes a real string array through unchanged', () => {

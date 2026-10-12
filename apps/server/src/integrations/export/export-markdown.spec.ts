@@ -12,15 +12,14 @@ import { ExportService } from './export.service';
 import { ExportFormat } from './dto/export-dto';
 
 /**
- * STEP 1 golden test for issue #345: server MARKDOWN export runs DIRECTLY through
- * the canonical converter (`convertProseMirrorToMarkdown`) — no HTML intermediate
- * and no `@docmost/editor-ext` markdown layer — so the emitted markdown is in the
+ * Golden test: server MARKDOWN export runs DIRECTLY through the canonical
+ * converter (`convertProseMirrorToMarkdown`) — no HTML intermediate and no
+ * `@docmost/editor-ext` markdown layer — so the emitted markdown is in the
  * canonical package forms and is byte-identical to the git-sync vault body.
  *
- * These are the goldens the swap has to satisfy: they assert the CANONICAL
- * surface (callout `> [!type]`, inline footnote `^[…]`, lossless image
- * `<!--img …-->`) rather than the old editor-ext forms (`:::type`, `[^id]`,
- * lossy `![alt](src)`).
+ * The goldens assert the CANONICAL surface (callout `> [!type]`, inline
+ * footnote `^[…]`, lossless image `<!--img …-->`), not the editor-ext forms
+ * (`:::type`, `[^id]`, lossy `![alt](src)`).
  *
  * `exportPage(..., singlePage=false)` takes no DB path (no mention rewriting), so
  * the service is constructed with null collaborators and only the pure

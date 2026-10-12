@@ -6,7 +6,7 @@
  * reports WHERE each match is — the container's ref (for getNode/patchNode;
  * see the SearchMatch.nodeId note for the `#<index>` caveat), the top-level
  * block index, and a short context window around the hit. It never touches the
- * network, the DB, or the schema mirror; like `comment-anchor.ts` it is
+ * network, the DB, or the ProseMirror schema; like `comment-anchor.ts` it is
  * isolated-testable.
  *
  * REGEX ENGINE: with `regex:true` the pattern is compiled with RE2 (Google's
@@ -97,13 +97,12 @@ export interface SearchMatch {
   /** ~40 chars of context immediately after the match (from THIS container). */
   after: string;
   /**
-   * LITERAL mode only (#659): present and `true` IFF the invisible-fold actually
+   * LITERAL mode only: present and `true` IFF the invisible-fold actually
    * changed the matched DOCUMENT fragment — i.e. `match` (the original substring)
    * contains removed/collapsed invisibles (soft hyphen, NBSP, zero-width chars,
    * a whitespace run) so it differs from its folded form. Independent of case:
    * a hit that differs from the query only by letter case does NOT get `folded`.
-   * Omitted on plain matches (byte-identical to pre-#659 output) and in regex
-   * mode (which never folds).
+   * Omitted on plain matches and in regex mode (which never folds).
    */
   folded?: boolean;
 }
@@ -123,10 +122,10 @@ const MAX_LIMIT = 200;
 const CONTEXT = 40;
 
 // Cheap sanity cap on the query/pattern length. ReDoS is handled structurally
-// by the RE2 engine (linear-time, no backtracking — see the module doc), so we
-// no longer truncate the per-container text: RE2 scans it in linear time and a
-// cap could silently drop real matches past it. This just rejects an absurdly
-// long pattern early with a clear error.
+// by the RE2 engine (linear-time, no backtracking — see the module doc), so the
+// per-container text is not truncated: RE2 scans it in linear time and a cap
+// could silently drop real matches past it. This just rejects an absurdly long
+// pattern early with a clear error.
 const MAX_PATTERN_LENGTH = 1000;
 
 /** Clamp the requested limit into [1, MAX_LIMIT], defaulting when absent. */
@@ -146,7 +145,7 @@ function resolveLimit(limit: number | undefined): number {
  * and lastIndex is advanced, so a pattern that can match the empty string cannot
  * flood the results or spin forever.
  *
- * LITERAL engine (#659): folds invisibles on BOTH sides so a needle matches
+ * LITERAL engine: folds invisibles on BOTH sides so a needle matches
  * across soft hyphens, NBSP, zero-width chars and collapsed whitespace runs —
  * exactly like editPageText's fold tier (json-edit.ts). It folds `text` into
  * `{ folded, map }` (via the shared `foldInvisibles` canon), searches the FOLDED

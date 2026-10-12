@@ -8,8 +8,8 @@ import { Italic } from "@tiptap/extension-italic";
 import { MarkdownClipboard } from "./markdown-clipboard";
 
 /**
- * Integration coverage for the async `handlePaste` seam (issue #347). The paste
- * conversion moved to `@docmost/prosemirror-markdown`'s browser entry, whose
+ * Integration coverage for the async `handlePaste` seam. The paste
+ * conversion uses `@docmost/prosemirror-markdown`'s browser entry, whose
  * `markdownToProseMirror` is async — so `handlePaste` captures the range, claims
  * the event (returns true), and dispatches the insert on the next microtask.
  * These tests drive that path end to end on a minimal schema (a plain-markdown
@@ -139,8 +139,7 @@ describe("MarkdownClipboard handlePaste — doc-changed-mid-flight guard", () =>
     // is parked at the doc END. The captured {1,5} is now stale and points INTO
     // "MARKER". A WORKING guard replaces at the live (end) selection → MARKER is
     // untouched. A BROKEN guard replaces the stale {1,5} → it erases the first
-    // characters of MARKER (this is what a zero-width `from==to` range could never
-    // reveal, which is why the earlier version was vacuous).
+    // characters of MARKER (a zero-width `from==to` range could never reveal this).
     const editor = makeEditor();
     seedContent(editor, "AAAABBBB");
     editor.commands.setTextSelection({ from: 1, to: 5 }); // captured range = {1,5}
@@ -170,7 +169,7 @@ describe("MarkdownClipboard handlePaste — doc-changed-mid-flight guard", () =>
     // selection → "raw heading" lands. A BROKEN guard does insertText(md, 1, 9) on
     // a size-2 doc → RangeError, so the dispatch never runs and "raw heading" is
     // absent (the assertion reddens). A zero-width/growing-doc setup could never
-    // push `to` out of bounds, which is why the earlier version was vacuous.
+    // push `to` out of bounds.
     const editor = makeEditor();
     seedContent(editor, "AAAABBBB");
     editor.commands.setTextSelection({ from: 1, to: 9 }); // captured range = {1,9}

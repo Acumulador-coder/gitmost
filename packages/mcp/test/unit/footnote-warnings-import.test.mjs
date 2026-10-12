@@ -7,7 +7,7 @@ import {
   parseDocmostMarkdown,
 } from "../../build/lib/markdown-document.js";
 
-// Pins the footnoteWarnings PLUMBING contract (#169 review; reduced in #414): the
+// Pins the footnoteWarnings plumbing contract: the
 // field is present only when legacy reference-style `[^id]:` syntax is used and
 // omitted otherwise, AND `importPageMarkdown` analyzes the BODY (after the
 // docmost:meta / docmost:comments blocks) — so a footnote-like token inside those

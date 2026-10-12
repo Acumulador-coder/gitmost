@@ -23,7 +23,7 @@ import {
 } from './db';
 
 /**
- * #492 append-persist — the REAL onStep WRITE path (F2) and the model-REPLAY
+ * Append-persist — the REAL onStep WRITE path (F2) and the model-REPLAY
  * hydration path (F1), driven through `AiChatService.stream` against a LIVE
  * Postgres with a REAL `AiChatRunStepRepo` INJECTED. The existing append-persist
  * int-specs hand-roll the insert+marker cycle via the repos directly and build
@@ -230,7 +230,13 @@ describe('#492 append-persist service paths [integration]', () => {
         sessionId: 'sess-1',
         body: opts.body,
         res: { raw: res } as any,
-        signal: new AbortController().signal,
+        // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+        runHooks: {
+          begin: async () => ({
+            runId: 'run-1',
+            signal: new AbortController().signal,
+          }),
+        },
         model: opts.model as any,
         role: null,
       } as any);

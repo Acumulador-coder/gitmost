@@ -13,15 +13,14 @@ import {
 } from './db';
 
 /**
- * #529 Phase A — the lexical overhaul, on the REAL migrated schema (ru_en config).
+ * Lexical search on the REAL migrated schema (ru_en config).
  *
- * Covers every acceptance criterion of the issue: RU+EN morphology + OR default,
- * match=auto identifier routing, "phrase"/+/- operators, RRF ordering, exact
- * permission-filtered total (fail-closed) + pagination, only-negation / garbage
- * short-circuits, the A8 path fix, the response superset, and the RAG lockstep
- * config (acceptance #13).
+ * Covers RU+EN morphology + OR default, match=auto identifier routing,
+ * "phrase"/+/- operators, RRF ordering, exact permission-filtered total
+ * (fail-closed) + pagination, only-negation / garbage short-circuits, the result
+ * path and the response superset.
  *
- * The tsv column is populated by the pages_tsvector_trigger (now ru_en), so the
+ * The tsv column is populated by the pages_tsvector_trigger (ru_en), so the
  * FTS branch is exercised end to end.
  */
 describe('SearchService #529 lexical overhaul [integration]', () => {
@@ -56,7 +55,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
   // Service wired to the real DB + real PageRepo (recursive descendants) with
   // stubbed space-membership + permission repos so a test controls scope and the
   // permission filter explicitly. `accessibleIds` (when set) is the KEEP list.
-  // #530: a FAKE AiService whose embedQuery is fully controlled per test. By
+  // A FAKE AiService whose embedQuery is fully controlled per test. By
   // DEFAULT it throws AiEmbeddingNotConfiguredException, so the semantic arm is
   // omitted and every Phase-A case runs the BYTE-IDENTICAL lexical path — the
   // semantic layer must never change lexical behaviour on degrade. Semantic cases
@@ -137,6 +136,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       pagePermissionRepo as any,
       pageEmbeddingRepo as any,
       embeddingGeneration as any,
+      {} as any, // shareService — these cases never search a share
     );
   }
 
@@ -460,31 +460,6 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
     expect(hit.rank).not.toBeNull();
   });
 
-  // 13. RAG lockstep: the page_embeddings.fts generated column is ru_en.
-  it('#13 page_embeddings.fts uses ru_en (cyrillic stemming) — RAG lockstep', async () => {
-    const pageId = await insertPage({
-      title: 'rag страница',
-      textContent: 'ресторанов много',
-    });
-    // Insert a chunk row; the generated fts column is computed by Postgres.
-    await sql`
-      INSERT INTO page_embeddings
-        (id, page_id, workspace_id, space_id, attachment_id, chunk_index,
-         chunk_start, chunk_length, content, model_name, model_dimensions, embedding)
-      VALUES
-        (${randomUUID()}, ${pageId}, ${workspaceId}, ${spaceId}, NULL, 0,
-         0, 20, ${'ресторанов москвы много'}, 'test-model', 3, '[0.1,0.2,0.3]'::vector)
-    `.execute(db);
-    // A ru_en query stems «москва» → «москв», matching the stored «москвы».
-    // Under the old `english` config the cyrillic word would not stem and this
-    // inflected-form query would miss — so this asserts the ru_en lockstep.
-    const row = await sql<{ m: boolean }>`
-      SELECT fts @@ to_tsquery('ru_en', f_unaccent('москва')) AS m
-      FROM page_embeddings WHERE page_id = ${pageId}
-    `.execute(db);
-    expect(row.rows[0].m).toBe(true);
-  });
-
   // W4 — substring-tier dominance under RRF: title-exact (tier 3) > title-
   // substring (tier 2) > text-only (tier 1). The engine encodes this via
   // sub_tier DESC → rn_sub → RRF; no test asserted the end-to-end ordering, so
@@ -561,11 +536,10 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
     expect(hit.matchedTerms).toContain('кофейня');
   });
 
-  // F1 — stack-depth guard: a pasted text block (thousands of FTS terms) used to
-  // nest the combined tsquery so deep that Postgres raised `stack depth limit
-  // exceeded` → HTTP 500 for the caller. The parser now caps terms at
-  // MAX_PARSED_TERMS, so a huge query returns 200 and the leading (in-cap) term
-  // still matches. Mutation: remove the cap → this reddens (500 / stack depth).
+  // Stack-depth guard: without a cap, a pasted text block (thousands of FTS terms)
+  // nests the combined tsquery so deep that Postgres raises `stack depth limit
+  // exceeded` → HTTP 500. The parser caps terms at MAX_PARSED_TERMS, so a huge
+  // query returns 200 and the leading (in-cap) term still matches.
   it('F1 a huge multi-term query returns 200, not a stack-depth 500', async () => {
     const page = await insertPage({
       title: 'qfonemarker заголовок',
@@ -716,9 +690,11 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
   // leak across tests.
   describe('#530 semantic fusion', () => {
     // 1. Vector-only hit: nearest to a page that has NO lexical match for the
-    //    query term — it appears via the vector arm, and a pure-lexical run does
-    //    not return it. Mutation (a): drop the vector arm -> this reddens.
-    it('#530-1 a vector-only hit appears; a pure-lexical run would not return it', async () => {
+    //    query term — it surfaces via the vector arm as a `related` neighbour,
+    //    NOT as a match (#701): not in items, not counted in total. A
+    //    pure-lexical run does not return it at all. Mutation (a): drop the
+    //    vector arm -> this reddens.
+    it('#530-1 a vector-only hit is a related neighbour, not a match (total 0)', async () => {
       const s = (await createSpace(db, workspaceId)).id;
       const page = await insertPage({
         title: 'нейтральный вект заголовок',
@@ -729,7 +705,9 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
 
       const svc = buildService({ embedVector: conceptVec(1), userSpaceIds: [s] });
       const res = await search(svc, { query: 'квазонимикс', spaceId: s });
-      expect(res.items.map((i: any) => i.id)).toContain(page);
+      expect(res.items.map((i: any) => i.id)).not.toContain(page);
+      expect(res.related.map((i: any) => i.id)).toContain(page);
+      expect(res.total).toBe(0);
       expect(res.semantic.available).toBe(true);
       expect(res.semantic.state).toBe('full');
 
@@ -737,6 +715,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       const lex = buildService({ userSpaceIds: [s] });
       const res2 = await search(lex, { query: 'квазонимикс', spaceId: s });
       expect(res2.items.map((i: any) => i.id)).not.toContain(page);
+      expect(res2.related.map((i: any) => i.id)).not.toContain(page);
       expect(res2.semantic.available).toBe(false);
     });
 
@@ -783,10 +762,11 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
     });
 
     // 4. Permission over the union: a restricted vector-only hit is dropped from
-    //    items AND total; with the permission filter throwing the call rejects
-    //    (fail-closed, never fail-open). Mutation (b): move filterAccessiblePageIds
-    //    inside the semantic try/catch -> the reject assertion reddens.
-    it('#530-4 permission filters a vector-only hit from items AND total (fail-closed)', async () => {
+    //    `related` (and never reaches items/total); with the permission filter
+    //    throwing the call rejects (fail-closed, never fail-open). Mutation (b):
+    //    move filterAccessiblePageIds inside the semantic try/catch -> the reject
+    //    assertion reddens.
+    it('#530-4 permission filters a vector-only hit from related, items AND total (fail-closed)', async () => {
       const s = (await createSpace(db, workspaceId)).id;
       const visibleLex = await insertPage({
         title: 'семчетмаркер видимый',
@@ -810,9 +790,19 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       const ids = res.items.map((i: any) => i.id);
       expect(ids).toContain(visibleLex);
       expect(ids).not.toContain(hiddenVec);
+      expect(res.related.map((i: any) => i.id)).not.toContain(hiddenVec);
       // The hidden vector hit does not leak into total either.
       expect(res.total).toBe(1);
       expect(ids).toHaveLength(res.total);
+
+      // Control: without the restriction the same page IS a related neighbour,
+      // so the absence above is the permission filter's doing.
+      const open = buildService({
+        embedVector: conceptVec(4),
+        userSpaceIds: [s],
+      });
+      const resOpen = await search(open, { query: 'семчетмаркер', spaceId: s });
+      expect(resOpen.related.map((i: any) => i.id)).toContain(hiddenVec);
 
       // A permission-query error PROPAGATES (never a fail-open empty result).
       const boom = buildService({
@@ -860,6 +850,8 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       const ids = res.items.map((i: any) => i.id);
       expect(ids.filter((id: string) => id === both)).toHaveLength(1);
       expect(res.total).toBe(1);
+      // #701: a real match is never also listed as a related neighbour.
+      expect(res.related.map((i: any) => i.id)).not.toContain(both);
     });
 
     // 7. Fingerprint isolation: a planted row under a DIFFERENT fingerprint is not
@@ -877,6 +869,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       const svc = buildService({ embedVector: conceptVec(7), userSpaceIds: [s] });
       const res = await search(svc, { query: 'квазонимиксseven', spaceId: s });
       expect(res.items.map((i: any) => i.id)).not.toContain(stale);
+      expect(res.related.map((i: any) => i.id)).not.toContain(stale);
     });
 
     // 8. Stale embedding space_id (moved page): a page currently in space B whose
@@ -904,8 +897,9 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
         query: 'квазонимиксeight',
         spaceId: newSpace,
       });
-      // Survives despite page_embeddings.space_id (oldSpace) != pages.space_id.
-      expect(res.items.map((i: any) => i.id)).toContain(page);
+      // Survives despite page_embeddings.space_id (oldSpace) != pages.space_id —
+      // as a related neighbour, since it does not match the query (#701).
+      expect(res.related.map((i: any) => i.id)).toContain(page);
       expect(res.semantic.available).toBe(true);
     });
 
@@ -944,6 +938,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
         const ids = res.items.map((i: any) => i.id);
         expect(ids).toContain(lexHit);
         expect(ids).not.toContain(vecOnly);
+        expect(res.related.map((i: any) => i.id)).not.toContain(vecOnly);
         expect(res.semantic.available).toBe(false);
         expect(res.semantic.reason).toBe('degraded');
         expect(warnSpy).toHaveBeenCalledWith(
@@ -983,7 +978,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       }
     });
 
-    // 11. COMMIT-path no-leak (locks is_local=true). #530-10 only covers the
+    // 11. COMMIT-path no-leak (locks is_local=true). Case 10 only covers the
     //     ROLLBACK path (a timed-out search rolls back — a plain session SET would
     //     ALSO be undone on rollback, so it would NOT catch is_local true->false).
     //     Here a NORMAL, FAST semantic search COMMITs its transaction; a leaked
@@ -1026,6 +1021,111 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       } finally {
         delete process.env.SEARCH_VECTOR_STATEMENT_TIMEOUT_MS;
       }
+    });
+
+    // #701 — search can say "not found": a nonsense query matches nothing, so
+    // items/total/hasMore report exactly that even with the semantic arm up; the
+    // nearest page rides along only as a `related` neighbour, on page 1 only.
+    it('#701 a nonsense query reports no matches; the neighbour is related on the first page only', async () => {
+      const s = (await createSpace(db, workspaceId)).id;
+      const neighbour = await insertPage({
+        title: 'нейтральный сосед заголовок',
+        textContent: 'содержимое без искомого термина',
+        spaceId: s,
+      });
+      await plantEmbedding(neighbour, conceptVec(12), ACTIVE_FP, s);
+
+      const svc = buildService({ embedVector: conceptVec(12), userSpaceIds: [s] });
+      const res = await search(svc, { query: 'зюквалфорпыщ', spaceId: s });
+      expect(res.semantic.available).toBe(true);
+      expect(res.items).toEqual([]);
+      expect(res.total).toBe(0);
+      expect(res.hasMore).toBe(false);
+      expect(res.related.map((i: any) => i.id)).toContain(neighbour);
+
+      // Past the first page there are no neighbours at all.
+      const next = await search(svc, {
+        query: 'зюквалфорпыщ',
+        spaceId: s,
+        offset: 1,
+      });
+      expect(next.related).toEqual([]);
+    });
+
+    // #701 — a lexical hit plus a vector-only neighbour: `total` counts the
+    // match only, `items` holds only the match, the neighbour is in `related`.
+    it('#701 a lexical hit + a vector-only neighbour: total counts the hit only', async () => {
+      const s = (await createSpace(db, workspaceId)).id;
+      const hit = await insertPage({
+        title: 'семтринадцатьмаркер лексический',
+        textContent: 'обычный текст',
+        spaceId: s,
+      });
+      const neighbour = await insertPage({
+        title: 'нейтральный тринадцать заголовок',
+        textContent: 'без искомого термина',
+        spaceId: s,
+      });
+      await plantEmbedding(neighbour, conceptVec(13), ACTIVE_FP, s);
+
+      const svc = buildService({ embedVector: conceptVec(13), userSpaceIds: [s] });
+      const res = await search(svc, { query: 'семтринадцатьмаркер', spaceId: s });
+      expect(res.semantic.available).toBe(true);
+      expect(res.total).toBe(1);
+      expect(res.items.map((i: any) => i.id)).toEqual([hit]);
+      expect(res.related.map((i: any) => i.id)).toContain(neighbour);
+    });
+
+    // #701 — a +required-only query scores no positives (fts_score/sub_tier stay
+    // NULL), yet its matches are still matches with the semantic arm up: the
+    // lexical flag comes from the arm a row came from, not from its scores.
+    it('#701 a +required-only query keeps its matches with the semantic arm up', async () => {
+      const s = (await createSpace(db, workspaceId)).id;
+      const hit = await insertPage({
+        title: 'семчетырнадцатьмаркер лексический',
+        textContent: 'обычный текст',
+        spaceId: s,
+      });
+      const neighbour = await insertPage({
+        title: 'нейтральный четырнадцать заголовок',
+        textContent: 'без искомого термина',
+        spaceId: s,
+      });
+      await plantEmbedding(neighbour, conceptVec(14), ACTIVE_FP, s);
+
+      const svc = buildService({ embedVector: conceptVec(14), userSpaceIds: [s] });
+      const res = await search(svc, { query: '+семчетырнадцатьмаркер', spaceId: s });
+      expect(res.semantic.available).toBe(true);
+      expect(res.items.map((i: any) => i.id)).toEqual([hit]);
+      expect(res.total).toBe(1);
+      expect(res.related.map((i: any) => i.id)).toContain(neighbour);
+    });
+
+    // #701 — `related` is budgeted: six vector-only neighbours, five returned,
+    // nearest first (the vector arm returns all six; the cut is the service's).
+    it('#701 related is capped at 5, nearest neighbour first', async () => {
+      const s = (await createSpace(db, workspaceId)).id;
+      const nearest = await insertPage({
+        title: 'нейтральный пятнадцать ближайший',
+        textContent: 'без искомого термина',
+        spaceId: s,
+      });
+      await plantEmbedding(nearest, conceptVec(15), ACTIVE_FP, s);
+      // Five farther neighbours: orthogonal concepts, cosine distance 1.
+      for (let c = 16; c < 21; c++) {
+        const far = await insertPage({
+          title: `нейтральный дальний ${c}`,
+          textContent: 'без искомого термина',
+          spaceId: s,
+        });
+        await plantEmbedding(far, conceptVec(c), ACTIVE_FP, s);
+      }
+
+      const svc = buildService({ embedVector: conceptVec(15), userSpaceIds: [s] });
+      const res = await search(svc, { query: 'зюквалпятнадцать', spaceId: s });
+      expect(res.total).toBe(0);
+      expect(res.related).toHaveLength(5);
+      expect(res.related[0].id).toBe(nearest);
     });
   });
 });

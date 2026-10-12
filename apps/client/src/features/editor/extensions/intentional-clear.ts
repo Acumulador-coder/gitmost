@@ -34,9 +34,9 @@ function isEmptyParagraphDoc(doc: PMNode): boolean {
 }
 
 /**
- * #251 — intentional-clear signal.
+ * Intentional-clear signal.
  *
- * The server's #248 store-side empty-guard unconditionally refuses to overwrite
+ * The server's store-side empty-guard unconditionally refuses to overwrite
  * non-empty persisted content with an empty document, because a momentarily
  * empty live Y.Doc (a glitch, a bad merge, an emptying transclusion) is
  * indistinguishable from a real clear *at the store layer*. That protection is

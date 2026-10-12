@@ -13,17 +13,17 @@ vi.mock("@/main.tsx", async () => {
 
 import { mainExtensions } from "./extensions";
 
-// #515 — the Yjs KEY invariant of the inline `code` mark, pinned on the schema the
+// The Yjs KEY invariant of the inline `code` mark, pinned on the schema the
 // CLIENT ACTUALLY WRITES WITH.
 //
-// `packages/prosemirror-markdown/test/schema-code-excludes-parity.test.ts` already
-// pins this property on the canonical `Code` mark (`@docmost/editor-ext`) and on the
-// vendored markdown mirror — but NEITHER of those is the schema that reaches Yjs.
+// The canonical `Code` mark (`@docmost/editor-ext`) is what `documentExtensions` —
+// the server schema and the markdown converter — uses, but that is not the schema
+// the client writes Yjs with.
 // The editor persists through `mainExtensions`, which RE-EXTENDS the shared mark
 // (`Code.configure({...}).extend({ addInputRules, addKeyboardShortcuts })`), and
 // `extend()` can override `excludes` just as easily as it adds an input rule. An
 // `excludes: ""` slipped back into THAT object would restore the hashed Yjs key on
-// every keystroke while every existing parity test stayed green. This spec is the
+// every keystroke while every other test stayed green. This spec is the
 // assertion that reds instead.
 //
 // y-prosemirror picks the Yjs text-attribute key with exactly this predicate

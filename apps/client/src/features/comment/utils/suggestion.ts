@@ -47,7 +47,7 @@ function pushSegment(segments: Segment[], text: string, changed: boolean): void 
 // Compute an intraline diff between the old `selection` and the new
 // `suggestedText` of a suggestion. PURE — no React, no DOM, no I/O.
 //
-// Hybrid word + char algorithm (per #331):
+// Hybrid word + char algorithm:
 //   1. `diffWordsWithSpace` yields word-granular parts [{value, added, removed}].
 //   2. An ADJACENT removed+added pair (a word replacement) is refined with
 //      `diffChars`: shared characters stay common, differing characters are

@@ -2,7 +2,7 @@
  * Deterministic server-side NORMALIZATION + MERGE of footnote DEFINITIONS
  * (MCP, PURE).
  *
- * Problem (#419): footnotes with the same meaning but different GLYPHS —
+ * Problem: footnotes with the same meaning but different GLYPHS —
  * typographic quotes («…»/“…”) vs ASCII "…", em/en-dash vs `-`, non-breaking
  * space vs normal space, differing space counts — are not recognized as equal
  * and "fork": two definitions appear where the author meant one. The existing
@@ -175,13 +175,13 @@ function stableAttrs(attrs: any): string {
  * different `href` (footnotes are usually citations/links), also `code` /
  * `highlight` with differing attrs — collapse to the SAME key and get merged;
  * one definition then loses its references and the canonicalizer deletes it as an
- * orphan, silently dropping a distinct link target (data loss, #419).
+ * orphan, silently dropping a distinct link target (data loss).
  *
  * This key folds each mark's `attrs` (stable, sorted-key serialization) into the
  * signature, so different-href / different-attr notes stay separate. We do NOT
  * change `footnoteContentKey` itself: it is shared with the live
  * `insertInlineFootnote` / `commentsToFootnotes` dedup and altering it there
- * would change their behaviour — out of scope here.
+ * would change their behaviour.
  *
  * The TEXT portion mirrors `footnoteContentKey` exactly (per text node
  * `text + mark-signature`, concatenated, whitespace-collapsed, trimmed) over the

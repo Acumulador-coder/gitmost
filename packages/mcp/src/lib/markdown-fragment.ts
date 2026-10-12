@@ -1,6 +1,6 @@
 /**
- * Single-BLOCK markdown fragment support for `patch_node` / `insert_node`
- * (#413). These tools accept EITHER a raw ProseMirror `node` (fine attr/mark
+ * Single-BLOCK markdown fragment support for `patch_node` / `insert_node`.
+ * These tools accept EITHER a raw ProseMirror `node` (fine attr/mark
  * work) OR a `markdown` string (the recommended default): a small markdown
  * fragment is run through the canonical importer, yielding the SAME topology a
  * full-page markdown import would — so a block written via markdown is

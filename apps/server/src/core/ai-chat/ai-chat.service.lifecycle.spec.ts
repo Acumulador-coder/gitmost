@@ -65,15 +65,13 @@ describe('AiChatService.onModuleInit (startup sweep)', () => {
 });
 
 /**
- * #184 CRITICAL run-lifecycle safety net (review fix). A transient failure
- * AFTER a successful beginRun but BEFORE streamText's terminal callbacks own the
- * lifecycle must STILL settle the run — otherwise the run row is stuck 'running'
- * forever (sweepRunning only runs at startup) and the partial unique index + the
- * controller pre-check 409 every future turn in that chat until a restart. Here
- * we model the very first bare await after beginRun (the user-message insert)
- * throwing, wiring the run hooks to a REAL AiChatRunService (mock repo) exactly
- * as the controller does, and assert the run is settled to 'error' and its
- * in-memory entry dropped (so a follow-up turn would NOT be 409'd).
+ * Run-lifecycle safety net. A transient failure AFTER a successful beginRun but
+ * BEFORE streamText's terminal callbacks own the lifecycle must still settle the
+ * run, otherwise the run row stays 'running' (sweepRunning only runs at startup)
+ * and every later turn in that chat 409s. Models the first await after beginRun
+ * (the user-message insert) throwing, with the run hooks wired to a real
+ * AiChatRunService (mock repo) as the controller does, and asserts the run is
+ * settled to 'error' and its in-memory entry dropped.
  */
 describe('AiChatService.stream run-lifecycle safety net (#184)', () => {
   const user = { id: 'u1' } as User;
@@ -150,7 +148,6 @@ describe('AiChatService.stream run-lifecycle safety net (#184)', () => {
           ],
         },
         res: {} as never,
-        signal: new AbortController().signal,
         model: {} as never,
         role: null,
         runHooks,

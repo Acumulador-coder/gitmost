@@ -2,15 +2,15 @@
  * Error-path coverage for the `VaultGit` git wrapper (engine/git.ts).
  *
  * These tests exclusively exercise the NON-ZERO-EXIT / SPAWN-FAILURE branches
- * that the rest of the suite leaves untested (reviewer-flagged branch-coverage
- * gap): the `run()` unified-error throw, the dedicated per-method throws in
- * `listTrackedFiles` / `diffNameStatus`, the `assertGitAvailable` preflight +
+ * that the rest of the suite leaves untested: the `run()` unified-error throw, the dedicated per-method throws in
+ * `lsTree` / `diffNameStatus`, the `assertGitAvailable` preflight +
  * `runRaw` spawn-error (`||`-fallthrough) path, and the `ensureRepo`
  * config-pin try/catch wrapper.
  *
  * Style mirrors git.test.ts: real `git` binary, real temp repos under
  * os.tmpdir(), gitAvailable()-gated, temp dirs cleaned in afterEach.
  */
+import './git-env';
 import { execFile } from 'node:child_process';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,7 +34,7 @@ async function gitAvailable(): Promise<boolean> {
 describe('VaultGit error paths (integration; temp repo)', () => {
   let available = false;
   // Track every temp dir created so afterEach can clean them all, even the
-  // ones whose .git was chmod'd read-only mid-test.
+  // ones chmod'd read-only mid-test.
   const dirs: string[] = [];
 
   beforeAll(async () => {
@@ -44,13 +44,9 @@ describe('VaultGit error paths (integration; temp repo)', () => {
   afterEach(async () => {
     while (dirs.length) {
       const d = dirs.pop()!;
-      // Restore perms first: a test may have left .git read-only (0o555),
-      // which would make rm fail to descend into it.
-      try {
-        await chmod(join(d, '.git'), 0o755);
-      } catch {
-        /* not every dir has a .git */
-      }
+      // Restore perms first: a test may have left the bare vault read-only
+      // (0o555), which would make rm fail to descend into it.
+      await chmod(d, 0o755);
       await rm(d, { recursive: true, force: true });
     }
   });
@@ -62,22 +58,25 @@ describe('VaultGit error paths (integration; temp repo)', () => {
     return d;
   }
 
-  // 1. run() unified non-zero-exit throw, via checkout of a missing branch.
-  it('checkout rejects with a unified "git checkout ... failed:" error for a missing branch', async () => {
+  // 1. run() unified non-zero-exit throw, via a compare-and-swap update-ref
+  //    whose expected value is stale.
+  it('updateRef rejects with a unified "git update-ref ... failed:" error when the ref moved', async () => {
     if (!available) return; // skip gracefully when git is unavailable
     const vault = await freshDir();
     const git = new VaultGit(vault);
     await git.ensureRepo();
+    const main = (await git.revParse('refs/heads/main'))!;
+    const stale = '1'.repeat(40);
 
-    // The branch was never created, so `git checkout does-not-exist` exits
-    // non-zero; run() must surface that as a thrown, unified Error (not resolve).
-    await expect(git.checkout('does-not-exist')).rejects.toThrow(
-      /git checkout does-not-exist failed:/,
+    // `main` is not at `stale`, so the CAS update exits non-zero; run() must
+    // surface that as a thrown, unified Error (not resolve) and keep git's detail.
+    await expect(git.updateRef('refs/heads/main', main, stale)).rejects.toThrow(
+      /git update-ref refs\/heads\/main .* failed:/,
     );
-    // And the underlying git stderr detail must be preserved in the message.
-    await expect(git.checkout('does-not-exist')).rejects.toThrow(
-      /pathspec 'does-not-exist' did not match/,
+    await expect(git.updateRef('refs/heads/main', main, stale)).rejects.toThrow(
+      /cannot lock ref/,
     );
+    expect(await git.revParse('refs/heads/main')).toBe(main);
   });
 
   // 2. diffNameStatus's OWN non-zero-exit throw, via an unresolvable second ref.
@@ -98,20 +97,16 @@ describe('VaultGit error paths (integration; temp repo)', () => {
     ).rejects.toThrow(/unknown revision|ambiguous argument/);
   });
 
-  // 3. listTrackedFiles's dedicated non-zero-exit throw, run OUTSIDE a work-tree.
-  it('listTrackedFiles rejects with "git ls-files failed: ... not a git repository" when the cwd is not a repo', async () => {
+  // 3. lsTree's dedicated non-zero-exit throw, run OUTSIDE a repo.
+  it('lsTree rejects with "git ls-tree ... failed: ... not a git repository" when the cwd is not a repo', async () => {
     if (!available) return;
     // Fresh temp dir, deliberately NOT initialized as a git repo (no ensureRepo).
     const notARepo = await freshDir();
     const git = new VaultGit(notARepo);
 
-    // `git ls-files -z` outside a work-tree exits 128 with "not a git repository".
-    await expect(git.listTrackedFiles()).rejects.toThrow(
-      /git ls-files failed:/,
-    );
-    await expect(git.listTrackedFiles()).rejects.toThrow(
-      /not a git repository/,
-    );
+    // `git ls-tree` outside a repo exits 128 with "not a git repository".
+    await expect(git.lsTree('HEAD')).rejects.toThrow(/git ls-tree HEAD failed:/);
+    await expect(git.lsTree('HEAD')).rejects.toThrow(/not a git repository/);
   });
 
   // 4. assertGitAvailable preflight throw + runRaw spawn-error (`||`) fallthrough.
@@ -159,20 +154,15 @@ describe('VaultGit error paths (integration; temp repo)', () => {
     }
     const vault = await freshDir();
     const git = new VaultGit(vault);
-    await git.ensureRepo(); // first run sets up .git + identity + initial commit
+    await git.ensureRepo(); // first run sets up the bare repo + identity + initial commit
 
-    // NOTE(review): the spec proposed `chmod 0o444 .git/config`, but git does
-    // NOT write config in place — it writes via a `config.lock` file created in
-    // the `.git` DIRECTORY and renames it over config. So a read-only
-    // `.git/config` file does NOT block the write (verified: exit 0). To
-    // actually fail the unconditional `git config core.autocrlf false` write we
-    // must make the `.git` DIRECTORY non-writable (0o555), which denies creating
-    // `config.lock` -> git exits 255 with "could not lock config file". The
-    // assertion below still checks the spec's intended wrapped error
-    // ("failed to pin vault git config", the vault path, and the writable/locked
-    // `.git/config` hint), which is the branch under test.
-    const gitDir = join(vault, '.git');
-    await chmod(gitDir, 0o555);
+    // git does NOT write config in place — it writes via a `config.lock` file
+    // created in the git DIRECTORY (the bare vault itself) and renames it over
+    // config. So the DIRECTORY is made non-writable (0o555), which denies
+    // creating `config.lock` -> git exits 255 with "could not lock config file".
+    // ensureRepo writes a pinned key only when it differs, so drift one first.
+    await execFileAsync('git', ['config', 'core.autocrlf', 'true'], { cwd: vault });
+    await chmod(vault, 0o555);
     try {
       let err: unknown;
       try {
@@ -186,13 +176,13 @@ describe('VaultGit error paths (integration; temp repo)', () => {
       expect(err).toBeInstanceOf(Error);
       const message = (err as Error).message;
       expect(message).toContain('failed to pin vault git config');
-      // References the vault path and the writable/locked .git/config hint.
+      // References the vault path and the writable/locked config hint.
       expect(message).toContain(vault);
-      expect(message).toContain('.git/config');
+      expect(message).toContain('config.lock');
       expect(message).toMatch(/writable|locked/);
     } finally {
-      // Restore perms so afterEach (and rm) can descend into .git.
-      await chmod(gitDir, 0o755);
+      // Restore perms so afterEach (and rm) can descend into the vault.
+      await chmod(vault, 0o755);
     }
   });
 });

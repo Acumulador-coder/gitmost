@@ -28,22 +28,19 @@ function makeClient() {
 
 function makeGit() {
   return {
-    updateRef: vi.fn(async () => {}),
-    fastForwardBranch: vi.fn(async () => ({ ok: true })),
     showFileAtRef: vi.fn(async () => null),
+    commitAddingPath: vi.fn(async () => null),
+    pageIdsAtRef: vi.fn(async () => []),
   };
 }
 
-/** A recording fs fake over a path->text store (writes are read back). */
+/** A recording fs fake over a path->text store. */
 function makeFs(initial: Record<string, string> = {}) {
   const store: Record<string, string> = { ...initial };
   const fs = {
     readFile: vi.fn(async (path: string) => {
       if (!(path in store)) throw new Error(`no such file: ${path}`);
       return store[path];
-    }),
-    writeFile: vi.fn(async (path: string, text: string) => {
-      store[path] = text;
     }),
   };
   return { fs, store };
@@ -54,8 +51,8 @@ function deps(client: any, git: any, fs: ReturnType<typeof makeFs>): ApplyPushDe
     client,
     git: git as any,
     readFile: fs.fs.readFile,
-    writeFile: fs.fs.writeFile,
     spaceId: SPACE_ID,
+    baseRef: 'base-sha',
   };
 }
 
@@ -130,8 +127,7 @@ describe('redteam #12 — new child under new parent placed at ROOT', () => {
       }),
     );
     const git = makeGit();
-    // Both brand-new local files, neither carrying a gitmost_id yet. writeFile
-    // updates the store so readFile reads back any pageId written during the run.
+    // Both brand-new local files, neither carrying a gitmost_id yet.
     const fs = makeFs({
       'Proj/Apple.md': '# Apple\n\napple body\n',
       'Proj/Proj.md': '# Proj\n\nproj body\n',

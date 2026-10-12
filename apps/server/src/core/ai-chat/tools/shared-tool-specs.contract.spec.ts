@@ -17,8 +17,8 @@ import { SHARED_TOOL_SPECS } from '../../../../../../packages/mcp/src/tool-specs
  * This test fails the build if a spec is added to the registry but never wired
  * in-app, if an `inAppKey` is renamed without updating the service, if the
  * description drifts between the registry and the exposed tool, if the
- * `mcpName === inAppKey` convention is broken (issue #412 unified the external
- * MCP tool name with the in-app key — both are the same camelCase identifier),
+ * `mcpName === inAppKey` convention is broken (the external MCP tool name and
+ * the in-app key are the same camelCase identifier),
  * or if the exposed tool's input-schema keys diverge from the spec's
  * `buildShape`.
  *
@@ -62,12 +62,7 @@ describe('SHARED_TOOL_SPECS contract parity', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       { asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }) } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,

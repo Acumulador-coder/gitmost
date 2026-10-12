@@ -7,7 +7,7 @@ import PageHeader from "@/features/page/components/header/page-header.tsx";
 import { extractPageSlugId } from "@/lib";
 import { useGetSpaceBySlugQuery } from "@/features/space/queries/space-query.ts";
 import { useTranslation } from "react-i18next";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { EmptyState } from "@/components/ui/empty-state.tsx";
 import { IconAlertTriangle, IconFileOff } from "@tabler/icons-react";
 import { Button, Skeleton } from "@mantine/core";
@@ -18,7 +18,6 @@ import {
   useCachedPageMeta,
 } from "@/features/page/atoms/page-meta-cache-atom";
 import { reportClientMetric } from "@/lib/telemetry/vitals";
-import { isLocalFirstEnabled } from "@/lib/config";
 import { useAtomValue } from "jotai";
 import { scopeKeyAtom } from "@/features/page/tree/atoms/open-tree-nodes-atom";
 import { hasLocalPageBody } from "@/features/editor/page-ydoc-eviction";
@@ -56,8 +55,8 @@ export default function Page() {
 function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   const { t } = useTranslation();
   // The URL space slug is the only space identifier available when offline (the
-  // #563 meta cache deliberately stores none): used to source the read-only
-  // offline body's chrome links when the live `page` is absent.
+  // meta cache stores none): used to source the read-only offline body's chrome
+  // links when the live `page` is absent.
   const { spaceSlug: urlSpaceSlug } = useParams();
   const pageSlugId = extractPageSlugId(pageSlug);
 
@@ -66,28 +65,19 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
     isLoading,
     isError,
     error,
+    isFetching,
+    isFetchedAfterMount,
   } = usePageQuery({ pageId: pageSlugId });
   const { data: space } = useGetSpaceBySlugQuery(page?.space?.slug);
 
-  // #563 — local-first phase 1. The boot cache is read SYNCHRONOUSLY (jotai
-  // atomWithStorage + getOnInit), so the chrome below no longer waits for THIS
-  // page's `/pages/info` round-trip: it renders from the cached metadata the
-  // moment this component mounts.
-  //
-  // What that does NOT (yet) mean: a paint on the very first frame of a reload.
-  // UserProvider still returns nothing until `/me` resolves (user-provider.tsx —
-  // `if (isLoading) return <></>`) and it wraps ALL authenticated routing, so the
-  // app shell — this page included — is still gated on that ONE request. Phase 1
-  // removes the SECOND, sequential round-trip (`/pages/info`, which today only
-  // starts after `/me`), not the first. A true first-frame paint additionally
-  // needs the `/me` gate lifted (a persisted current-user), which is out of
-  // scope here.
+  // The boot cache is read SYNCHRONOUSLY (jotai atomWithStorage + getOnInit),
+  // so the chrome below does not wait for this page's `/pages/info` round-trip:
+  // it renders from the cached metadata the moment this component mounts.
   //
   // Precedence: the LIVE query always wins — the cached entry only fills the gap
-  // until it resolves. Reconciliation is automatic: usePageQuery force-refetches
-  // on every mount and writes the fresh page back through to the cache, so a
-  // rename/icon/permission change lands as soon as the response arrives (and
-  // re-renders the chrome).
+  // until it resolves. usePageQuery force-refetches on every mount and writes
+  // the fresh page back to the cache, so a rename/icon/permission change lands
+  // as soon as the response arrives.
   const cachedMeta = useCachedPageMeta(pageSlugId);
   // `placeholderData: keepPreviousData` means `page` can still hold the PREVIOUS
   // page while we navigate into this one, so it only counts as live data for THIS
@@ -106,24 +96,42 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   // Move / Delete / the edit toggle to a user the server has already demoted,
   // until `/pages/info` lands. The chrome (title, icon, breadcrumbs) still paints
   // instantly from the cache; only the edit affordances wait for the network.
-  const canEdit = derivePageChromeCanEdit(livePage);
-  // The BODY still renders whatever the query holds (previous page included, as
-  // today), so its edit rights must come from THAT page — never from the chrome's
-  // possibly-different metadata.
-  const canEditBody = derivePageChromeCanEdit(page);
+  //
+  // CL-4 — the same rule covers the QUERY cache: a page opened again within its
+  // cache time renders at once from data fetched on the previous visit, and on
+  // a warm collab return the body is live at once too, so those cached rights
+  // would make it editable before anything re-checked them. Edit rights
+  // therefore wait for THIS view's own fetch of the page (usePageQuery
+  // refetches on a mount and on a switch to the page's key) to succeed; from
+  // then on they follow the live data, so a later background refetch does not
+  // flip the page read-only. Every switch to a page starts unchecked, also
+  // when the fetch of the page in between never landed.
+  const [editRights, setEditRights] = useState({ pageSlugId, checked: false });
+  if (editRights.pageSlugId !== pageSlugId) {
+    setEditRights({ pageSlugId, checked: false });
+  } else if (
+    !editRights.checked &&
+    livePage &&
+    isFetchedAfterMount &&
+    !isFetching &&
+    !isError
+  ) {
+    setEditRights({ pageSlugId, checked: true });
+  }
+  const canEdit =
+    editRights.pageSlugId === pageSlugId &&
+    editRights.checked &&
+    derivePageChromeCanEdit(livePage);
+  // Comment rights are derived from whatever page the query holds (the previous
+  // page included, under keepPreviousData).
   const canComment =
-    canEditBody ||
+    derivePageChromeCanEdit(page) ||
     (space?.settings?.comments?.allowViewerComments === true);
 
   // Boot-cache hit/miss counter — once per visited page. Telemetry is a no-op
-  // unless the operator enabled it AND the session is sampled. Reported ONLY
-  // when the local-first flag is on: with the flag off the cache is never read,
-  // so every visit would trivially count as a miss and drown the flag-ON hit
-  // rate — and the flag-OFF `page_open_ms` baseline this feature is measured
-  // against would be polluted by counters that describe nothing.
+  // unless the operator enabled it AND the session is sampled.
   const countedSlugId = useRef<string | null>(null);
   useEffect(() => {
-    if (!isLocalFirstEnabled()) return;
     if (!pageSlugId || countedSlugId.current === pageSlugId) return;
     countedSlugId.current = pageSlugId;
     // Deliberately NOT keyed on `cachedMeta`: the counter records what the cache
@@ -136,10 +144,10 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   // must NEVER be shown as "offline, cached copy" (part 4): it is surfaced as an
   // error AND reported to the always-on safety channel, distinct from an
   // unreachable network. Reported once per distinct error object so a re-render
-  // does not double-count. No-op with the flag off or for a transport/auth error.
+  // does not double-count. No-op for a transport/auth error.
   const reportedErrorRef = useRef<unknown>(null);
   useEffect(() => {
-    if (!isLocalFirstEnabled() || !isError) return;
+    if (!isError) return;
     if (reportedErrorRef.current === error) return;
     reportedErrorRef.current = error;
     reportOfflineCriticalServerError(error, "/pages/info");
@@ -148,25 +156,23 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   // Synchronous, best-effort "is there a local body to fall back on?" — drives
   // the offline-local vs offline-empty split without an async IndexedDB open.
   const scopeKey = useAtomValue(scopeKeyAtom);
-  const hasLocalBody =
-    isLocalFirstEnabled() && chromeMeta
-      ? hasLocalPageBody(scopeKey, chromeMeta.id, chromeMeta.slugId)
-      : false;
+  const hasLocalBody = chromeMeta
+    ? hasLocalPageBody(scopeKey, chromeMeta.id, chromeMeta.slugId)
+    : false;
 
   // The network ALWAYS wins over the cache: a deleted page / revoked access
   // (401/403/404) renders not-found, never the stale cached chrome. The cached
   // entry itself is dropped by the global query-cache subscriber
   // (installPageMetaEviction), so the next visit is a clean miss — no flash of
-  // stale chrome. Same second condition as before: a settled query with no data
-  // and no error (e.g. a missing slug) still shows the error state.
+  // stale chrome. A settled query with no data and no error (e.g. a missing
+  // slug) also shows the error state.
   //
-  // With local-first ON, a TRANSPORT (unreachable) error no longer collapses to
-  // the error screen: if we have the cached chrome it renders chrome + the local
-  // body (offline-local) or, when no local body exists, an explicit
-  // "not available offline" empty-state (offline-empty). See classifyPageError.
+  // A TRANSPORT (unreachable) error does not collapse to the error screen: if we
+  // have the cached chrome it renders chrome + the local body (offline-local)
+  // or, when no local body exists, an explicit "not available offline"
+  // empty-state (offline-empty). See classifyPageError.
   if (isError || (!isLoading && !page)) {
     const decision = classifyPageError({
-      localFirst: isLocalFirstEnabled(),
       error,
       hasChromeMeta: !!chromeMeta,
       hasLocalBody,
@@ -216,8 +222,8 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
     // ydoc drives it directly; no separate offline-local body branch is needed.
   }
 
-  // Cache MISS (first visit to this page in this browser, flag off, corrupt
-  // cache, or an unresolved user) → today's behavior, unchanged.
+  // Cache MISS (first visit to this page in this browser, corrupt cache, or an
+  // unresolved user) → the page skeleton until the live page lands.
   if (!chromeMeta) {
     return <PageSkeleton />;
   }
@@ -232,53 +238,30 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
 
       <MemoizedPageHeader readOnly={!canEdit} />
 
-      {/* BODY. Ф7 (#643) — with local-first ON the body no longer waits for BOTH
-          `/pages/info` AND `/spaces/info`: the editor mounts on `chromeMeta`
-          (cache or live), keyed by `chromeMeta.id`, and renders from the local
-          ydoc, with its SKELETON / static / live states owned inside PageEditor
-          via `bodyContentPending`. The props contract closes the data-loss traps:
+      {/* BODY. Ф7 (#643) — the body does not wait for BOTH `/pages/info` AND
+          `/spaces/info`: the editor mounts on `chromeMeta` (cache or live),
+          keyed by `chromeMeta.id`, and renders from the local ydoc, with its
+          SKELETON / static / live states owned inside PageEditor via
+          `bodyContentPending`. The props contract closes the data-loss traps:
           `content` comes ONLY from `livePage` (never the possibly-PREVIOUS `page`
           under keepPreviousData, or B would show A's body); `editable` from
           `livePage` (fail-closed until the live page confirms); `spaceSlug` from
           the ROUTE (`useParams`), never the cache (which stores none); `title`/
-          `slugId` from `chromeMeta` for an instant title. Flag OFF → today's
-          `page && space` gate, byte-for-behavior unchanged. */}
-      {isLocalFirstEnabled() ? (
-        <>
-          <MemoizedFullEditor
-            key={chromeMeta.id}
-            pageId={chromeMeta.id}
-            title={chromeMeta.title}
-            content={livePage?.content}
-            slugId={chromeMeta.slugId}
-            spaceSlug={urlSpaceSlug ?? ""}
-            editable={canEdit}
-            creator={livePage?.creator}
-            contributors={livePage?.contributors}
-            canComment={canComment}
-            bodyContentPending={isLoading || !livePage}
-          />
-          <MemoizedHistoryModal pageId={chromeMeta.id} />
-        </>
-      ) : page && space ? (
-        <>
-          <MemoizedFullEditor
-            key={page.id}
-            pageId={page.id}
-            title={page.title}
-            content={page.content}
-            slugId={page.slugId}
-            spaceSlug={page?.space?.slug}
-            editable={canEditBody}
-            creator={page.creator}
-            contributors={page.contributors}
-            canComment={canComment}
-          />
-          <MemoizedHistoryModal pageId={page.id} />
-        </>
-      ) : (
-        <PageSkeleton />
-      )}
+          `slugId` from `chromeMeta` for an instant title. */}
+      <MemoizedFullEditor
+        key={chromeMeta.id}
+        pageId={chromeMeta.id}
+        title={chromeMeta.title}
+        content={livePage?.content}
+        slugId={chromeMeta.slugId}
+        spaceSlug={urlSpaceSlug ?? ""}
+        editable={canEdit}
+        creator={livePage?.creator}
+        contributors={livePage?.contributors}
+        canComment={canComment}
+        bodyContentPending={isLoading || !livePage}
+      />
+      <MemoizedHistoryModal pageId={chromeMeta.id} />
     </div>
   );
 }

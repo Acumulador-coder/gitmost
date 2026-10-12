@@ -5,8 +5,8 @@ import { withPageLock, isUuid } from "../../build/lib/page-lock.js";
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// withPageLock now asserts its key is a canonical UUID (#449, "resolve-then-
-// lock"), so the mechanics tests below must lock under real UUIDs, not arbitrary
+// withPageLock asserts its key is a canonical UUID ("resolve-then-lock"), so
+// the mechanics tests below must lock under real UUIDs, not arbitrary
 // labels. Distinct valid UUIDv7-shaped ids for the distinct-page cases.
 const U = {
   same: "11111111-1111-7111-8111-111111111111",
@@ -165,7 +165,7 @@ test("no functional leak: many sequential ops on same page keep working", async 
   assert.equal(final, "still-works");
 });
 
-// --- Issue #449: fail-fast on a non-canonical lock key ---------------------
+// --- Fail-fast on a non-canonical lock key ----------------------------------
 // A write method that reaches the lock path with an unresolved slugId (or any
 // non-UUID key) must fail IMMEDIATELY and LOUDLY, not lock under a split key and
 // silently lose per-page serialization. These assert withPageLock rejects such

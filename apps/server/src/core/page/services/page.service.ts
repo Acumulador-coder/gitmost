@@ -53,6 +53,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { QueueJob, QueueName } from '../../../integrations/queue/constants';
 import { EventName } from '../../../common/events/event.contants';
+import { emitCollabAccessChanged } from '../../../common/events/collab-access-changed';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CollaborationGateway } from '../../../collaboration/collaboration.gateway';
 import {
@@ -78,7 +79,7 @@ import { DEFAULT_TEMPORARY_NOTE_HOURS } from '../constants/temporary-note.consta
 // descendant traversals) may walk. Real page trees are only a handful of levels
 // deep, so this cap never truncates a legitimate result; it purely defends the
 // recursive CTEs against runaway iteration if a parent/child cycle ever exists
-// in the data (e.g. one slipped in before the move guard, #207 #8). Without it a
+// in the data. Without it a
 // cycle makes `withRecursive` loop forever (hang / statement timeout), and the
 // move guard itself calls one of these CTEs — so a cycle would disable the very
 // guard meant to prevent it. Each CTE carries a depth counter and stops here.
@@ -86,7 +87,7 @@ const MAX_PAGE_TREE_DEPTH = 10_000;
 
 // Advisory-lock namespace (the first key of pg_advisory_xact_lock) used to
 // serialize concurrent page moves within a single space so the cycle check and
-// the move UPDATE stay atomic (see movePage, #207 #7). A dedicated namespace
+// the move UPDATE stay atomic (see movePage). A dedicated namespace
 // constant keeps these locks from colliding with any other advisory lock; the
 // second key is hashtext(spaceId). Fits a signed int4 ('page' in ASCII).
 const PAGE_MOVE_LOCK_NAMESPACE = 0x70616765;
@@ -415,7 +416,7 @@ export class PageService {
   }
 
   /**
-   * #647 §C/§D — guarded full replace (server-side write-CAS). Parses + footnote-
+   * Guarded full replace (server-side write-CAS). Parses + footnote-
    * canonicalizes the incoming body exactly like `updatePageContent`'s 'replace',
    * then routes `replaceIfMatch` to the document owner: the base-hash compare and
    * the structural overwrite happen ATOMICALLY on the authoritative live doc.
@@ -491,10 +492,10 @@ export class PageService {
   }
 
   /**
-   * #647 §B/§E — coherent `{ content, contentHash }` for the opt-in
+   * Coherent `{ content, contentHash }` for the opt-in
    * `/pages/info?includeContentHash` read path (and the base hash a future
    * guarded-replace re-checks). The hash is computed over `fromYdoc(D)`, NEVER the
-   * raw `page.content` (#647 B1: `fromYdoc(toYdoc(x)) !== x`, so hashing raw
+   * raw `page.content` (`fromYdoc(toYdoc(x)) !== x`, so hashing raw
    * content would produce a permanent false 409), and the returned `content` is
    * the SAME materialization, so a caller keying a cache by this hash gets true
    * read-your-own-writes.
@@ -525,9 +526,9 @@ export class PageService {
   }
 
   /**
-   * #654 §Server — the read-your-own-writes resolution for the structural read
+   * Read-your-own-writes resolution for the structural read
    * tools' opt-in `preferLive` hint. Consumes the SAME non-claiming, non-force-
-   * loading `readLiveIfLoaded` primitive (#647) but, unlike getLiveContentPair,
+   * loading `readLiveIfLoaded` primitive but, unlike getLiveContentPair,
    * returns NO hash and falls back to the raw `page.content` DB row (NOT a
    * transient ydoc reconstruction) — a stale read is acceptable here (this feeds
    * structural views, not a CAS base hash), so we keep the fallback cheap.
@@ -835,6 +836,13 @@ export class PageService {
           workspaceId: rootPage.workspaceId,
         });
       }
+    });
+
+    // The moved pages now take the destination space's access, and the
+    // orphaned ones lost the restrictions of their former ancestors.
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId: rootPage.workspaceId,
+      pageIds: [...accessibleIds, ...pagesToOrphan.map((page) => page.id)],
     });
 
     return { childPageIds };
@@ -1183,6 +1191,12 @@ export class PageService {
     // Optional agent-edit provenance (from the signed access claim). Stamps the
     // source marker when the agent moves a page via REST (§6.6 REST path).
     provenance?: AuthProvenanceData,
+    // Optional responsible author. When set (git-sync), the move is ATTRIBUTED
+    // to that account via `lastUpdatedById` — parity with create/delete/rename,
+    // which all stamp the service user. A normal user move omits it, leaving
+    // `lastUpdatedById` untouched (a reparent is not a content edit, so the
+    // existing author is preserved — unchanged behavior).
+    actorUserId?: string,
   ) {
     // validate position value by attempting to generate a key
     try {
@@ -1216,7 +1230,7 @@ export class PageService {
     // and the write as two separate, unlocked statements is a TOCTOU race: two
     // concurrent moves ("A under B" and "B under A") can each read the same
     // pre-write acyclic snapshot, both pass the guard, then persist
-    // A.parentPageId=B AND B.parentPageId=A — a parent/child cycle (#207 #7). A
+    // A.parentPageId=B AND B.parentPageId=A — a parent/child cycle. A
     // per-space advisory lock (held until COMMIT) serializes all moves within a
     // space: the second mover blocks until the first commits and then sees the
     // freshly written parent, so its guard rejects the cycle.
@@ -1252,6 +1266,9 @@ export class PageService {
         {
           position: dto.position,
           parentPageId: parentPageId,
+          // Attribute a git-initiated move to the service account (parity with
+          // create/delete/rename). Omitted for normal user moves -> unchanged.
+          ...(actorUserId ? { lastUpdatedById: actorUserId } : {}),
           // Agent-edit provenance: annotate the source on an agent move. A
           // normal user request leaves the existing source value unchanged.
           ...agentSourceFields(
@@ -1308,7 +1325,7 @@ export class PageService {
    * ONLY by `deletedAt` (+ MAX_PAGE_TREE_DEPTH) — WITHOUT per-ancestor
    * permission filtering. Callers that expose this to a user (the
    * `/breadcrumbs` endpoint) validate `validateCanView` on the TARGET page
-   * only, then return the whole chain of ancestor titles (#471).
+   * only, then return the whole chain of ancestor titles.
    *
    * This is safe — NOT a title leak — because page restrictions inherit DOWN
    * the tree: to view a page the caller must hold permission on EVERY
@@ -1321,10 +1338,9 @@ export class PageService {
    *
    * Note the guarantee is the narrow "may view a descendant => may view its
    * ancestors", NOT "space membership sees every page" — restricted subtrees do
-   * hide pages from members. Per-ancestor permission filtering here was
-   * considered and declined as redundant given the inheritance invariant above
-   * (#471). The same chain feeds the web-UI breadcrumb bar under identical CASL
-   * scope.
+   * hide pages from members. Per-ancestor permission filtering here would be
+   * redundant given the inheritance invariant above. The same chain feeds the
+   * web-UI breadcrumb bar under identical CASL scope.
    */
   async getPageBreadCrumbs(childPageId: string, trx?: KyselyTransaction) {
     const ancestors = await dbOrTx(this.db, trx)
@@ -1555,8 +1571,20 @@ export class PageService {
     pageId: string,
     userId: string,
     workspaceId: string,
+    // Optional provenance. A git-sync-driven soft-delete stamps
+    // `lastUpdatedSource = 'git-sync'` so the change-listener loop-guard skips
+    // its own write (mirrors the create/update/move provenance branches above).
+    provenance?: AuthProvenanceData,
   ): Promise<void> {
-    await this.pageRepo.removePage(pageId, userId, workspaceId);
+    const isGitSync = provenance?.actor === 'git-sync';
+    await this.pageRepo.removePage(
+      pageId,
+      userId,
+      workspaceId,
+      // No caller transaction on the git-sync path; existingTrx stays undefined.
+      undefined,
+      isGitSync ? 'git-sync' : undefined,
+    );
   }
 
   private async parseProsemirrorContent(
@@ -1568,13 +1596,13 @@ export class PageService {
     switch (format) {
       case 'markdown': {
         // Canonical markdown -> ProseMirror JSON directly via
-        // `@docmost/prosemirror-markdown` (issue #345) — no HTML intermediate,
-        // no editor-ext markdown layer. Foreign markdown surfaces the strict
-        // parser rejects (GFM `[^id]` reference footnotes) are normalized to the
-        // canonical inline form first.
+        // `@docmost/prosemirror-markdown` — no HTML intermediate, no editor-ext
+        // markdown layer. Foreign markdown surfaces the strict parser rejects
+        // (GFM `[^id]` reference footnotes) are normalized to the canonical inline
+        // form first.
         //
-        // #555 (review of #514): use `normalizeAgentMarkdown`, NOT
-        // `normalizeForeignMarkdown`. This is the REST content-write path
+        // Uses `normalizeAgentMarkdown`, NOT `normalizeForeignMarkdown`. This is the
+        // REST content-write path
         // (createPage / updatePageContent — a user or client PUTting a full body
         // or a fragment), which must be SYMMETRIC with the MCP agent-write path
         // (`markdownToProseMirrorCanonical` -> `normalizeAgentMarkdown`): a leading

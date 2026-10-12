@@ -16,7 +16,7 @@ import { resolveAgentProvenance } from '../agent-provenance';
 import { PageHistoryKind } from '../../../collaboration/constants';
 
 /**
- * Role-resolution subquery for a page-history row's bound AI chat (#300). Joins
+ * Role-resolution subquery for a page-history row's bound AI chat. Joins
  * pageHistory.lastUpdatedAiChatId -> ai_chats.role_id -> ai_agent_roles and
  * selects the role's name + emoji. NO enabled/deletedAt filter: historical agent
  * content must keep its signature even after the role is disabled or soft-deleted
@@ -34,7 +34,7 @@ export function pageHistoryAgentRoleQuery(
 }
 
 /**
- * External-MCP key-name subquery for a page-history row (#559). Resolves
+ * External-MCP key-name subquery for a page-history row. Resolves
  * pageHistory.lastUpdatedApiKeyId -> api_keys.name so an edit made by an external
  * MCP agent is displayed with the human-assigned key name (the persona). NO
  * deletedAt filter — exactly mirroring the agent-role join above: the historical
@@ -244,7 +244,7 @@ export class PageHistoryRepo {
   }
 
   /**
-   * #370 Stage B — resolve the latest snapshot of a page at a given
+   * Resolve the latest snapshot of a page at a given
    * intentionality tier. Used by the "approved" share mode to serve the last
    * manually-saved version (`kind='manual'`) to public readers instead of the
    * live draft. Modeled on `findPageLastHistory` with an added `kind` filter and

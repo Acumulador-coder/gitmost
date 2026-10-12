@@ -1,20 +1,18 @@
 /**
- * `reconciledAt` — a durable per-(scope, pageId) reservation for offline
- * EDITING, introduced now but with NO consumers yet (#640 R1 / #638).
+ * `reconciledAt` — a durable per-(scope, pageId) mark: "this ydoc synced with
+ * the server at least once".
  *
- * Meaning: "this ydoc synced with the server at least once". It is the durable
- * form of the session-scoped `isRemoteConfirmed` useState behind the #564
+ * It is the durable form of the session-scoped `isRemoteConfirmed` behind the
  * read-only guard: a ydoc that has never shared history with the server yields
  * garbage on merge, while a reconciled one is CRDT-safe for offline edits. It is
- * written in the collab provider's onSynced handler (page-editor.tsx).
+ * written in the collab provider's onSynced handler (page-session-cache.ts) and
+ * read by page-editor.tsx. New consumers read THIS mark rather than the session
+ * `isRemoteConfirmed`.
  *
- * Ф7 MUST read THIS mark rather than spawn new consumers of the session
- * `isRemoteConfirmed`. Until then it is write-only.
- *
- * ─── FORWARD-COMPAT RULE (recorded now, enforced later) ───────────────────────
+ * ─── FORWARD-COMPAT RULE ──────────────────────────────────────────────────────
  * Purge-on-401/logout (page-ydoc-eviction.purgePageYdocDatabases, called from
  * use-auth.handleLogout / handleSignIn and api-client.redirectToLogin) is safe
- * ONLY while the write-guard (createBodyWriteGuard, #564) forbids local edits —
+ * ONLY while the write-guard (createBodyWriteGuard) forbids local edits —
  * a purged ydoc can then hold no unsent work. The moment offline-editing lands,
  * purge MUST become "QUARANTINE, not delete, if the ydoc has unsent updates",
  * otherwise a returning network → 401 → redirectToLogin() would delete the
@@ -26,7 +24,7 @@
  * Keyed by the scope-namespaced database name (`page.<scope>.<pageId>`), so it
  * self-scopes exactly like the tombstone store. Best-effort: unlike the
  * tombstone denylist this is a RESERVATION, not a safety control, so a failed
- * write is swallowed (Ф7 simply re-reconciles) — it must never fail-close the
+ * write is swallowed (the page simply re-reconciles) — it must never fail-close the
  * editor.
  */
 

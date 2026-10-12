@@ -1,6 +1,6 @@
 /**
- * Catalog wire shapes. The catalog is curated, untrusted YAML (a GitHub repo or
- * a local folder), so every shape is validated by a hand-written type guard in
+ * Catalog wire shapes. The catalog is curated, untrusted YAML (a remote http(s)
+ * source), so every shape is validated by a hand-written type guard in
  * the provider before any field is used — no zod on the server (YAML is parsed
  * with the `yaml` library's safe, JSON-compatible schema).
  *

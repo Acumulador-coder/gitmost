@@ -4,8 +4,8 @@ import { QueueJob } from '../constants';
 import { ICommentMarkUpdateJob } from '../constants/queue.interface';
 
 /**
- * #399: the GENERAL_QUEUE worker replays the comment inline-mark op that used to
- * run synchronously on the HTTP path. It must call the SAME gateway handler with
+ * The GENERAL_QUEUE worker replays the comment inline-mark op off the HTTP path.
+ * It must call the SAME gateway handler with
  * the SAME semantics (resolve/unresolve → flip the `resolved` attribute; delete
  * → strip the anchor), and its timestamp race-guard must skip an event a newer,
  * opposite event already superseded.

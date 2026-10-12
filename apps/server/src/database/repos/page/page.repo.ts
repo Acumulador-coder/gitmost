@@ -17,6 +17,7 @@ import { jsonArrayFrom, jsonObjectFrom } from 'kysely/helpers/postgres';
 import { SpaceMemberRepo } from '@docmost/db/repos/space/space-member.repo';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EventName } from '../../../common/events/event.contants';
+import type { ProvenanceSource } from '../../../core/auth/dto/jwt-payload';
 import {
   TreeUpdateSnapshot,
   toTreeNodeSnapshot,
@@ -252,7 +253,7 @@ export class PageRepo {
   }
 
   /**
-   * #599 (review F2) — the subset of `countEmbeddablePages` that was CREATED OR
+   * The subset of `countEmbeddablePages` that was CREATED OR
    * MODIFIED after `since` (the start of the reindex run that established the
    * active generation's recorded coverage).
    *
@@ -283,8 +284,7 @@ export class PageRepo {
    * The "embeddable content" qualifying predicate, shared verbatim by
    * countEmbeddablePages (the steady-state denominator) and getEmbeddablePageIds
    * (the set the bulk reindex iterates). Both MUST use the exact same condition
-   * or the live total and steady-state total diverge — extracting it here is what
-   * guarantees that, replacing the previous hand-duplicated copy. Callers supply
+   * or the live total and steady-state total diverge. Callers supply
    * the trivial workspaceId/deletedAt filters inline; this returns only the
    * non-trivial OR clause, evaluated against the `p` alias of `pages`.
    *
@@ -343,9 +343,8 @@ export class PageRepo {
    * steady-state value mid-run).
    *
    * IMPORTANT: the qualifying WHERE is shared with `countEmbeddablePages` via the
-   * private `embeddablePredicate` helper, so the two can no longer drift — if the
-   * embeddable definition changes, change it once there and both stay in lockstep
-   * (else the live total and steady-state total diverge again). Dropping
+   * private `embeddablePredicate` helper; change the embeddable definition only
+   * there. Dropping
    * text-less pages is correct: `reindexPage` no-ops on
    * a page with no extractable content anyway, and a page that lost its text but
    * still has stale embeddings IS in this set (the EXISTS clause), so it is still
@@ -386,6 +385,11 @@ export class PageRepo {
     // delete never broadcasts). With no trx the behaviour is unchanged: own
     // transaction, broadcast right after it commits.
     existingTrx?: KyselyTransaction,
+    // Optional provenance marker. When the soft-delete is driven by an automated
+    // data plane (e.g. git-sync), stamp `lastUpdatedSource` so the change-listener
+    // loop-guard recognizes it as its own write and does not schedule an echo
+    // cycle. Omitted for ordinary user deletes (column keeps its prior value).
+    lastUpdatedSource?: ProvenanceSource,
   ): Promise<void> {
     const currentDate = new Date();
     const readDb = dbOrTx(this.db, existingTrx);
@@ -441,6 +445,7 @@ export class PageRepo {
             .set({
               deletedById: deletedById,
               deletedAt: currentDate,
+              ...(lastUpdatedSource ? { lastUpdatedSource } : {}),
             })
             .where('id', 'in', pageIds)
             .where('deletedAt', 'is', null)
@@ -488,7 +493,14 @@ export class PageRepo {
     }
   }
 
-  async restorePage(pageId: string, workspaceId: string): Promise<void> {
+  async restorePage(
+    pageId: string,
+    workspaceId: string,
+    // See removePage: stamp `lastUpdatedSource` for automated (git-sync) restores
+    // so the change-listener loop-guard skips the echo cycle. Omitted for
+    // ordinary user restores.
+    lastUpdatedSource?: ProvenanceSource,
+  ): Promise<void> {
     // First, check if the page being restored has a deleted parent
     const pageToRestore = await this.db
       .selectFrom('pages')
@@ -539,7 +551,12 @@ export class PageRepo {
       // On restore, disarm the death timer: pulling a note out of trash means
       // "keep it". Otherwise a deadline now in the past would re-trash it on the
       // next cleanup sweep.
-      .set({ deletedById: null, deletedAt: null, temporaryExpiresAt: null })
+      .set({
+        deletedById: null,
+        deletedAt: null,
+        temporaryExpiresAt: null,
+        ...(lastUpdatedSource ? { lastUpdatedSource } : {}),
+      })
       .where('id', 'in', pageIds)
       .execute();
 

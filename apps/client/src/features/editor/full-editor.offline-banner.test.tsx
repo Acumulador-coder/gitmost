@@ -4,9 +4,9 @@ import { MantineProvider } from "@mantine/core";
 import { Provider, createStore } from "jotai";
 
 /**
- * #564 guard 5 — when the body is showing an un-reconciled LOCAL copy and the
+ * Guard 5 — when the body is showing an un-reconciled LOCAL copy and the
  * collab room is Disconnected, the "offline" banner must cover the WHOLE page,
- * chrome included: the title/icon come from the phase-1 meta cache (possibly
+ * chrome included: the title/icon come from the meta cache (possibly
  * NEWER) while the body comes from the ydoc (possibly OLDER), so chrome without
  * an indicator would look authoritative.
  *

@@ -71,21 +71,17 @@ describe("MessageList", () => {
     expect(queryByText("hello world")).not.toBeNull();
   });
 
-  // REGRESSION (PR #224, the empty-render freeze). The AI SDK streams a turn by
-  // MUTATING the same `parts` array IN PLACE and handing back a NEW array each
-  // delta that REUSES the same message object. The fix moved the content signature
-  // to the PARENT: MessageList must recompute `messageSignature(message)` FRESH on
-  // every render and forward it as the immutable `signature` prop, so MessageItem's
-  // memo (which compares that prop snapshot) sees it change and re-renders the row.
+  // The AI SDK streams a turn by MUTATING the same `parts` array IN PLACE and
+  // reuses the same message object across deltas. MessageList must recompute
+  // `messageSignature(message)` FRESH on every render and forward it as the
+  // immutable `signature` prop, so MessageItem's memo (which compares that prop
+  // snapshot) sees it change and re-renders the row.
   //
-  // This test exercises the PARENT half that the memo tests only simulate: if
-  // MessageList ever cached/memoized the signature keyed on the message object's
-  // identity (which stays stable across deltas while its `parts` mutate in place),
-  // the snapshot would never change, MessageItem's memo would skip every delta, and
-  // the row would freeze at its empty mount — exactly the regression class. That
-  // would make this test fail. See message-item.tsx (`signature` prop +
-  // `arePropsEqual`) and message-list.tsx (the `signature={messageSignature(...)}`
-  // snapshot at render time).
+  // This covers the PARENT half the memo tests only simulate: if MessageList
+  // cached the signature on the message object's identity, the snapshot would never
+  // change and the row would freeze at its empty mount. See message-item.tsx
+  // (`signature` prop + `arePropsEqual`) and message-list.tsx (the
+  // `signature={messageSignature(...)}` snapshot at render time).
   it("reflects in-place part mutation of a reused message object across renders", () => {
     renderChatMarkdownSpy.mockClear();
     // Reuse ONE message object across renders (as the SDK does). The empty text

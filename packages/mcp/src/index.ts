@@ -21,7 +21,7 @@ import {
 export { DocmostClient } from "./client.js";
 export type { DocmostMcpConfig } from "./client.js";
 
-// Teardown for the live per-page CollabSession cache (issue #400). An embedding
+// Teardown for the live per-page CollabSession cache. An embedding
 // HTTP host (the gitmost NestJS server) should call this from its own shutdown
 // hook so no cached collab provider outlives the process.
 export { destroyAllSessions } from "./lib/collab-session.js";
@@ -39,7 +39,7 @@ export {
 } from "./tool-specs.js";
 export type { ToolWriteClass } from "./tool-specs.js";
 
-// Re-export the build-time REGISTRY_STAMP (issue #447): a deterministic hash of
+// Re-export the build-time REGISTRY_STAMP: a deterministic hash of
 // the tool-specs registry content, generated into src/registry-stamp.generated.ts
 // by scripts/gen-registry-stamp.mjs BEFORE tsc, so it lands in build/. The in-app
 // loader recomputes the same hash from src/tool-specs.ts (dev/test only) and
@@ -92,16 +92,13 @@ const VERSION = packageJson.version;
 // Editing guide surfaced to MCP clients in the initialize result so they can
 // pick the right tool by intent and avoid resending whole documents.
 //
-// The guide is now SPLIT (issue #448): the hand-written routing prose lives in
-// server-instructions.ts and the tool INVENTORY is GENERATED from the registry
-// (SHARED_TOOL_SPECS + INLINE_MCP_INVENTORY), so it can no longer drift out of
-// sync with the registered tools. Re-exported here (its old home) so existing
-// importers are unaffected; the composition lives in server-instructions.ts.
-// The drawioShapes / drawioGuide tools (#424) stay in SHARED_TOOL_SPECS (so the
-// generated <tool_inventory> picks them up from their catalogLine automatically)
-// but are flagged `inlineBothHosts` and registered inline below (their pure
-// helpers can't cross into tool-specs.ts); only the hand-written routing prose in
-// server-instructions.ts is updated to mention them.
+// The hand-written routing prose lives in server-instructions.ts and the tool
+// INVENTORY is GENERATED from the registry (SHARED_TOOL_SPECS +
+// INLINE_MCP_INVENTORY), so it stays in sync with the registered tools; it is
+// re-exported here for existing importers. The drawioShapes / drawioGuide tools
+// stay in SHARED_TOOL_SPECS (so the generated <tool_inventory> picks them up
+// from their catalogLine) but are flagged `inlineBothHosts` and registered
+// inline below (their pure helpers can't cross into tool-specs.ts).
 export { SERVER_INSTRUCTIONS };
 
 // Helper to format JSON responses
@@ -157,7 +154,7 @@ function resolveCommentSignalDebounceMs(): number {
 }
 
 /**
- * Wrap a tool handler so a passive "new comments: N" line (#417) is APPENDED as
+ * Wrap a tool handler so a passive "new comments: N" line is APPENDED as
  * an extra text content element when the session's watermark advances. ADDITIVE
  * and non-destructive:
  *  - records the call's `pageId` (if any) into the working set;
@@ -228,19 +225,19 @@ export function createDocmostMcpServer(config: DocmostMcpConfig): McpServer {
   // name is the registration name (bounded cardinality). When no onMetric is
   // provided (standalone/stdio) the wrapper is a pure pass-through: it still
   // returns the original result and rethrows the original error unchanged.
-  // Passive "new comments: N" signal (#417). Per-SESSION state (this factory runs
+  // Passive "new comments: N" signal. Per-SESSION state (this factory runs
   // once per MCP session — http.ts creates one server + one DocmostClient per
   // session), so the watermark/working-set/debounce live right next to the
-  // client. REST-only surface => the count source (option 2) is a rate-limited
+  // client. REST-only surface => the count source is a rate-limited
   // `listComments` over the working-set pages: the tracker guarantees at most one
   // list call per page per debounce window, and the page title is fetched ONLY
   // when there is something to report (count>0), so the steady no-signal cost is
   // a single list call per page per window and an empty working set => zero calls.
   const commentSignal = createCommentSignalTracker({
     debounceMs: resolveCommentSignalDebounceMs(),
-    // Shared count-source probe (#494): counts comments newer than the watermark
-    // over the full feed and labels a hit with the light page title. The in-app
-    // host uses the SAME factory, so the two probe bodies can no longer drift.
+    // Shared count-source probe: counts comments newer than the watermark over
+    // the full feed and labels a hit with the light page title. The in-app host
+    // uses the SAME factory, so both count the same way.
     probe: createListCommentsProbe(docmostClient),
   });
 
@@ -260,7 +257,7 @@ export function createDocmostMcpServer(config: DocmostMcpConfig): McpServer {
     return originalRegisterTool(...args.slice(0, -1), signalledHandler);
   };
 
-  // Register EVERY shared tool from the zod-agnostic registry in one loop (#445).
+  // Register EVERY shared tool from the zod-agnostic registry in one loop.
   // The spec owns the canonical name + description + (optional) schema builder AND
   // the canonical execute mapping; the host only supplies the RESULT ENVELOPE. For
   // each spec:
@@ -270,11 +267,10 @@ export function createDocmostMcpServer(config: DocmostMcpConfig): McpServer {
   //     resource_link/bare success line), the override OWNS the full MCP content
   //     result and is used VERBATIM;
   //   - otherwise the canonical `execute` returns RAW data and this host wraps it
-  //     in the standard JSON text envelope (jsonContent), exactly as the old inline
-  //     bodies did.
+  //     in the standard JSON text envelope (jsonContent).
   // buildShape is invoked with THIS package's zod (v3); the in-app layer passes its
   // own zod (v4). The registry's execute returns `unknown` (it is zod-agnostic), so
-  // the wrapping is typed loosely and cast — runtime behaviour is unchanged.
+  // the wrapping is typed loosely and cast.
   const registerSharedFromSpec = (spec: SharedToolSpec) => {
     if (spec.inAppOnly) return;
     // `inlineBothHosts` specs (drawioShapes / drawioGuide) carry no execute —
@@ -290,10 +286,9 @@ export function createDocmostMcpServer(config: DocmostMcpConfig): McpServer {
         };
       }
       // Canonical execute returns raw data; wrap it as JSON text content. The `!`
-      // is backed by assertEverySpecIsRegisterable() (#494), which runs at
-      // tool-specs module load and throws if a non-inline, non-inAppOnly spec
-      // reaches this loop without an execute/mcpExecute — so this can no longer be
-      // a call-time TypeError in production.
+      // is backed by assertEverySpecIsRegisterable(), which runs at tool-specs
+      // module load and throws if a non-inline, non-inAppOnly spec reaches this
+      // loop without an execute/mcpExecute.
       const raw = await spec.execute!(docmostClient, args);
       return jsonContent(raw);
     };
@@ -311,12 +306,13 @@ export function createDocmostMcpServer(config: DocmostMcpConfig): McpServer {
   }
 
   // --- INLINE drawio helper tools (IN the shared registry, but inlineBothHosts) ---
-  // drawioShapes / drawioGuide (#424) live in SHARED_TOOL_SPECS (so the shared
+  // drawioShapes / drawioGuide live in SHARED_TOOL_SPECS (so the shared
   // contract pins their name/description/schema across both hosts) but carry the
   // `inlineBothHosts` flag and NO execute: their pure backing helpers
   // (searchShapes / getGuideSection) cannot be value-imported into the
-  // zod-agnostic tool-specs.ts without breaking the in-app server's commonjs
-  // type-check (searchShapes' catalog loader uses import.meta). So both hosts wire
+  // zod-agnostic tool-specs.ts without breaking the in-app server's specs, which
+  // load it through ts-jest as CommonJS (searchShapes' catalog loader uses
+  // import.meta, a SyntaxError there). So both hosts wire
   // them directly. Here on the MCP host they reuse the spec's name/description/
   // schema and wrap the raw helper result as JSON text content — byte-identical to
   // what the registry loop would have produced. The in-app host mirrors this in
@@ -430,24 +426,19 @@ server.registerTool(
 );
 
 // Tool: search
-// INTENTIONAL per-transport divergence (not shared): the in-app `searchPages`
-// runs a semantic + keyword hybrid (RRF) with in-process access control and a
-// different schema; this transport is the #443 agent-lookup search — a hybrid
-// substring + full-text search that also returns each hit's location (`path`)
-// and a windowed `snippet`, so one call answers "where is it and what's in it".
-// The in-app hybrid-RRF search is deliberately NOT touched. Different behaviour
-// AND schema, so kept per-layer.
+// INTENTIONAL per-transport divergence (not shared), SCHEMA-ONLY: this tool and
+// the in-app `searchPages` run the SAME engine — the server's SearchService, as
+// the calling user (scoped to their spaces, page permissions applied). They
+// differ only in schema: this tool takes a limit up to 50 plus offset
+// pagination and returns the full envelope (path, snippet, score,
+// matchedTerms/matchedFields, total/hasMore/truncatedAtCap, related); the
+// in-app tool takes a limit of 1-20 and returns a compact
+// { results, related, total }. Different schema, so kept per-layer.
 //
 // STANDALONE-vs-STOCK-UPSTREAM: the client sends the opt-in `substring`/
 // `parentPageId`/`titleOnly` DTO fields. A stock upstream server validates the
 // DTO with `whitelist: true` and silently strips these unknown fields, so the
 // request degrades gracefully to plain FTS (no path/snippet, current shape).
-//
-// EE/TYPESENSE DEGRADATION (#443): on an instance whose SEARCH_DRIVER is
-// `typesense`, the server routes this request to the Typesense backend, which
-// does NOT implement agent-lookup — the substring/path/snippet/tiering is
-// ignored and the response degrades to plain Typesense FTS. The rich lookup
-// shape is only produced by the native Postgres search driver.
 server.registerTool(
   "search",
   {
@@ -465,7 +456,12 @@ server.registerTool(
       "`total` (exact, permission-filtered), `hasMore` and `truncatedAtCap`. " +
       "NOTE: results past the relevance cap (~500) are unreachable by " +
       "pagination — narrow the query (add terms / +required / a spaceId) " +
-      "instead when `truncatedAtCap` is true.",
+      "instead when `truncatedAtCap` is true. `items`/`total` hold only pages " +
+      "that actually match (`total: 0` = nothing matches); `related` lists " +
+      "semantically similar pages that do NOT match the query (operators are " +
+      "not applied to them; they may still mention some terms) — not proof " +
+      "the topic is covered, but check them as possible duplicates before " +
+      "creating a page.",
     inputSchema: {
       query: z.string().min(1).describe("Search query (supports \"phrase\", +require, -exclude)"),
       spaceId: z
@@ -595,7 +591,7 @@ server.registerTool(
   },
 );
 
-// Tool: uploadFile (issue #608)
+// Tool: uploadFile
 // INLINE, MCP-ONLY (deliberately NOT shared): the byte-fed upload path is
 // meaningless to the in-app AI chat — that host has no local files to base64,
 // and streaming megabytes of base64 through tool arguments would be actively
@@ -693,14 +689,14 @@ server.registerTool(
   },
 );
 
-// Tool: downloadFile (issue #613)
+// Tool: downloadFile
 // INLINE, MCP-ONLY (mirrors uploadFile, deliberately NOT shared): the in-app AI
 // chat has its own `viewImage` for reading an attachment's bytes, so this
-// external-only download primitive — the symmetric partner of uploadFile and the
-// elegant fix for the cross-instance image-migration blocker — is registered only
-// on this external MCP surface, never in the shared registry the in-app agent draws
-// from. The url branch owns its own MCP envelope (resource_link + structuredContent,
-// like stashPage), so it is NOT wrapped in jsonContent.
+// external-only download primitive — the symmetric partner of uploadFile, used
+// to move files between instances — is registered only on this external MCP
+// surface, never in the shared registry the in-app agent draws from. The url
+// branch owns its own MCP envelope (resource_link + structuredContent, like
+// stashPage), so it is NOT wrapped in jsonContent.
 server.registerTool(
   "downloadFile",
   {

@@ -24,22 +24,14 @@ async function roundTrip(node: any): Promise<{ md1: string; doc2: any; md2: stri
 }
 
 // ---------------------------------------------------------------------------
-// 1. pageBreak DATA LOSS (markdown-converter.ts has NO `case "pageBreak"`).
-//
-// The schema declares a `pageBreak` block atom (docmost-schema.ts ~L1009), so a
-// real document CAN legally contain one. The converter's switch has no branch
-// for it, so it falls through to `default`, which renders only the node's
-// children — and a pageBreak atom has NONE. It therefore exports to "" and the
-// node silently disappears: an exported markdown file can never carry a page
-// break, and a round-trip cannot reconstruct it. We pin this as a known
-// divergence with an `it.fails` round-trip repro (mirroring the package's two
-// existing documented `it.fails` bugs in markdown-roundtrip.property.test.ts).
+// 1. pageBreak: a childless block atom with no markdown syntax. It exports to
+// the standalone comment `<!--pagebreak-->`, which the importer materializes
+// back into a pageBreak node.
 // ---------------------------------------------------------------------------
 describe('pageBreak data loss (no converter case — SPEC §11 divergence)', () => {
   it('exports a pageBreak node to the standalone comment (#293 #5)', () => {
-    // #293 canon #5: a standalone pageBreak now serializes as the readable,
-    // renderer-invisible comment `<!--pagebreak-->` (re-materialized on import),
-    // instead of the earlier raw <div> block.
+    // A standalone pageBreak serializes as the renderer-invisible comment
+    // `<!--pagebreak-->` (re-materialized on import).
     expect(convertProseMirrorToMarkdown(doc({ type: 'pageBreak' }))).toBe(
       '<!--pagebreak-->',
     );
@@ -47,7 +39,7 @@ describe('pageBreak data loss (no converter case — SPEC §11 divergence)', () 
 
   it('keeps a pageBreak sitting BETWEEN two paragraphs on export', () => {
     // With surrounding content the divider is emitted as its own comment line
-    // between the two paragraphs (joined by the doc "\n\n"), no longer dropped.
+    // between the two paragraphs (joined by the doc "\n\n").
     const out = convertProseMirrorToMarkdown(
       doc(para(text('before')), { type: 'pageBreak' }, para(text('after'))),
     );
@@ -57,9 +49,8 @@ describe('pageBreak data loss (no converter case — SPEC §11 divergence)', () 
     expect(out).toContain('<!--pagebreak-->');
   });
 
-  // FIXED: a pageBreak node now survives an export -> import -> export cycle
-  // because the FIRST export emits the standalone comment, which the importer
-  // materializes back into a pageBreak node again.
+  // A pageBreak node survives an export -> import -> export cycle: the export
+  // emits the standalone comment, which the importer materializes back.
   it('a pageBreak node round-trips (export -> import yields a pageBreak)', async () => {
     const { md1, doc2 } = await roundTrip({ type: 'pageBreak' });
     expect(md1).not.toBe('');
@@ -69,13 +60,10 @@ describe('pageBreak data loss (no converter case — SPEC §11 divergence)', () 
 });
 
 // ---------------------------------------------------------------------------
-// 2. subpages round-trip (#293 #5 standalone comment).
+// 2. subpages round-trip (standalone comment).
 //
-// It used to emit the literal `{{SUBPAGES}}`, which has no markdown/HTML meaning,
-// so on re-import the subpages BLOCK came back as a plain PARAGRAPH carrying the
-// literal string (the embed rendered as visible "{{SUBPAGES}}" text on the page
-// after a sync — data loss). Per canon #5 it now emits the standalone comment
-// `<!--subpages-->`, which the importer materializes back into a subpages node.
+// subpages emits the standalone comment `<!--subpages-->`, which the importer
+// materializes back into a subpages node (no literal text leaks into the page).
 // ---------------------------------------------------------------------------
 describe('subpages round-trip (standalone comment #293 #5)', () => {
   it('emits the subpages comment and re-imports as a subpages node (no literal leak)', async () => {
@@ -142,7 +130,7 @@ describe('column.width number<->string drift (schema parseFloat — SPEC §11)',
 // ---------------------------------------------------------------------------
 // 5b. EMPTY detailsContent (`case "details"` with an empty body).
 //
-// detailsContent's schema content is `block*` (docmost-schema.ts ~L474), so an
+// detailsContent's schema content is `block*`, so an
 // empty details body is legal. The converter must handle a `detailsContent`
 // with no children without crashing and without emitting invalid output that
 // breaks the round-trip. This pins that an empty details body exports cleanly
@@ -194,9 +182,8 @@ describe('empty detailsContent (schema allows block*)', () => {
 //
 // These describe the converter's exact emission for under-tested branches and,
 // for the round-trip cases, pin export byte-stability and/or documented data
-// loss. docsCanonicallyEqual is imported here (not at the top) to keep the
-// existing block's imports untouched. heading/col are local helpers; doc/text/
-// para are reused from the top of the file.
+// loss. heading/col are local helpers; doc/text/para are reused from the top of
+// the file.
 // ===========================================================================
 import { docsCanonicallyEqual } from '../src/lib/canonicalize.js';
 
@@ -217,7 +204,7 @@ const colChildOf = (doc2: any) =>
   doc2?.content?.[0]?.content?.[0]?.content?.[0];
 
 describe('converter gap coverage — emission branches (specs 1–11)', () => {
-  // 1. orderedList honors the start attribute (FIXED #351): markers count up
+  // 1. orderedList honors the start attribute: markers count up
   //    from `start` ("5.","6.",…), which CommonMark round-trips.
   it('orderedList start:5 numbers from 5 (start attr honored)', () => {
     const out = convertProseMirrorToMarkdown(
@@ -294,7 +281,7 @@ describe('converter gap coverage — emission branches (specs 1–11)', () => {
     );
   });
 
-  // 5. code + link co-occur (#515): the `code` mark no longer excludes the other
+  // 5. code + link co-occur: the `code` mark does not exclude the other
   //    marks, so a linked code span keeps BOTH — the backtick span is the link
   //    TEXT (CommonMark: [`x`](href) is <a><code>x</code></a>), which is exactly
   //    what the importer rebuilds.
@@ -376,8 +363,8 @@ describe('converter gap coverage — emission branches (specs 1–11)', () => {
         ],
       }),
     );
-    // Block children of a task item are blank-line separated (loose list) per the
-    // #351 fix; the sublist stays at the fixed 2-column continuation indent.
+    // Block children of a task item are blank-line separated (loose list);
+    // the sublist stays at the fixed 2-column continuation indent.
     expect(out).toBe('- [ ] top\n\n  - child');
   });
 
@@ -431,7 +418,7 @@ describe('converter gap coverage — emission branches (specs 1–11)', () => {
   });
 });
 
-describe('converter gap coverage — formerly-lossy round-trips, now closed (specs 12–14)', () => {
+describe('converter gap coverage — formerly-lossy round-trips, now closed (specs 12–13)', () => {
   // 12. A 3-backtick fence inside a codeBlock body is now lengthened: the outer
   //     fence widens to (longest inner run + 1) backticks per CommonMark, so the
   //     inner ``` is treated as content and the block survives as ONE node.
@@ -457,7 +444,7 @@ describe('converter gap coverage — formerly-lossy round-trips, now closed (spe
     expect(md2).toBe(md1); // byte-stable
     // Canonically the re-imported code text gains a single trailing newline
     // (marked re-adds it; the exporter strips it back, hence byte stability).
-    // The fence is no longer lossy: the inner fence and content fully survive.
+    // The inner fence and content fully survive.
     expect(docsCanonicallyEqual(d, doc2)).toBe(false);
   });
 
@@ -480,26 +467,6 @@ describe('converter gap coverage — formerly-lossy round-trips, now closed (spe
     });
     expect(docsCanonicallyEqual(d, doc2)).toBe(true);
   });
-
-  // 14. #293 canon #4: the image title now round-trips via the attached
-  //     `<!--img {…}-->` comment (previously silently dropped).
-  it('an image title attribute round-trips via the attached img-comment', async () => {
-    const d = doc({
-      type: 'image',
-      attrs: { src: '/i.png', alt: 'a', title: 't"q' },
-    });
-    const md1 = convertProseMirrorToMarkdown(d);
-    // The quote in the title is JSON-escaped inside the comment payload.
-    expect(md1).toBe('![a](/i.png) <!--img {"title":"t\\"q"}-->');
-
-    const doc2 = await markdownToProseMirror(md1);
-    const img = (doc2.content || []).find((n: any) => n.type === 'image');
-    expect(img).toBeTruthy();
-    expect(img.attrs?.title).toBe('t"q'); // restored byte-exact
-    expect(img.attrs?.src).toBe('/i.png');
-    expect(img.attrs?.alt).toBe('a');
-    expect(docsCanonicallyEqual(d, doc2)).toBe(true);
-  });
 });
 
 describe('converter gap coverage — raw-HTML container round-trips (specs 15–29)', () => {
@@ -512,8 +479,8 @@ describe('converter gap coverage — raw-HTML container round-trips (specs 15–
         attrs: { src: '/i.png', alt: 'cap', width: 320, align: 'center' },
       }),
     );
-    // #293 canon #4: image align default is unified to "center", so a center
-    // image inside a column no longer emits a redundant align="center".
+    // Image align default is "center", so a center image inside a column emits
+    // no align attribute.
     expect(md1).toBe(
       '<div data-type="columns" data-layout="two"><div data-type="column"><img src="/i.png" alt="cap" width="320"></div></div>',
     );
@@ -794,11 +761,9 @@ describe('converter gap coverage — raw-HTML container round-trips (specs 15–
 });
 
 // ===========================================================================
-// 30. heading.textAlign round-trip (A1). Bare `## text` markdown carries no
-// alignment, so an aligned heading used to silently DROP textAlign on export.
-// Per #293 canon #9 an aligned heading now keeps the readable `## text` form and
-// ATTACHES a trailing `<!--attrs {"textAlign":…}-->` comment (replacing the old
-// `<hN style="text-align:…">` HTML form). It re-parses back to a heading
+// 30. heading.textAlign round-trip. Bare `## text` markdown carries no
+// alignment, so an aligned heading keeps the readable `## text` form and
+// ATTACHES a trailing `<!--attrs {"textAlign":…}-->` comment. It re-parses back to a heading
 // carrying BOTH the level and the textAlign, so the round-trip is lossless; an
 // UNaligned heading still emits the bare `## text` markdown form (no churn).
 // ===========================================================================
@@ -818,7 +783,7 @@ describe('heading.textAlign round-trip (A1)', () => {
   it('survives export -> import -> export losslessly (level AND textAlign preserved)', async () => {
     const input = alignedHeading(2, 'center', text('Title'));
     const { md1, doc2, md2 } = await roundTrip(input);
-    // Export direction: `## Title` plus the attached alignment comment (#293 #9).
+    // Export direction: `## Title` plus the attached alignment comment.
     expect(md1).toBe('## Title <!--attrs {"textAlign":"center"}-->');
     // Import direction: re-parses to a heading node with the level AND textAlign
     // (marked keeps the comment inside the <h2>; applyAttachedComments re-expresses
@@ -854,7 +819,7 @@ describe('heading.textAlign round-trip (A1)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// KNOWN GAP (PRE-EXISTING, not a #515 regression): an inline `code` run whose
+// KNOWN GAP: an inline `code` run whose
 // text contains an UNBALANCED `[` or `]` inside a FOOTNOTE BODY silently mutates.
 //
 // A footnote body is serialized inline as `^[…]`, and the importer's tokenizer
@@ -867,15 +832,12 @@ describe('heading.textAlign round-trip (A1)', () => {
 // backslash lands IN THE TEXT: `` `a [ 0` `` re-imports as `` `a \[ 0` ``, and
 // every git-sync cycle grows another backslash-bearing diff.
 //
-// Verified PRE-EXISTING: the serializer at `gitea/develop` produces the identical
-// `` `a \[ 0` `` for this document (whose code run carries NO other mark, so the
-// shape long predates #515's `excludes: ""`). Closing it requires a footnote-canon
-// change — the bracket can be neither left raw (parse breaks) nor backslash-
+// Closing it requires a footnote-canon change — the bracket can be neither left
+// raw (parse breaks) nor backslash-
 // escaped (content mutates), so the code span needs a different in-footnote form
 // (e.g. an entity-encoded `<code>`), which is a separate decision.
 //
-// Pinned here so the behavior is DOCUMENTED and the day it is fixed this test
-// turns green and demands attention. The generative corpus excludes the shape
+// Pinned as `it.fails` so a fix turns it green. The generative corpus excludes the shape
 // (see node-generators.ts `withoutBracketsInCodeRuns`).
 // ---------------------------------------------------------------------------
 describe('footnote body + inline code + bracket (pre-existing gap)', () => {

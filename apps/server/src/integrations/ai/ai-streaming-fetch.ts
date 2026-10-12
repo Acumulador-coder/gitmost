@@ -4,10 +4,10 @@ import { Agent } from 'undici';
  * Default SILENCE timeout for streaming AI calls (15 min). Generous, but FINITE.
  *
  * Node's global fetch (undici) defaults headersTimeout and bodyTimeout to
- * 300_000ms, which severed legitimate long agent turns mid-stream — surfacing as
- * "Lost connection to the AI provider" (#175): a late step with a huge context
- * pushes the model's time-to-first-token past 5 min, or a reasoning model pauses
- * >5 min between chunks. We do NOT disable the timeout (0) — that would let a
+ * 300_000ms, which severs legitimate long agent turns mid-stream ("Lost
+ * connection to the AI provider"): a late step with a huge context can push
+ * time-to-first-token past 5 min, or a reasoning model can pause >5 min between
+ * chunks. We do NOT disable the timeout (0) — that would let a
  * genuinely hung provider, with the client still connected, hang forever
  * (abortSignal only fires on client disconnect). Instead we raise it well above
  * any realistic gap while keeping it finite so a true hang is eventually broken.
@@ -26,13 +26,13 @@ const DEFAULT_STREAM_TIMEOUT_MS = 900_000;
  * call per step; a crawl/search tool runs in between). A NAT / reverse proxy /
  * conntrack in front of the deployment silently drops an idle connection after
  * its own timeout; undici, not knowing, then reuses that dead socket and the
- * next request fails PRE-RESPONSE with `read ECONNRESET` (#175 prod telemetry:
- * the resets correlate with idleSincePrevCall ~42s, while a direct path to the
- * provider does NOT reset). Recycling idle sockets well below such a drop window
+ * next request fails PRE-RESPONSE with `read ECONNRESET` (measured: the resets
+ * correlate with idleSincePrevCall ~42s; a direct path to the provider does not
+ * reset). Recycling idle sockets well below such a drop window
  * means a long-gap call opens a fresh connection instead of reusing a stale one.
  * Kept comfortably under common ~5s upstream/middlebox idle cutoffs so undici
  * recycles the socket before the network kills it, while still long enough to
- * reuse a connection within a single burst of back-to-back calls (#310).
+ * reuse a connection within a single burst of back-to-back calls.
  * `keepAliveMaxTimeout` also caps a server-advertised keep-alive so the provider
  * cannot push the reuse window back up.
  */
@@ -44,9 +44,8 @@ const DEFAULT_STREAM_KEEPALIVE_MS = 4_000;
  * `fetch()` only rejects before the Response resolves — a started stream is
  * never replayed.
  *
- * Raised from 2 to 4 (total 5 attempts) so a short BURST of upstream/middlebox
- * resets is absorbed without exhausting the budget: prod saw 2 of 3 attempts
- * burned on a single turn, leaving no headroom (#310). Override with
+ * 4 retries (5 attempts) absorb a short BURST of upstream/middlebox resets;
+ * 2 of 3 attempts have been seen burned on a single turn. Override with
  * `AI_STREAM_PRE_RESPONSE_RETRIES`.
  */
 const DEFAULT_PRE_RESPONSE_CONNECT_RETRIES = 4;
@@ -83,7 +82,7 @@ const PRE_RESPONSE_BACKOFF_CAP_MS = 2_000;
  * Capped exponential with FULL jitter: `delay = random in [0, min(base*2^attempt,
  * cap)]`. Full jitter spreads concurrent retries across the whole window so a
  * burst of turns that all reset at once do not reconnect in lock-step and
- * hammer the upstream in a thundering herd (#310); the exponential growth backs
+ * hammer the upstream in a thundering herd; the exponential growth backs
  * off harder as resets persist, and the cap keeps the wait bounded.
  */
 export function preResponseBackoffMs(
@@ -144,7 +143,7 @@ const DEFAULT_MCP_SSE_BODY_TIMEOUT_MS = 600_000;
  * so a byte-silent/hung MCP upstream is broken in ~1 min instead of 15. This is
  * the undici `headersTimeout`/`bodyTimeout` for the external-MCP dispatcher only
  * — it must NOT change the chat provider, which legitimately needs 15 min between
- * reasoning chunks (#175).
+ * reasoning chunks.
  *
  * Trade-off: a legitimately long but byte-silent single tool call (a slow crawl
  * that emits nothing until done) and an SSE transport that idles >5 min BETWEEN
@@ -171,7 +170,7 @@ export function mcpCallTimeoutMs(): number {
 }
 
 /**
- * `bodyTimeout` (ms) for the EXTERNAL-MCP **SSE** transport ONLY — #489. Override
+ * `bodyTimeout` (ms) for the EXTERNAL-MCP **SSE** transport ONLY. Override
  * with `AI_MCP_SSE_BODY_TIMEOUT_MS`; a missing/invalid/non-positive value falls
  * back to {@link DEFAULT_MCP_SSE_BODY_TIMEOUT_MS} (10 min).
  *
@@ -221,7 +220,7 @@ export function isRetryableConnectError(err: unknown): boolean {
 /**
  * Build a `fetch` for long-lived streaming AI calls (the agent chat turn) backed
  * by a dedicated undici dispatcher (finite silence timeouts + keep-alive
- * recycling, #175). A single shared dispatcher is returned (callers hold it for
+ * recycling). A single shared dispatcher is returned (callers hold it for
  * the service lifetime) so its connection pool is reused.
  *
  * This is the BASE transport — no retry. The chat path wraps it as
@@ -243,7 +242,7 @@ export function createStreamingFetch(): typeof fetch {
 /**
  * Wrap a fetch so a PRE-RESPONSE connection reset (`baseFetch` rejects before the
  * Response resolves — so nothing has streamed) is retried a few times on a fresh
- * connection (#175). A poisoned keep-alive socket is destroyed by undici on the
+ * connection. A poisoned keep-alive socket is destroyed by undici on the
  * reset, so the retry lands on a new connection. An abort (client disconnect) is
  * never retried.
  *
@@ -251,7 +250,7 @@ export function createStreamingFetch(): typeof fetch {
  * `withPreResponseRetry(instrumentedFetch)` means every attempt — including the
  * resets that the retry recovers from — flows through the instrumentation, so the
  * "PRE-RESPONSE FAILED ... ECONNRESET ... idleSincePrevCall" telemetry stays
- * visible precisely when the fix is working (and AI_STREAM_KEEPALIVE_MS can be
+ * visible even when the retry recovers (and AI_STREAM_KEEPALIVE_MS can be
  * tuned from real data). A retry INSIDE the transport would hide it.
  */
 export function withPreResponseRetry(baseFetch: typeof fetch): typeof fetch {

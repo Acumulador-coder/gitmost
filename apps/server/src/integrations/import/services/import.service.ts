@@ -98,13 +98,11 @@ export class ImportService {
 
     const extracted = this.extractTitleAndRemoveHeading(prosemirrorState);
     const title = extracted.title;
-    // The markdown path now canonicalizes footnotes itself (the package parser),
-    // but the HTML path (processHTML -> htmlToJson) does NOT run the editor's
-    // footnoteSyncPlugin, so an imported HTML doc can keep its source's PHYSICAL
-    // definition order (out of order vs. references), retain orphan definitions,
-    // and not be deduped. Canonicalize before persisting so the stored page
-    // matches the editor's invariant (issue #228); it is an idempotent no-op on
-    // the already-canonical markdown output.
+    // The HTML path (processHTML -> htmlToJson) does NOT run the editor's
+    // footnoteSyncPlugin, so an imported HTML doc can keep its source's physical
+    // definition order, orphan definitions and duplicates. Canonicalize before
+    // persisting so the stored page matches the editor's invariant; it is an
+    // idempotent no-op on the already-canonical markdown output.
     // Pure + idempotent + shape-safe: a doc with no footnotes is unchanged.
     // (Future consolidation, architecture B: this import path persists directly
     // via pageRepo.insertPage rather than through PageService.createPage, so the
@@ -154,7 +152,7 @@ export class ImportService {
     disableMarkdownExtensions = false,
   ): Promise<any> {
     // Canonical markdown -> ProseMirror JSON directly via
-    // `@docmost/prosemirror-markdown` (issue #345) — no HTML intermediate and no
+    // `@docmost/prosemirror-markdown` — no HTML intermediate and no
     // second editor-ext markdown layer. Foreign markdown surfaces the strict
     // canonical parser does not accept (GFM `[^id]` reference footnotes) are
     // rewritten to the canonical inline form by `normalizeForeignMarkdown` first.

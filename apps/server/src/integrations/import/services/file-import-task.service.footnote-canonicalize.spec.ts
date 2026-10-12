@@ -46,7 +46,7 @@ import { ImportService } from './import.service';
  * footnotes before persisting: ordered by first reference, reused refs deduped,
  * orphan definitions dropped.
  *
- * Since #345 the `.md` parse runs `normalizeForeignMarkdown` ->
+ * The `.md` parse runs `normalizeForeignMarkdown` ->
  * `markdownToProseMirror` -> `jsonToHtml` (feeding the shared HTML attachment /
  * link pipeline) -> `processHTML` -> `canonicalizeFootnotes`. The parser assigns
  * fresh `fn-*` ids, so we assert by definition BODY order rather than the source

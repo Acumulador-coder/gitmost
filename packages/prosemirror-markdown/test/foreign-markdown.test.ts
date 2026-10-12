@@ -7,9 +7,8 @@ import {
 } from '../src/lib/foreign-markdown.js';
 
 /**
- * STEP 2 goldens for issue #345 (moved into the package with the normalizer in
- * #493): the foreign-markdown normalizer that runs at the import boundary BEFORE
- * the strict canonical parser (`markdownToProseMirror`).
+ * Goldens for the foreign-markdown normalizer that runs at the import boundary
+ * BEFORE the strict canonical parser (`markdownToProseMirror`).
  *
  * Two layers:
  *  1. PURE string→string cases pinning the normalizer's own behavior (GFM

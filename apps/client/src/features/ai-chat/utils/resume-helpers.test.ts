@@ -141,9 +141,9 @@ describe("mergeDeltaRowsIntoPages", () => {
     expect(input[0].items).toEqual(before); // untouched
   });
 
-  // #491 CONTRACT: the delta overlap window re-delivers the same rows, so merging
-  // MUST be idempotent — applying a delta twice equals applying it once (no growth,
-  // no reorder). A regression re-introduces duplicate assistant bubbles per poll.
+  // The delta overlap window re-delivers the same rows, so merging MUST be
+  // idempotent — applying a delta twice equals applying it once (no growth, no
+  // reorder); otherwise each poll duplicates assistant bubbles.
   it("is idempotent: applying the same delta twice equals once", () => {
     const delta = [
       row("a1", "assistant", "streaming", 2), // grown existing row
@@ -190,11 +190,10 @@ describe("mergeById", () => {
     expect(mergeById(prev, undefined)).toBe(prev);
   });
 
-  // #491 CONTRACT: the delta poll's overlap window GUARANTEES the same row is
-  // re-delivered across close polls, so merging must be IDEMPOTENT by id — merging
-  // the same row (or an equal-length list of rows) twice must not duplicate or
-  // reorder. This is the property the whole delta-poll design leans on; a
-  // regression here would re-introduce duplicate assistant bubbles on every poll.
+  // The delta poll's overlap window GUARANTEES the same row is re-delivered across
+  // close polls, so merging must be IDEMPOTENT by id — merging the same row (or an
+  // equal-length list of rows) twice must not duplicate or reorder. The whole
+  // delta-poll design leans on this property.
   it("is idempotent by id: re-merging the same row does not duplicate or reorder", () => {
     const seed = [makeMsg("u1", "hi"), makeMsg("a1", "step 1")];
     const repeat = makeMsg("a1", "step 1"); // the SAME row the overlap re-delivers

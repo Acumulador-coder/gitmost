@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { pathToFileURL } from 'node:url';
+import { esmImport } from '../../common/helpers/esm-import';
 import { IncomingMessage } from 'node:http';
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { WorkspaceRepo } from '@docmost/db/repos/workspace/workspace.repo';
@@ -60,34 +61,27 @@ interface McpHttpModule {
 // failure return a clean 401 JSON instead of tearing a hijacked response.
 const MCP_RESOLVED = Symbol('mcpResolvedConfig');
 
-// One-time-per-process latch for the legacy-auth migration warning. The shared
-// MCP token used to be sent as `Authorization: Bearer <MCP_TOKEN>`; it now lives
-// in its own `X-MCP-Token` header. When we still see the old style we log ONCE
-// (never the token value) so operators can migrate without log spam.
+// One-time-per-process latch for the legacy-auth warning: a shared MCP token sent
+// as `Authorization: Bearer <MCP_TOKEN>` instead of the `X-MCP-Token` header is
+// logged ONCE (never the token value).
 let warnedLegacyMcpAuth = false;
 
-// TS with module:commonjs downlevels a literal import() to require(), which
-// cannot load the ESM-only @docmost/mcp package. Indirect through Function so
-// the real dynamic import() survives compilation and can load ESM from
-// CommonJS at runtime.
-const esmImport = new Function('specifier', 'return import(specifier)') as (
-  specifier: string,
-) => Promise<unknown>;
+// The CJS->ESM dynamic-import bridge lives in one shared helper
+// (common/helpers/esm-import.ts); see it for why import() must be hidden from the
+// TS commonjs downleveler.
 
 /**
  * Route ONE dependency-neutral metric sample emitted by the @docmost/mcp package
- * onto this app's prom-client registry (#402, #479, #613).
+ * onto this app's prom-client registry.
  *
  * This is the ONLY place the package's generic (name, value, labels) names are
  * mapped to instruments, and it is a CLOSED mapping: a name with no branch here
- * is DISCARDED and never reaches /metrics. So every new sample the package emits
- * MUST get a branch here (that omission is exactly what this function was
- * extracted for — it makes the mapping unit-testable without instantiating the
- * Nest graph). `labels?.tool` is guarded defensively; the package's tool wrapper
- * always sets it.
+ * is DISCARDED and never reaches /metrics, so every new sample the package emits
+ * MUST get a branch here. `labels?.tool` is guarded defensively; the package's
+ * tool wrapper always sets it.
  *
- * Exported (not inlined in the onMetric closure) so mcp.service.spec can assert
- * the mapping directly. The isMetricsEnabled() gate stays at the CALL site: when
+ * Exported so mcp.service.spec can assert the mapping without the Nest graph.
+ * The isMetricsEnabled() gate stays at the CALL site: when
  * metrics are off, onMetric is undefined and the package skips even building the
  * label object.
  */
@@ -150,7 +144,7 @@ export class McpService implements OnModuleDestroy {
   }
 
   /**
-   * Resolve @docmost/mcp's `destroyAllSessions` and invoke it (#486). The live
+   * Resolve @docmost/mcp's `destroyAllSessions` and invoke it. The live
    * CollabSession registry is a module-level singleton in the ESM package, shared
    * by every entry (`.`/`./http`), so this tears down ALL sessions regardless of
    * which surface opened them. The module is already loaded whenever MCP was used;
@@ -276,14 +270,9 @@ export class McpService implements OnModuleDestroy {
             // can store blobs in the shared in-RAM store regardless of which
             // credential variant resolved. The sink (put/has/evict + uri↔id
             // mapping) is owned by SandboxStore.asSink().
-            // Route the package's dependency-neutral metric samples onto the
-            // prom-client registry (the closed mapping lives in routeMcpMetric,
-            // above). When metrics are disabled, onMetric is undefined → the
-            // package's tool-timer/timeout hooks are a negligible-overhead
-            // no-op: the registerTool wrapper still runs a performance.now() +
-            // async try/finally per tool call, but the `onMetric?.()`
-            // short-circuits so no label/object is built. (Cost is immaterial at
-            // LLM tool-call rate.)
+            // Route the package's metric samples onto the prom-client registry
+            // (closed mapping in routeMcpMetric). When metrics are disabled,
+            // onMetric is undefined and `onMetric?.()` builds no labels.
             return {
               ...resolved.config,
               sandbox: this.sandboxStore.asSink(),
@@ -374,17 +363,11 @@ export class McpService implements OnModuleDestroy {
       }
     }
 
-    // RFC 6750 §3.1 — "if the request lacks any authentication information ... the
-    // resource server SHOULD NOT include an error code". `error="invalid_token"` on
-    // a request that sent NO credential (the common `claude mcp add` without
-    // --header) would tell the client its token is bad when it never sent one.
-    //
-    // The two credentials are tracked SEPARATELY because the two 401 branches
-    // challenge different ones: the shared-token 401 is about `X-MCP-Token`, the
-    // api_key 401 about `Authorization`. Collapsing them into one flag would make a
-    // request that sent only the api_key draw an `error="invalid_token"` about an
-    // X-MCP-Token it never sent (and vice versa). isCredentialHeaderPresent also
-    // reads a present-but-empty header as "no credential".
+    // RFC 6750 §3.1: a request that lacks any authentication information (e.g.
+    // `claude mcp add` without --header) gets no error code. The two credentials
+    // are tracked SEPARATELY because the two 401 branches challenge different ones:
+    // the shared-token 401 is about `X-MCP-Token`, the api_key 401 about
+    // `Authorization`.
     const bearerPresented = isCredentialHeaderPresent(
       req.headers['authorization'],
     );

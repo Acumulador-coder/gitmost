@@ -40,7 +40,6 @@ import { useSetAtom, useStore } from "jotai";
 import { treeDataAtom } from "@/features/page/tree/atoms/tree-data-atom";
 import { writePageMetaAtom } from "@/features/page/atoms/page-meta-cache-atom";
 import { clearPageTombstoneOnAccess } from "@/features/editor/page-ydoc-eviction";
-import { isLocalFirstEnabled } from "@/lib/config";
 import { treeModel } from "@/features/page/tree/model/tree-model";
 import { SpaceTreeNode } from "@/features/page/tree/types";
 import { useQueryEmit } from "@/features/websocket/use-query-emit";
@@ -54,20 +53,27 @@ export function usePageQuery(
     queryKey: ["pages", pageInput.pageId],
     queryFn: () => getPageById(pageInput),
     enabled: !!pageInput.pageId,
-    staleTime: 5 * 60 * 1000,
+    // Always stale (see the #563 note below): cached data still renders at
+    // once, but every open of the page revalidates it in the background.
+    staleTime: 0,
     // Keep the previously-loaded page visible while navigating to a new one
     // instead of flashing a blank/skeleton frame (the new page's content
     // streams in when ready). isLoading stays true only for the very first load.
     placeholderData: keepPreviousData,
     // #563 — FORCED reconciliation of the page-meta boot cache. This query feeds
-    // the localStorage cache the chrome paints from, so it must revalidate on
-    // EVERY mount: the global defaults (refetchOnMount:false + staleTime 5min,
-    // main.tsx) would otherwise suppress the refetch inside a 5-minute window,
-    // and a page renamed / deleted / access-revoked less than 5 minutes ago
-    // would keep showing stale chrome with nothing ever correcting it. The
-    // refetch is a background one (cached data stays on screen), and it is gated
-    // on the flag so a flag-off deployment behaves exactly as it does today.
-    refetchOnMount: isLocalFirstEnabled() ? "always" : false,
+    // the localStorage cache the chrome paints from, so EVERY open of a page —
+    // a mount OR a switch of this observer to the page's key (in-app A -> B -> A
+    // navigation keeps <Page /> mounted and only changes the key) — must
+    // revalidate it. The global defaults (refetchOnMount:false + staleTime 5min,
+    // main.tsx) would otherwise suppress the refetch inside a 5-minute window:
+    // `refetchOnMount: "always"` covers the mount, and `staleTime: 0` covers the
+    // key switch (TanStack Query fetches on a key change only when the data is
+    // stale). Without both, a page renamed / deleted / access-revoked less than
+    // 5 minutes ago would keep showing stale chrome with nothing ever correcting
+    // it, and the page view's edit rights — granted only after THIS view's own
+    // fetch (page.tsx, CL-4) — would never arrive for a recently-seen page. The
+    // refetch is a background one (cached data stays on screen).
+    refetchOnMount: "always",
   });
 
   useEffect(() => {
@@ -77,8 +83,8 @@ export function usePageQuery(
       } else {
         queryClient.setQueryData(["pages", query.data.id], query.data);
       }
-      // Write-through to the boot cache (no-op when the flag is off or the user
-      // is not resolved yet). Reconciliation: the freshly fetched page always
+      // Write-through to the boot cache (no-op while the user is not resolved
+      // yet). Reconciliation: the freshly fetched page always
       // overwrites the cached entry, so a server-side rename/icon/permission
       // change lands in the cache the moment it arrives.
       store.set(writePageMetaAtom, query.data);
@@ -103,7 +109,7 @@ function selectPageMeta(page: IPage): IPageMeta {
   // Drop `content`; react-query's structural sharing (replaceEqualDeep) then
   // returns the SAME reference whenever the remaining fields are unchanged, so a
   // pure content churn (typing / debouncedUpdateContent, collab `page.updated`)
-  // no longer changes this slice's identity and its ~13 subscribers don't
+  // does not change this slice's identity and its ~13 subscribers don't
   // re-render on every keystroke wave.
   const { content: _content, ...meta } = page;
   return meta as IPageMeta;
@@ -618,15 +624,14 @@ export function invalidateOnUpdatePage(
   title: string,
   icon: string,
 ) {
-  // Scoped page-tree refresh (was a blanket `invalidatePageTree()`): this is the
-  // FIELD-only update path (title/icon — no structural change), and the sidebar
-  // tree is already updated pointwise (applyUpdateOne / optimistic setData) plus
-  // via the sidebar-pages cache below. Invalidating ALL ["page-tree"] queries
-  // here refetched every open recursive subpages-embed block on each
-  // rename/icon-change — pure duplicate work. Instead patch just the affected
+  // Scoped page-tree refresh: this is the FIELD-only update path (title/icon —
+  // no structural change), and the sidebar tree is already updated pointwise
+  // (applyUpdateOne / optimistic setData) plus via the sidebar-pages cache below.
+  // Invalidating ALL ["page-tree"] queries would refetch every open recursive
+  // subpages-embed block on each rename/icon-change, so patch just the affected
   // node IN PLACE in every cached embed subtree: same visible result, no network
-  // churn, no full embed-tree rebuild. Structural events (create/move/delete)
-  // keep the blanket invalidate in their own helpers.
+  // churn. Structural events (create/move/delete) keep the blanket invalidate in
+  // their own helpers.
   const pageTreeMatches = queryClient.getQueriesData<IPage[]>({
     queryKey: ["page-tree"],
   });

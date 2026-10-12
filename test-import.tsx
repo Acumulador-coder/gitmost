@@ -1,5 +1,4 @@
-// Diagnostic / reproduction script for the /pages/import 400 regression
-// (see docs/backlog/pages-import-broken-400.md).
+// Diagnostic / reproduction script for a /pages/import 400.
 //
 // Run from repo root:  npx tsx test-import.tsx
 //

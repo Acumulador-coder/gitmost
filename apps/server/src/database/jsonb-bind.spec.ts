@@ -6,7 +6,7 @@ import { jsonbBind } from './utils';
  * of defence before a jsonb column write, so the null-vs-bind decision is what
  * matters here. We assert only null vs non-null because the non-null value is a
  * kysely `sql` template fragment whose internal shape is an implementation
- * detail of the SQL tag (the `::text::jsonb` double-encoding fix is verified
+ * detail of the SQL tag (the `::text::jsonb` encoding is verified
  * end-to-end by the repo integration specs, where a real DB round-trip can
  * actually observe `jsonb_typeof`).
  */

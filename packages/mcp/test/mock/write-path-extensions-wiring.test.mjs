@@ -1,11 +1,11 @@
-// #502 caller-WIRING: end-to-end through a live Hocuspocus collab stack (same
+// Caller WIRING: end-to-end through a live Hocuspocus collab stack (same
 // harness style as markdown-patch-insert), driving the REAL client methods and
 // reading the persisted document back, so the test proves each write tool passes
 // the RIGHT importer options — not just that the shared wrapper can:
 //   - updatePageMarkdown (client.updatePage)      -> extensions OFF  (`$…$` literal, www not linked)
-//   - import_page_markdown (client.importPageMarkdown) -> DEFAULTS   (`$x^2$` -> math node, #328)
-// Mutating either caller's option flips the matching assertion (see the coder's
-// mutation note), so this file guards the wiring, not only the wrapper.
+//   - import_page_markdown (client.importPageMarkdown) -> DEFAULTS   (`$x^2$` -> math node)
+// Mutating either caller's option flips the matching assertion, so this file
+// guards the wiring, not only the wrapper.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

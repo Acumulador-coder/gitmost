@@ -295,9 +295,9 @@ export function useAiRoleCatalogBundleQuery(
 
 /**
  * Eagerly open EVERY listed bundle's content in parallel for one language. The
- * redesigned catalog shows each bundle's status summary in its COLLAPSED header,
- * which needs every role's install state up front — so contents can no longer be
- * lazy-loaded on expand. The catalog is small, so a fan-out of `useQueries` (one
+ * catalog shows each bundle's status summary in its COLLAPSED header, which
+ * needs every role's install state up front, so contents cannot be lazy-loaded
+ * on expand. The catalog is small, so a fan-out of `useQueries` (one
  * cached read per bundle, sharing the same cache keys as
  * `useAiRoleCatalogBundleQuery`) is cheap. Gated by `enabled` (modal open + a
  * resolved language) so nothing fetches while the modal is closed.

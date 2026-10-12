@@ -2,11 +2,10 @@ import { injectTrackerHead } from './inject-tracker-head.util';
 
 // Pins the public-share trackerHead injection invariant (ShareSeoController).
 // The admin snippet is trusted content and MUST land byte-for-byte before the
-// first </head>. The critical regression these tests guard is the function vs
-// string replacer: a string replacement interprets `$&`/`$$`/`` $` ``/`$'`
-// inside the snippet as substitution patterns and mangles the tracker. The
-// byte-for-byte test below FAILS on the old string-replacer implementation and
-// passes only with the function replacer.
+// first </head>. The critical case is the function vs string replacer: a string
+// replacement interprets `$&`/`$$`/`` $` ``/`$'` inside the snippet as
+// substitution patterns and mangles the tracker; the byte-for-byte test below
+// passes only with a function replacer.
 
 const HTML = '<html><head><title>t</title></head><body>b</body></html>';
 

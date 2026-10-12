@@ -364,7 +364,7 @@ export function noteItem(inlineNodes: any[]): any {
 /**
  * Wrap inline ProseMirror nodes in a real footnoteDefinition node keyed by id:
  *   { type:"footnoteDefinition", attrs:{id}, content:[{ type:"paragraph", content }] }
- * (mirrors the editor-ext / docmost-schema FootnoteDefinition node).
+ * (the shape of the editor-ext FootnoteDefinition node).
  *
  * Built on the shared `makeFootnoteDefinition` factory (`@docmost/prosemirror-markdown`);
  * the only extra is a fresh block id on the inner paragraph (Docmost stamps one,
@@ -685,7 +685,7 @@ export interface InsertInlineFootnoteResult {
  * assigns a number, and cannot desync — orphans / out-of-order lists / raw
  * `[^id]` markdown are structurally impossible.
  *
- * Content DEDUP (#3 in the issue): if an existing definition has the SAME
+ * Content DEDUP: if an existing definition has the SAME
  * normalized content key, its id is REUSED (the new reference points at it: one
  * number, one definition, several references). Otherwise a fresh uuid id is
  * minted and a new definition added. Conservative — only an exact content match

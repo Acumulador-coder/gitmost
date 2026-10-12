@@ -68,9 +68,8 @@ export interface AiProviderSettings {
  *
  * The settings service consumes this directly. The generic workspace repo cannot
  * import AI types, so it keeps its own copy of the same keys, guarded by a parity
- * test against this constant (so any future drift fails in CI, not silently in
- * prod — a missing key there validates fine, passes the service, and is then
- * dropped at the SQL boundary with no error).
+ * test against this constant (a key missing there validates fine, passes the
+ * service, and is then dropped at the SQL boundary with no error).
  */
 export const PROVIDER_SETTINGS_KEYS = [
   'driver',

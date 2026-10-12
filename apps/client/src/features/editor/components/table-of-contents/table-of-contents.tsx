@@ -86,11 +86,9 @@ export const TableOfContents: FC<TableOfContentsProps> = (props) => {
   };
 
   // Debounce the update-driven rescan: `$nodes("heading")` scans every heading
-  // in the document, and it previously ran on EVERY keystroke while the TOC
-  // panel was open. The panel is derived UI, so recomputing ~300ms after typing
-  // settles keeps it correct without doing an all-headings scan per keystroke
-  // (#343, PART 7). `useDebouncedCallback` returns a stable reference and always
-  // invokes the latest `handleUpdate`.
+  // in the document, so recomputing ~300ms after typing settles keeps the TOC
+  // correct without an all-headings scan per keystroke. `useDebouncedCallback`
+  // returns a stable reference and always invokes the latest `handleUpdate`.
   const debouncedHandleUpdate = useDebouncedCallback(handleUpdate, 300);
 
   useEffect(() => {

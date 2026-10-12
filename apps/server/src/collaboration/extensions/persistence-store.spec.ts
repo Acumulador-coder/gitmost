@@ -125,6 +125,7 @@ describe('PersistenceExtension.onStoreDocument — Approach-A boundary snapshot'
       notificationQueue as any,
       collabHistory as any,
       transclusionService as any,
+      { isGitSyncEnabled: () => true } as any, // environmentService
     );
     jest.spyOn(ext['logger'], 'debug').mockImplementation(() => undefined);
     jest.spyOn(ext['logger'], 'warn').mockImplementation(() => undefined);
@@ -181,9 +182,7 @@ describe('PersistenceExtension.onStoreDocument — Approach-A boundary snapshot'
     expect(pageRepo.updatePage.mock.calls[0][0].lastUpdatedSource).toBe('user');
   });
 
-  // #370 review round-1 SUGGESTION: the boundary was GENERALIZED from a
-  // user→agent special-case to ANY lastUpdatedSource transition. These pin the
-  // generalized behaviour it was rebuilt for.
+  // The boundary snapshot fires on ANY lastUpdatedSource transition.
   describe('generalized boundary — any source transition', () => {
     // Same persisted page but with an explicit prior source.
     const pageWithPriorSource = (prior: string | null) => ({
@@ -305,12 +304,54 @@ describe('PersistenceExtension.onStoreDocument — Approach-A boundary snapshot'
     expect(pageRepo.updatePage).toHaveBeenCalledTimes(1);
   });
 
-  // #251 — REAL-PATH regression test. The intentional-clear signal is set via
-  // the actual transport seam (ext.onStateless with the exact stateless payload
-  // the client's IntentionalClear extension sends), NOT a hand-injected
-  // context.intentionalClear poke. We then run the debounced store with an empty
-  // live doc over non-empty persisted content and assert the empty write goes
-  // through — i.e. the clear persists.
+  // A git-sync store may clear a page ONLY with the explicit
+  // `gitSyncIntentionalClear` context flag (set by gitSyncWriteBody when git's
+  // body is empty and a non-empty base proves the file was cleared). The
+  // 'git-sync' actor alone must not let an empty merge result wipe the page.
+  it('does NOT let a git-sync store without the clear flag overwrite non-empty content with an empty doc', async () => {
+    const document = ydocFor({ type: 'doc', content: [{ type: 'paragraph' }] });
+    pageRepo.findById.mockResolvedValue({
+      ...persistedHumanPage('IGNORED'),
+      content: doc('IMPORTANT RICH CONTENT'),
+    });
+
+    await ext.onStoreDocument({
+      documentName: `page.${PAGE_ID}`,
+      document,
+      context: { user: { id: 'svc-user' }, actor: 'git-sync' },
+    } as any);
+
+    expect(pageRepo.updatePage).not.toHaveBeenCalled();
+  });
+
+  it('persists a git-sync clear WITH the flag, for that one store only (the disconnect store is guarded)', async () => {
+    const document = ydocFor({ type: 'doc', content: [{ type: 'paragraph' }] });
+    pageRepo.findById.mockResolvedValue({
+      ...persistedHumanPage('IGNORED'),
+      content: doc('IMPORTANT RICH CONTENT'),
+    });
+    // One direct connection's context, shared by its transact and disconnect stores.
+    const context = {
+      user: { id: 'svc-user' },
+      actor: 'git-sync',
+      gitSyncIntentionalClear: true,
+    };
+    const data = { documentName: `page.${PAGE_ID}`, document, context };
+
+    await ext.onStoreDocument(data as any);
+    expect(pageRepo.updatePage).toHaveBeenCalledTimes(1);
+    expect(pageRepo.updatePage.mock.calls[0][0].content).toEqual(
+      TiptapTransformer.fromYdoc(document, 'default'),
+    );
+
+    await ext.onStoreDocument(data as any);
+    expect(pageRepo.updatePage).toHaveBeenCalledTimes(1);
+  });
+
+  // The intentional-clear signal is set via the real transport seam
+  // (ext.onStateless with the exact payload the client's IntentionalClear
+  // extension sends). The debounced store then runs with an empty live doc over
+  // non-empty persisted content, and the empty write must go through.
   it('persists an intentional clear signalled via the real stateless transport (#251)', async () => {
     const documentName = `page.${PAGE_ID}`;
     const emptyDoc = { type: 'doc', content: [{ type: 'paragraph' }] };
@@ -338,15 +379,10 @@ describe('PersistenceExtension.onStoreDocument — Approach-A boundary snapshot'
     expect(pageRepo.updatePage.mock.calls[0][0].content).toEqual(expectedEmpty);
   });
 
-  // #251 — retry correctness: a transient DB failure on the FIRST attempt must
-  // not silently drop the clear. The intentional-clear flag is consumed ONCE
-  // before the retry loop, so when attempt 1's updatePage throws (tx rolls back,
-  // but the in-memory flag delete cannot roll back) the retry on attempt 2 still
-  // sees the clear as allowed and writes the empty doc. On the pre-fix code
-  // (consumeIntentionalClear called INSIDE the loop) attempt 1 consumed the flag,
-  // attempt 2 re-read it as absent and the empty-guard BLOCKED the write — so
-  // updatePage would be called once and the clear would be lost. This test fails
-  // on that ordering and passes after the hoist.
+  // A transient DB failure on the FIRST attempt must not drop the clear: the
+  // intentional-clear flag is consumed once before the retry loop, so when
+  // attempt 1's updatePage throws (the tx rolls back, the in-memory flag delete
+  // does not) attempt 2 still sees the clear as allowed and writes the empty doc.
   it('persists an intentional clear even when the first store attempt fails transiently (#251)', async () => {
     const documentName = `page.${PAGE_ID}`;
     const emptyDoc = { type: 'doc', content: [{ type: 'paragraph' }] };
@@ -497,10 +533,10 @@ describe('PersistenceExtension.onStoreDocument — Approach-A boundary snapshot'
   it('uses the canonical page.id (not the slugId doc name) for post-store side effects (#260)', async () => {
     const SLUG = 'slug-1'; // persistedHumanPage.slugId; findById resolves it
     const document = ydocFor(doc('NEW AGENT CONTENT'));
-    // #348 — the transclusion sync now runs only when the new OR the previously
-    // persisted content carries a transclusion-family node. Give the persisted
-    // (old) content a pageEmbed so the sync path is exercised and the #260
-    // UUID-vs-slugId contract asserted below is still verified.
+    // The transclusion sync runs only when the new OR the previously persisted
+    // content carries a transclusion-family node. Give the persisted content a
+    // pageEmbed so the sync path runs and the UUID-vs-slugId contract below is
+    // verified.
     pageRepo.findById.mockResolvedValue({
       ...persistedHumanPage('NEW AGENT CONTENT'),
       content: {
@@ -708,6 +744,7 @@ describe('PersistenceExtension.onStoreDocument — Approach-A boundary snapshot'
         notificationQueue as any,
         collabHistory as any,
         transclusionService as any,
+        { isGitSyncEnabled: () => true } as any, // environmentService
       );
       jest.spyOn(ext2['logger'], 'debug').mockImplementation(() => undefined);
       jest.spyOn(ext2['logger'], 'warn').mockImplementation(() => undefined);
@@ -808,11 +845,9 @@ describe('PersistenceExtension.onStoreDocument — Approach-A boundary snapshot'
     });
   });
 
-  // #559 — the external-MCP api_key behind a content edit must be threaded from
-  // the connection context all the way to pageRepo.updatePage's
-  // `lastUpdatedApiKeyId`, so the persona ("External MCP" / <key name>) survives
-  // the collab/page edit path. This is the WRITE hop the review flagged as
-  // silently dropping the id (the middle of the auth→DB→history→read chain).
+  // The external-MCP api_key behind a content edit must be threaded from the
+  // connection context to pageRepo.updatePage's `lastUpdatedApiKeyId`, so the
+  // persona ("External MCP" / <key name>) survives the collab/page edit path.
   describe('external-MCP api_key threading (#559)', () => {
     // Same shape as buildData, but carries an api_key id on the context.
     const buildDataWithApiKey = (

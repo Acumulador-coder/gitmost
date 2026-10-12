@@ -54,6 +54,8 @@ import {
   AUDIT_SERVICE,
   IAuditService,
 } from '../../../integrations/audit/audit.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { emitCollabAccessChanged } from '../../../common/events/collab-access-changed';
 
 @Injectable()
 export class WorkspaceService {
@@ -80,6 +82,7 @@ export class WorkspaceService {
     private userSessionRepo: UserSessionRepo,
     // #686: evict a deleted user's per-user external-MCP toolset cache.
     private readonly mcpClients: McpClientsService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async findById(workspaceId: string) {
@@ -367,10 +370,9 @@ export class WorkspaceService {
         throw new NotFoundException('Workspace not found');
       }
 
-      // MCP is a community feature in this fork: the server itself serves the
-      // Model Context Protocol over HTTP at /mcp, so toggling it no longer
-      // requires an enterprise license. The toggle still persists via
-      // updateAiSettings(workspaceId, 'mcp', ...) below.
+      // MCP is a community feature in this fork (the server serves it over HTTP
+      // at /mcp), so toggling it needs no enterprise license. The toggle
+      // persists via updateAiSettings(workspaceId, 'mcp', ...) below.
 
       if (typeof updateWorkspaceDto.isScimEnabled !== 'undefined') {
         if (
@@ -549,20 +551,6 @@ export class WorkspaceService {
         );
       }
 
-      if (typeof updateWorkspaceDto.autonomousRuns !== 'undefined') {
-        const prev = settingsBefore?.ai?.autonomousRuns ?? false;
-        if (prev !== updateWorkspaceDto.autonomousRuns) {
-          before.autonomousRuns = prev;
-          after.autonomousRuns = updateWorkspaceDto.autonomousRuns;
-        }
-        await this.workspaceRepo.updateAiSettings(
-          workspaceId,
-          'autonomousRuns',
-          updateWorkspaceDto.autonomousRuns,
-          trx,
-        );
-      }
-
       if (typeof updateWorkspaceDto.htmlEmbed !== 'undefined') {
         const prev = settingsBefore?.htmlEmbed ?? false;
         if (prev !== updateWorkspaceDto.htmlEmbed) {
@@ -573,6 +561,23 @@ export class WorkspaceService {
           workspaceId,
           'htmlEmbed',
           updateWorkspaceDto.htmlEmbed,
+          trx,
+        );
+      }
+
+      if (typeof updateWorkspaceDto.treeQuickActions !== 'undefined') {
+        // Sidebar page-tree row quick actions (copy link + move to trash icons).
+        // ABSENT => ON, so the previous value defaults to `true` (unlike the
+        // other toggles, which default to false).
+        const prev = settingsBefore?.treeQuickActions ?? true;
+        if (prev !== updateWorkspaceDto.treeQuickActions) {
+          before.treeQuickActions = prev;
+          after.treeQuickActions = updateWorkspaceDto.treeQuickActions;
+        }
+        await this.workspaceRepo.updateSetting(
+          workspaceId,
+          'treeQuickActions',
+          updateWorkspaceDto.treeQuickActions,
           trx,
         );
       }
@@ -616,8 +621,8 @@ export class WorkspaceService {
       delete updateWorkspaceDto.aiChat;
       delete updateWorkspaceDto.aiDictation;
       delete updateWorkspaceDto.aiDictationStreaming;
-      delete updateWorkspaceDto.autonomousRuns;
       delete updateWorkspaceDto.htmlEmbed;
+      delete updateWorkspaceDto.treeQuickActions;
       delete updateWorkspaceDto.trackerHead;
       delete updateWorkspaceDto.aiPublicShareAssistant;
 
@@ -852,6 +857,11 @@ export class WorkspaceService {
       await this.userSessionRepo.revokeByUserId(userId, workspaceId, trx);
     });
 
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId,
+      userIds: [userId],
+    });
+
     this.auditService.log({
       event: AuditEvent.USER_DEACTIVATED,
       resourceType: AuditResource.USER,
@@ -987,6 +997,11 @@ export class WorkspaceService {
     // sessions are revoked above so they can't start a turn, but drop any warm
     // entry now rather than waiting out the TTL.
     this.mcpClients.invalidateUser(workspaceId, userId);
+
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId,
+      userIds: [userId],
+    });
 
     this.auditService.log({
       event: AuditEvent.USER_DELETED,

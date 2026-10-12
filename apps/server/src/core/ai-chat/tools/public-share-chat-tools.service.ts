@@ -35,9 +35,9 @@ const SHARE_TOOL_ERROR_GENERIC = 'The tool could not complete the request.';
  * The security boundary is this tool scope, not any caller identity. Each tool
  * re-derives the share scope server-side and never trusts client-supplied ids
  * beyond looking them up inside the share tree:
- *  - search uses the existing share-scoped FTS branch
- *    (`shareId && !spaceId && !userId`), which itself restricts results to the
- *    share's pages and excludes restricted descendants;
+ *  - search uses the anonymous share-scoped caller of SearchService
+ *    (`anonymousShare: true`), which itself restricts results to the share's
+ *    pages and excludes restricted descendants;
  *  - reading a page first confirms, via the single canonical
  *    `ShareService.resolveReadableSharePage` boundary, that the page resolves
  *    to THIS share, is live, and has no restricted ancestor (which
@@ -64,8 +64,11 @@ export class PublicShareChatToolsService {
       searchSharePages: tool({
         description:
           'Search the pages of THIS published documentation share for a ' +
-          'query. Returns the most relevant pages with a short snippet, best ' +
-          "match first. Rephrase the reader's question into focused keywords " +
+          'query. `results` holds the pages that match, best match first, ' +
+          'each with a short snippet. `related` lists semantically similar ' +
+          'pages that do NOT match the query: read them if they look ' +
+          'relevant, but never cite them as matches. ' +
+          "Rephrase the reader's question into focused keywords " +
           '(key terms and entities), not a full sentence. If the first ' +
           'results look weak, search again with different wording before ' +
           'answering. Only pages inside this share are ever returned.',
@@ -81,20 +84,35 @@ export class PublicShareChatToolsService {
         }),
         execute: async ({ query, limit }) => {
           const trimmed = (query ?? '').trim();
-          if (!trimmed) return [];
-          // Share-scoped FTS branch: passing shareId WITHOUT spaceId/userId
-          // selects the `shareId && !spaceId && !opts.userId` path, which
-          // validates the share + workspace, drops restricted ancestors, and
+          if (!trimmed) return { results: [], related: [] };
+          // The anonymous share-scoped search: it validates the share +
+          // workspace (+ sharing allowed), drops restricted ancestors, and
           // limits results to the share's page set.
-          const { items } = await this.searchService.searchPage(
-            { query: trimmed, shareId, limit: limit ?? 10 } as never,
-            { workspaceId },
-          );
-          return items.map((item) => ({
-            id: item.id,
-            title: item.title ?? '',
-            snippet: item.highlight ?? '',
-          }));
+          const { items, related, disabledReason } =
+            await this.searchService.searchPage(
+              { query: trimmed, shareId, limit: limit ?? 10 } as never,
+              { anonymousShare: true, workspaceId },
+            );
+          // An approved-mode share publishes only saved versions while the
+          // index holds the live draft, so it has no search at all; say so
+          // explicitly instead of a silent empty result.
+          if (disabledReason) {
+            return { results: [], related: [], unavailable: disabledReason };
+          }
+          return {
+            results: items.map((item) => ({
+              id: item.id,
+              title: item.title ?? '',
+              snippet: item.highlight ?? '',
+            })),
+            // A neighbour never has a highlight (it does not match the query);
+            // its leading text is the only snippet.
+            related: related.map((item) => ({
+              id: item.id,
+              title: item.title ?? '',
+              snippet: item.snippet ?? '',
+            })),
+          };
         },
       }),
 
@@ -214,7 +232,7 @@ export class PublicShareChatToolsService {
 
   /**
    * Wrap every tool's `execute` so a THROWN error is sanitized in ONE place —
-   * closing the byte leak, the render, and the model context at once (#394).
+   * closing the byte leak, the render, and the model context at once.
    *
    * The AI SDK surfaces a tool-execution throw as an atomic `tool-output-error`
    * frame on the v6 UI stream whose `errorText` is the thrown message; on the

@@ -2,6 +2,7 @@ import {
   afterUnloadDocumentPayload,
   Extension,
   onChangePayload,
+  onDisconnectPayload,
   onLoadDocumentPayload,
   onStatelessPayload,
   onStoreDocumentPayload,
@@ -10,6 +11,7 @@ import * as Y from 'yjs';
 import { Injectable, Logger } from '@nestjs/common';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import {
+  flushPendingStore,
   getPageId,
   isEmptyParagraphDoc,
   jsonToText,
@@ -49,6 +51,7 @@ import {
   observeCollabStore,
 } from '../../integrations/metrics/metrics.registry';
 import { hasTransclusionFamilyNodes } from '../../core/page/transclusion/utils/transclusion-prosemirror.util';
+import { EnvironmentService } from '../../integrations/environment/environment.service';
 
 /**
  * #251 — wire format of the client→server stateless message that signals a
@@ -59,7 +62,7 @@ import { hasTransclusionFamilyNodes } from '../../core/page/transclusion/utils/t
 export const INTENTIONAL_CLEAR_MESSAGE_TYPE = 'intentional-clear';
 
 /**
- * #370 — wire format of the client→server "save a version" signal. Sent by the
+ * Wire format of the client→server "save a version" signal. Sent by the
  * human (Cmd+S / Save button) and by the agent's explicit save tool over the
  * SAME stateless channel. The intentionality tier ('manual' vs 'agent') is
  * derived SERVER-SIDE from the signed connection actor, never from this
@@ -69,7 +72,7 @@ export const INTENTIONAL_CLEAR_MESSAGE_TYPE = 'intentional-clear';
 export const SAVE_VERSION_MESSAGE_TYPE = 'save-version';
 
 /**
- * #370 F2 — wire format of the server→client REPLY to a save-version signal, sent
+ * Wire format of the server→client REPLY to a save-version signal, sent
  * over the same stateless channel. `version.saved` means a version was created or
  * promoted; `version.skipped` is a TERMINAL "nothing was pinned" reply for the two
  * reachable no-op cases (an effectively-empty page, or the page row is gone) so the
@@ -82,7 +85,7 @@ export const VERSION_SAVED_MESSAGE_TYPE = 'version.saved';
 export const VERSION_SKIPPED_MESSAGE_TYPE = 'version.skipped';
 
 /**
- * #251 — how long an intentional-clear signal stays "pending" before it is
+ * How long an intentional-clear signal stays "pending" before it is
  * ignored. The signal is set on the clearing keystroke but consumed by the
  * DEBOUNCED onStoreDocument, so the TTL must comfortably exceed the collab
  * store debounce window (hocuspocus is configured with maxDebounce = 45s in
@@ -91,14 +94,10 @@ export const VERSION_SKIPPED_MESSAGE_TYPE = 'version.skipped';
  * pending flag (see onStoreDocument), so a "cleared then retyped" sequence can
  * never leave a usable flag behind.
  *
- * Known fail-safe limitation: the flag lives only in this node's process memory.
- * If document ownership transfers to another node, or this node crashes/restarts,
- * between the stateless signal (set on node A) and the debounced store, the
- * in-memory flag is lost and the clear is silently NOT applied — the store-side
- * empty-guard then reloads the document non-empty from the DB. This is
- * deliberately fail-safe (a lost flag preserves content rather than destroying
- * it), but it is a documented limitation, not a guarantee that every deliberate
- * clear survives a node handoff.
+ * Fail-safe limitation: the flag lives only in this node's process memory. If
+ * document ownership moves to another node, or this node restarts, between the
+ * stateless signal and the debounced store, the flag is lost and the clear is
+ * NOT applied — the store-side empty-guard keeps the non-empty DB content.
  */
 export const INTENTIONAL_CLEAR_TTL_MS = 60_000;
 
@@ -113,16 +112,25 @@ export function resolveSource(
   stickyTouched: boolean,
   contextActor?: string,
 ): ProvenanceSource {
-  return stickyTouched || contextActor === 'agent' ? 'agent' : 'user';
+  // An EXPLICIT current-write actor is authoritative for THIS write and wins
+  // over the sticky-agent fallback. Order: explicit 'agent' > explicit
+  // 'git-sync' > sticky agent marker > plain human 'user'. The git-sync case
+  // must NOT be masked by the sticky marker, or the PageChangeListener
+  // loop-guard (which keys on lastUpdatedSource === 'git-sync') would re-export
+  // git-sync's own writes (#14). Explicit agent still wins so a window that
+  // mixed an agent edit stays tagged 'agent'.
+  if (contextActor === 'agent') return 'agent';
+  if (contextActor === 'git-sync') return 'git-sync';
+  if (stickyTouched) return 'agent';
+  return 'user';
 }
 
 /**
- * #370 — compute the BullMQ job id + delay for a page's trailing idle-flush
+ * Compute the BullMQ job id + delay for a page's trailing idle-flush
  * autosnapshot. Pure so the timing is unit-testable.
  *
- * Both humans and the agent now share ONE idle pipeline (the agent's old
- * `delay=0` fast path is gone — intentional agent points arrive via the
- * explicit save-version signal instead). The job id is the bare `page.id`, so a
+ * Humans and the agent share one idle pipeline (intentional agent points arrive
+ * via the explicit save-version signal). The job id is the bare `page.id`, so a
  * page has at most one pending idle job; the caller removes-and-re-adds it on
  * every store to keep it debounced to the trailing edge of an edit burst. The
  * window differs by source only: the agent flushes sooner than a human.
@@ -161,27 +169,17 @@ export class PersistenceExtension implements Extension {
   // coalescing window" per document and OR it across all edits in the window,
   // so the snapshot is marked 'agent' regardless of who wrote last.
   private agentTouched: Map<string, boolean> = new Map();
-  // #370 — epoch ms of the FIRST edit in the current idle-flush burst. Keyed by
-  // documentName (like its sibling per-document maps above), NOT by page.id, so
-  // it can be cleaned in afterUnloadDocument alongside `contributors` /
-  // `agentTouched` / `intentionalClear` when the doc unloads — otherwise any page
-  // that was edited but never manually saved (the common case) would keep its
-  // entry forever and the Map would grow unbounded in this long-lived process.
-  // Set when the pending idle job is first armed (empty entry), read to enforce
-  // the max-wait ceiling in computeHistoryJob, and cleared on doc unload or when
-  // a manual save cancels the idle job so the next burst starts a fresh window.
+  // Epoch ms of the FIRST edit in the current idle-flush burst. Keyed by
+  // documentName (not page.id) so it is cleaned in afterUnloadDocument with the
+  // other per-document maps; otherwise pages that were never manually saved
+  // would keep their entry forever. Set when the idle job is first armed, read
+  // for the max-wait ceiling in computeHistoryJob, cleared on unload or when a
+  // manual save cancels the idle job.
   //
-  // Single-process assumption (like `contributors` / `agentTouched` above): this
-  // lives only in THIS collab process's memory. A restart, or a page's ownership
-  // moving to another node, loses the burst-start marker. Consequence: a burst
-  // that spans the restart looks like a fresh burst to the surviving process, so
-  // its max-wait ceiling is re-anchored to the first post-restart edit — a single
-  // continuous session straddling a restart can therefore wait up to ~2× the cap
-  // for its idle snapshot (once for the lost pre-restart window, once for the new
-  // one). Bounded and benign (it only DELAYS a safety-net autosnapshot; manual
-  // saves are unaffected and the next quiet period always flushes), but the
-  // assumption and its consequence are recorded here so no one mistakes the
-  // in-memory marker for a durable, cross-process guarantee.
+  // Process-local, like `contributors` / `agentTouched`: a restart or an
+  // ownership move loses the marker, so a session straddling it can wait up to
+  // ~2× the cap for its idle snapshot. It only delays a safety-net
+  // autosnapshot; manual saves are unaffected.
   private idleBurstStart: Map<string, number> = new Map();
   // #251 — per-document "intentional clear pending" flags. Keyed by
   // documentName, value = expiry timestamp (ms). Set by onStateless when the
@@ -190,6 +188,14 @@ export class PersistenceExtension implements Extension {
   // per-connection context cannot provide (a clear is an edit event, but the
   // store is debounced and connection context is fixed at authentication).
   private intentionalClear: Map<string, number> = new Map();
+  // CO-5 — per-document context of the latest human/agent edit not yet stored.
+  // Hocuspocus keeps ONE pending store per document and an immediate git-sync
+  // store replaces it, so an edit that lands while git-sync writes would be
+  // stored under the git-sync context: attributed to the service user and
+  // skipped by the git-sync loop-guard (never exported). Set by onChange (git
+  // writes carry no user, so they never set it), consumed by every store,
+  // dropped on unload like the maps above.
+  private lastEditContext: Map<string, any> = new Map();
 
   constructor(
     private readonly pageRepo: PageRepo,
@@ -200,6 +206,7 @@ export class PersistenceExtension implements Extension {
     @InjectQueue(QueueName.NOTIFICATION_QUEUE) private notificationQueue: Queue,
     private readonly collabHistory: CollabHistoryService,
     private readonly transclusionService: TransclusionService,
+    private readonly environmentService: EnvironmentService,
   ) {}
 
   async onLoadDocument(data: onLoadDocumentPayload) {
@@ -251,9 +258,8 @@ export class PersistenceExtension implements Extension {
         tiptapExtensions,
       );
 
-      // Encode the converted doc ONCE, reuse the bytes for both the size label
-      // and the single apply into the hook document (previously this encode's
-      // result was returned and hocuspocus re-encoded+applied it a second time).
+      // Encode the converted doc once; the bytes serve both the size label and
+      // the single apply into the hook document.
       const encoded = Y.encodeStateAsUpdate(ydoc);
       Y.applyUpdate(document, encoded);
       observeCollabLoad(
@@ -268,6 +274,38 @@ export class PersistenceExtension implements Extension {
     this.logger.debug(`creating fresh ydoc: ${pageId}`);
     observeCollabLoad(0, (performance.now() - startedAt) / 1000);
     return;
+  }
+
+  /**
+   * When the LAST editor disconnects, flush any pending (debounced) store to the
+   * DB immediately instead of waiting out the `debounce` window. The collab
+   * server runs with `unloadImmediately: false` (collaboration.gateway), so
+   * Hocuspocus does not flush on a last-client disconnect; a quick edit-then-
+   * close would leave the edit only in the in-memory Y.Doc while git-sync
+   * mirrors the stale DB body to the vault.
+   *
+   * Only on the LAST disconnect (`clientsCount === 0`), only for a fully-loaded
+   * doc, and only when a store is pending (`isDebounced`). `executeNow` runs the
+   * SAME payload Hocuspocus scheduled (preserving the edit's context/actor) and
+   * clears the timer.
+   */
+  async onDisconnect(data: onDisconnectPayload) {
+    // Gated on git-sync: the flush exists for git-sync (the vault must not
+    // mirror a stale DB body), and git-sync is fully inert when it is off, so
+    // the debounced store keeps its stock behavior then.
+    if (!this.environmentService.isGitSyncEnabled()) return;
+    const { instance, document, documentName, clientsCount } = data;
+    if (clientsCount > 0) return;
+    if (!document || document.isLoading) return;
+    try {
+      await flushPendingStore(instance, documentName);
+    } catch (err) {
+      this.logger.error(
+        `onDisconnect flush failed for ${documentName}: ` +
+          (err instanceof Error ? err.message : String(err)),
+        err instanceof Error ? err.stack : undefined,
+      );
+    }
   }
 
   async onStoreDocument(data: onStoreDocumentPayload) {
@@ -310,36 +348,46 @@ export class PersistenceExtension implements Extension {
 
     let page: Page = null;
     const editingUserIds = this.consumeContributors(documentName);
+    // CO-5 — who this store is attributed to. A git-sync store that also
+    // carries a human/agent edit made since the last store (it replaced that
+    // edit's pending store) is attributed to that edit's author, so the edit is
+    // neither credited to the git-sync service user nor hidden from the git
+    // export by the loop-guard. Every other store keeps its own context.
+    const pendingEdit = this.consumeLastEditContext(documentName);
+    const attribution =
+      context?.actor === 'git-sync' && pendingEdit ? pendingEdit : context;
     // Sticky agent marker: 'agent' if any agent edit landed in this window, OR
     // if the current writer is the agent (covers a store with no prior onChange
-    // agent event in the same window). §15 H2.
+    // agent event in the same window).
+    // Provenance precedence: agent > git-sync > user (see resolveSource). A
+    // 'git-sync' store is NOT given an immediate history snapshot — it is
+    // debounced like a human edit (a git-sync write is a block-level merge into
+    // the live doc, so it reads like an incremental human edit, not a bulk
+    // import that would warrant its own immediate snapshot).
     const lastUpdatedSource = resolveSource(
       this.consumeAgentTouched(documentName),
-      context?.actor,
+      attribution?.actor,
     );
-    // #251 — consume the intentional-clear flag ONCE, BEFORE the retry loop
-    // (like consumeContributors / consumeAgentTouched above). consumeIntentional-
-    // Clear ALWAYS deletes the in-memory Map entry, but a tx rollback cannot
-    // un-delete it. Calling it INSIDE the loop meant: a clear armed for attempt 1
-    // was consumed there, attempt 1's updatePage threw a transient error and
-    // rolled back, then attempt 2 re-read non-empty content and saw the flag
-    // already gone — silently downgrading the retry into a BLOCKED write, so the
-    // user's deliberate clear was dropped. Hoisting makes the decision stable
-    // across every attempt. This single call also preserves the "a non-empty
-    // store drops a pending flag" semantics (the cleared-then-retyped case):
-    // every store consumes the flag here regardless of incoming emptiness, so a
-    // subsequent non-empty store can never leave a usable flag behind.
+    // Consume the intentional-clear flag ONCE, before the retry loop.
+    // consumeIntentionalClear always deletes the in-memory entry and a tx
+    // rollback cannot restore it, so consuming inside the loop would turn a
+    // retry into a BLOCKED write. Every store consumes the flag here regardless
+    // of emptiness, so a non-empty store drops a pending flag (the
+    // cleared-then-retyped case).
     const allowIntentionalClear = this.consumeIntentionalClear(documentName);
+    // git-sync's explicit clear authorization (see the empty-guard below). It
+    // covers exactly ONE store — the merge's own — so it is taken off the shared
+    // direct-connection context here, once, before the retry loop; the same
+    // connection's disconnect store then takes the normal empty-guard.
+    const gitSyncClear = context?.gitSyncIntentionalClear === true;
+    if (gitSyncClear) context.gitSyncIntentionalClear = false;
 
-    // Persist with a small bounded retry. The in-memory Y.Doc is the ONLY copy
-    // of the latest edit until this hook returns: hocuspocus destroys/unloads the
-    // doc right after onStoreDocument resolves (see storeDocumentHooks' finally
-    // -> unloadDocument). If a transient DB error (deadlock, serialization
-    // failure, dropped connection) is merely logged and swallowed, the function
-    // resolves "successfully", the doc is unloaded, and the edit is lost silently
-    // (#206 persist-1). Retrying here re-attempts the write while we still hold
-    // the doc; on total failure we clear `page` so the post-store side effects
-    // (badge broadcast, history snapshot) never report a save that didn't happen.
+    // Persist with a small bounded retry. The in-memory Y.Doc is the only copy
+    // of the latest edit until this hook returns: hocuspocus unloads the doc
+    // right after onStoreDocument resolves (storeDocumentHooks' finally ->
+    // unloadDocument), so a swallowed transient DB error would lose the edit.
+    // On total failure `page` is cleared so the post-store side effects (badge
+    // broadcast, history snapshot) never report a save that didn't happen.
     const MAX_STORE_ATTEMPTS = 3;
     for (let attempt = 1; attempt <= MAX_STORE_ATTEMPTS; attempt++) {
       try {
@@ -360,36 +408,35 @@ export class PersistenceExtension implements Extension {
             return;
           }
 
-          // #206 persist-6 / #248 — store-side empty-guard. A momentarily-empty
-          // live Y.Doc (a client/agent glitch, a bad merge, a transclusion that
-          // emptied) must NOT overwrite non-empty persisted content. The LOAD
-          // path already guards emptiness (onLoadDocument only hydrates from db
-          // when the live doc isEmpty); the STORE path did not, so an empty
-          // serialization was written straight over the page, wiping it
-          // silently.
+          // Store-side empty-guard: a momentarily-empty live Y.Doc (a
+          // client/agent glitch, a bad merge, an emptied transclusion) must NOT
+          // overwrite non-empty persisted content.
           //
-          // #251 — the ONE legitimate empty-over-non-empty write is a user who
+          // The one legitimate empty-over-non-empty write is a user who
           // deliberately clears the page. That intent arrives out-of-band as a
-          // stateless message, NOT from the doc content, which is why it cannot
-          // be spoofed for non-clear writes: the flag is only ever read on this
-          // empty-incoming branch, so the worst a forged signal can do is clear
-          // a page the connection may already edit. The flag was consumed ONCE
-          // before the retry loop (`allowIntentionalClear`) so the decision is
-          // stable across retries; a non-empty store still drops any pending
-          // flag via that same hoisted consume (a "cleared then retyped"
-          // sequence can't leave a usable one behind).
+          // stateless message and is read only on this empty-incoming branch, so
+          // the worst a forged signal can do is clear a page the connection may
+          // already edit. The flag was consumed once before the retry loop
+          // (`allowIntentionalClear`).
           const incomingEmpty = isEmptyParagraphDoc(tiptapJson as any);
+          // A git-sync store may clear the page ONLY with the explicit
+          // `gitSyncIntentionalClear` context flag, which gitSyncWriteBody sets
+          // when git's body is empty AND a non-empty merge base proves the file
+          // was cleared in git (consumed above). The 'git-sync' actor alone is
+          // not enough: an empty merge result without that proof (a stale export
+          // merged into a new page) wiped live text, so every other git-sync
+          // store takes the normal guard. Mirrors the #251 allowance.
           if (
             incomingEmpty &&
             page.content &&
             !isEmptyParagraphDoc(page.content as any)
           ) {
-            if (allowIntentionalClear) {
+            if (allowIntentionalClear || gitSyncClear) {
               this.logger.debug(
                 `Intentional clear for ${pageId}: persisting empty doc over ` +
-                  `non-empty content (user-signalled)`,
+                  `non-empty content (${gitSyncClear ? 'git-sync' : 'user-signalled'})`,
               );
-              // fall through — the empty write is allowed exactly once.
+              // fall through — the empty write is allowed.
             } else {
               this.logger.warn(
                 `Skipping store for ${pageId}: empty live doc would overwrite ` +
@@ -414,19 +461,22 @@ export class PersistenceExtension implements Extension {
             //this.logger.debug('Contributors error:' + err?.['message']);
           }
 
-          // #370 — boundary snapshot on ANY source transition. When the store
-          // flips the page's provenance (user↔agent↔git), pin the OUTGOING
-          // state as its own history version BEFORE the incoming source
-          // overwrites it. `page` still holds the OLD content/provenance here,
-          // so saveHistory(page) captures the pre-transition state tagged with
-          // its own source, kind='boundary'. The incoming content is snapshotted
-          // later by the debounced idle job. Skip if the page is effectively
-          // empty or if the latest existing snapshot already equals this state
-          // (the shared isDeepStrictEqual gate — avoids duplicates). Generalizing
-          // beyond the old user→agent special-case also covers git-sync for free.
+          // Boundary snapshot on ANY source transition. When the store flips the
+          // page's provenance (user↔agent↔git), pin the OUTGOING state as its own
+          // history version before the incoming source overwrites it. `page`
+          // still holds the old content/provenance here, so saveHistory(page)
+          // captures it tagged with its own source, kind='boundary'. The incoming
+          // content is snapshotted later by the idle job. Skip if the page is
+          // effectively empty or the latest snapshot already equals this state
+          // (isDeepStrictEqual). For git-sync this keeps a same-block human edit
+          // lost to git recoverable (SPEC §9). A git-sync merge store attributed
+          // to a pending human/agent edit is still a git merge over that
+          // baseline, so it pins too.
           if (
             page.lastUpdatedSource &&
-            page.lastUpdatedSource !== lastUpdatedSource
+            (page.lastUpdatedSource !== lastUpdatedSource ||
+              (context?.actor === 'git-sync' &&
+                page.lastUpdatedSource !== 'git-sync'))
           ) {
             // pageHistory.pageId is uuid-typed; use page.id (never the doc-name
             // slugId) so a `page.<slugId>` doc cannot throw 22P02 here (#260).
@@ -451,17 +501,15 @@ export class PersistenceExtension implements Extension {
               content: tiptapJson,
               textContent: textContent,
               ydoc: ydocState,
-              lastUpdatedById: context.user.id,
+              lastUpdatedById: attribution.user.id,
               // Human stays the responsible author; these annotate the source.
               lastUpdatedSource,
-              lastUpdatedAiChatId: context?.aiChatId ?? null,
-              // #559 — the external-MCP api_key behind this content edit (null for
-              // a human or the internal AI agent). The review flagged that apiKeyId
-              // is LOST on the collab/page path unless it is threaded all the way
-              // here from the connection context (set in authentication.extension);
-              // without it the persona always falls back for the common page-edit
-              // case. saveHistory copies this onto every snapshot of this page.
-              lastUpdatedApiKeyId: context?.apiKeyId ?? null,
+              lastUpdatedAiChatId: attribution?.aiChatId ?? null,
+              // The external-MCP api_key behind this content edit (null for a
+              // human or the internal AI agent), threaded from the connection
+              // context (set in authentication.extension). saveHistory copies it
+              // onto every snapshot of this page.
+              lastUpdatedApiKeyId: attribution?.apiKeyId ?? null,
               contributorIds: contributorIds,
             },
             pageId,
@@ -493,26 +541,25 @@ export class PersistenceExtension implements Extension {
           updatedAt: new Date().toISOString(),
           // Provenance for a future live badge; 'user' for human edits.
           source: lastUpdatedSource,
-          lastUpdatedById: context?.user?.id,
-          lastUpdatedBy: context?.user
+          lastUpdatedById: attribution?.user?.id,
+          lastUpdatedBy: attribution?.user
             ? {
-                id: context.user?.id,
-                name: context.user?.name,
-                avatarUrl: context.user?.avatarUrl,
+                id: attribution.user?.id,
+                name: attribution.user?.name,
+                avatarUrl: attribution.user?.avatarUrl,
               }
             : undefined,
         }),
       );
 
       // Use the canonical page UUID (page.id), not the doc-name id, which may be
-      // a slugId for a `page.<slugId>` doc (#260). The transclusion/reference
-      // syncs write uuid-typed columns, so a slugId here threw Postgres 22P02.
+      // a slugId for a `page.<slugId>` doc: the transclusion/reference syncs
+      // write uuid-typed columns.
       //
-      // #348 — skip the three sync SELECTs when neither the new content nor the
-      // previously-persisted content has any transclusion/reference/pageEmbed
-      // node: nothing to insert, and (the DB mirrors the old content) nothing to
-      // delete. Whenever either side has one, run the idempotent sync exactly as
-      // before so removals are still reconciled.
+      // Skip the three sync SELECTs when neither the new nor the previously
+      // persisted content has any transclusion/reference/pageEmbed node:
+      // nothing to insert, and (the DB mirrors the old content) nothing to
+      // delete. Otherwise run the idempotent sync so removals are reconciled.
       if (
         hasTransclusionFamilyNodes(tiptapJson) ||
         hasTransclusionFamilyNodes(page.content)
@@ -587,7 +634,7 @@ export class PersistenceExtension implements Extension {
   }
 
   /**
-   * #251 — receive the client's deliberate-clear signal. Records a short-lived,
+   * Receive the client's deliberate-clear signal. Records a short-lived,
    * single-use pending flag for the originating document so the next
    * onStoreDocument may let one empty-over-non-empty write through the guard.
    *
@@ -626,7 +673,7 @@ export class PersistenceExtension implements Extension {
   }
 
   /**
-   * #370 — persist an intentional version from the live in-memory ydoc.
+   * Persist an intentional version from the live in-memory ydoc.
    *
    * One stateless path serves BOTH the human and the agent; the tier is derived
    * SERVER-SIDE from the signed connection actor ('agent' → 'agent', anything
@@ -668,20 +715,14 @@ export class PersistenceExtension implements Extension {
     // and forcing the client to time out. Mutually exclusive with `result`.
     let skipped: 'empty' | 'page-not-found' | undefined;
 
-    // #370 F8-twin — the contributor set popped from Redis (destructive SPOP)
-    // must be restored if the version row does not durably land. The inner
-    // try/catch below only covers a throw INSIDE the callback; but executeTx
-    // COMMITS after the callback, so a commit-abort (serialization/deadlock/
-    // connection drop — the transient class the epic retries in the processor)
-    // rejects OUTSIDE the callback, after saveHistory already ran and the SPOP
-    // already happened, while the INSERT rolls back. onStateless does NOT retry,
-    // so an unrestored pop is a one-shot irrecoverable attribution loss (the
-    // processor got exactly this fix: poppedForRestore + an outer catch). We
-    // track the popped set here (keyed by the page UUID it was popped by — never
-    // the doc-name id, which may be a slugId, #260) and restore it in the outer
-    // catch. addContributors is an idempotent Redis SADD, so a double-restore is
-    // harmless. versionedPageId is also reused below to remove the superseded
-    // idle job by its real jobId (page.id).
+    // The contributor set popped from Redis (destructive SPOP) must be restored
+    // if the version row does not durably land. executeTx COMMITS after the
+    // callback, so a commit abort rejects OUTSIDE the inner try/catch, after the
+    // SPOP, while the INSERT rolls back; onStateless does not retry. Track the
+    // popped set (keyed by the page UUID, never the doc-name id, which may be a
+    // slugId) and restore it in the outer catch; addContributors is an
+    // idempotent SADD. versionedPageId is also used below to remove the
+    // superseded idle job by its jobId (page.id).
     let poppedForRestore: string[] = [];
     let versionedPageId: string | undefined;
 
@@ -815,6 +856,9 @@ export class PersistenceExtension implements Extension {
 
     this.contributors.get(documentName).add(userId);
 
+    // CO-5 — remember who made the latest not-yet-stored edit (see the map).
+    this.lastEditContext.set(documentName, data.context);
+
     // Sticky agent marker: once an agent connection touches the document in the
     // coalescing window, keep it marked until the next snapshot consumes it.
     if (data.context?.actor === 'agent') {
@@ -827,6 +871,7 @@ export class PersistenceExtension implements Extension {
     this.contributors.delete(documentName);
     this.agentTouched.delete(documentName);
     this.intentionalClear.delete(documentName);
+    this.lastEditContext.delete(documentName);
     // #370 — drop the idle-burst marker with the other per-document maps so it
     // cannot accumulate across the process lifetime for never-manually-saved
     // pages. The pending idle job (if any) is a self-expiring BullMQ delayed job.
@@ -839,6 +884,13 @@ export class PersistenceExtension implements Extension {
     const userIds = [...contributorSet];
     this.contributors.delete(documentName);
     return userIds;
+  }
+
+  /** Read and clear the context of the latest not-yet-stored edit (CO-5). */
+  private consumeLastEditContext(documentName: string): any {
+    const editContext = this.lastEditContext.get(documentName);
+    this.lastEditContext.delete(documentName);
+    return editContext;
   }
 
   /** Read and clear the sticky agent-touched flag for this coalescing window. */
@@ -865,24 +917,19 @@ export class PersistenceExtension implements Extension {
     documentName: string,
     lastUpdatedSource: string,
   ): Promise<void> {
-    // #370 — trailing idle debounce with a max-wait ceiling. One pending idle
-    // job per page (jobId = page.id); on every store we remove the pending
-    // delayed job and re-add it, so the snapshot lands `delay` after edits go
-    // quiet rather than once per store (precedent: workspace.service.ts).
-    // remove() on a delayed job simply deletes it (0 if absent, no throw); if the
-    // job is already ACTIVE and the remove is a no-op, the add still de-dups and
-    // the processor's isDeepStrictEqual gate collapses the duplicate content.
+    // Trailing idle debounce with a max-wait ceiling. One pending idle job per
+    // page (jobId = page.id); every store removes the pending delayed job and
+    // re-adds it, so the snapshot lands `delay` after edits go quiet. remove()
+    // on a delayed job deletes it (0 if absent, no throw); if the job is already
+    // ACTIVE, the add de-dups and the processor's isDeepStrictEqual gate
+    // collapses duplicate content.
     //
     // The FIRST arm of a burst records `burstStart`; computeHistoryJob shrinks
-    // the delay to the remaining max-wait budget from that point, so a continuous
-    // session cannot re-arm the trailing timer forever and starve the snapshot.
-    // A burst marker older than THIS TIER's max-wait means the previous idle job
-    // has already fired — start a fresh window instead of firing immediately on
-    // the next edit. Must use the SAME source-specific max-wait computeHistoryJob
-    // uses (agent 5m / user 10m): a hardcoded USER ceiling would leave an agent
-    // burst's marker stale for 5..10m, forcing delay=0 on every store in that
-    // window and writing one idle row per store — exactly the per-store bloat the
-    // debounce exists to prevent, on the continuous-agent path.
+    // the delay to the remaining max-wait budget. A marker older than THIS
+    // TIER's max-wait means the previous idle job already fired — start a fresh
+    // window. It must be the same source-specific max-wait computeHistoryJob
+    // uses (agent 5m / user 10m): a user ceiling would leave an agent burst's
+    // marker stale for 5..10m and force delay=0 (one idle row per store).
     const maxWait =
       lastUpdatedSource === 'agent' ? IDLE_MAX_WAIT_AGENT : IDLE_MAX_WAIT_USER;
     const now = Date.now();
@@ -901,36 +948,20 @@ export class PersistenceExtension implements Extension {
       now,
     );
 
-    // remove-then-add trailing-debounce idiom, and its ONE race. We delete the
-    // pending delayed job and re-add it under the same jobId so the timer resets
-    // to the trailing edge of the burst. The race is the small window between
-    // these two awaits: if the delayed job's `delay` elapses in that gap it goes
-    // ACTIVE, and then:
-    //   - remove() on an active/locked job is a no-op (BullMQ won't yank a job a
-    //     worker holds), and our `.catch(() => undefined)` swallows that too; and
-    //   - add() with a jobId that already exists (the now-active job's id) is
-    //     DROPPED by BullMQ — a duplicate add is a no-op.
-    // So this store fails to re-arm the trailing job: the just-fired snapshot
-    // captured content up to the moment it went active, and THIS edit is left
-    // without a pending trailing job. It is bounded and self-healing — the NEXT
-    // store re-arms a fresh delayed job (the id is free again once the active job
-    // completes / removeOnComplete frees it), and the processor's
-    // isDeepStrictEqual gate collapses any content-identical duplicate. The only
-    // uncovered case is when the racing store was the LAST in the session: the
-    // tail edits made after the job went active get NO trailing snapshot until
-    // the next edit re-arms one. That is an acceptable safety-net gap (a manual
-    // Save, a source-transition boundary, or simply the next edit all still cover
-    // it), which is why the reviewer accepts documenting it here rather than
-    // adding a post-add "did the add actually arm a job?" re-check.
+    // Remove-then-add resets the timer to the trailing edge of the burst. Race:
+    // if the delayed job goes ACTIVE between these two awaits, remove() is a
+    // no-op (BullMQ won't remove a locked job) and add() with the existing jobId
+    // is dropped, so this store re-arms nothing. The next store re-arms a fresh
+    // job, and isDeepStrictEqual collapses duplicates; only edits after the job
+    // went active in the LAST store of a session get no trailing snapshot until
+    // the next edit (manual save and source-transition boundaries still cover
+    // them).
     //
-    // NOTE — do NOT "unify" this with the neighbouring embed-debounce idiom
-    // (aiQueue.add of PAGE_CONTENT_UPDATED above): that one uses a STABLE jobId
-    // and NO remove(), relying purely on BullMQ coalescing a repeated add under
-    // the same id, because a re-embed only needs to eventually run once on the
-    // latest content and re-anchoring its delay on every keystroke is undesirable.
-    // THIS idiom deliberately removes-then-adds precisely to PUSH the delay back
-    // to the trailing edge on every store (a true debounce), which coalescing
-    // alone cannot do. Collapsing them would silently change the history cadence.
+    // Do not unify with the embed debounce above (aiQueue.add of
+    // PAGE_CONTENT_UPDATED): that one uses a stable jobId and no remove(),
+    // relying on BullMQ coalescing, because a re-embed only needs to run once
+    // eventually. This one removes-then-adds to push the delay back on every
+    // store (a true debounce), which coalescing cannot do.
     await this.historyQueue.remove(jobId).catch(() => undefined);
 
     await this.historyQueue.add(

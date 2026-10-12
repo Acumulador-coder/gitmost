@@ -43,7 +43,7 @@ export async function getAiChatMessages(
 }
 
 /**
- * Explicitly STOP the active agent run of a chat (#184). This is the ONLY thing
+ * Explicitly STOP the active agent run of a chat. This is the ONLY thing
  * that ends a DETACHED run — a mere browser disconnect (aborting the local SSE)
  * is deliberately ignored server-side, so the client must call this to actually
  * stop an autonomous run. Targeted by `chatId` (the server resolves whatever run
@@ -58,10 +58,9 @@ export async function stopRun(
 }
 
 /**
- * Delta poll (#491): the chat's message rows changed since `cursor` (a DB-clock
+ * Delta poll: the chat's message rows changed since `cursor` (a DB-clock
  * timestamp echoed from the previous poll) plus the current run fact, in ONE
- * round-trip — the degraded-poll fallback's payload, replacing the old "refetch
- * ALL infinite-query pages every 2.5s with full parts" poll. Omit `cursor` on the
+ * round-trip — the degraded-poll fallback's payload. Omit `cursor` on the
  * first poll (returns just a fresh cursor, no rows, to start the chain). The
  * overlap window guarantees occasional REPEATS, so the caller MUST merge rows
  * idempotently by id (mergeById). Owner-gated server-side.
@@ -82,8 +81,11 @@ export async function getAiChatMessagesDelta(
   return req.data;
 }
 
+// Deadline for POST /ai-chat/run (AGENTS.md invariant 3) — the axios client sets none.
+const GET_RUN_TIMEOUT_MS = 10_000;
+
 /**
- * #488: the run-fact — "is a run active on this chat?" — first-class from the
+ * The run-fact — "is a run active on this chat?" — first-class from the
  * server (POST /ai-chat/run). Called on mount to seed the client FSM's run-fact
  * and to VERIFY after a supersede mismatch (an observer following a superseded
  * run asks for the latest run and follows it). Returns the latest run row (with
@@ -97,7 +99,7 @@ export async function getRun(chatId: string): Promise<{
   const req = await api.post<{
     run: { id: string; status: string } | null;
     message: IAiChatMessageRow | null;
-  }>("/ai-chat/run", { chatId });
+  }>("/ai-chat/run", { chatId }, { timeout: GET_RUN_TIMEOUT_MS });
   return req.data;
 }
 
@@ -115,11 +117,11 @@ export async function getBoundChat(slugId: string): Promise<string | null> {
 }
 
 /**
- * Move (or clear) the page->chat binding for the current user (#665). Called on a
+ * Move (or clear) the page->chat binding for the current user. Called on a
  * CONSCIOUS open: the history select re-binds the page to the chosen chat; "New
  * chat" clears it (`chatId: null`). Binding is a convenience, not access control,
  * so callers fire this WITHOUT blocking the UI on it (`void bindPage(...).catch`).
- * `pageId` accepts a slugId or a uuid (resolved server-side, #312). The response
+ * `pageId` accepts a slugId or a uuid (resolved server-side). The response
  * `chatId` is a debug aid, NOT a postcondition — the requested binding, or null
  * when it was not applied (page/chat unresolved); callers ignore it.
  */

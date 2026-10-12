@@ -1,4 +1,4 @@
-// #409: unstorableYjsError diagnostics PRECEDENCE. The opaque Yjs encode failure
+// unstorableYjsError diagnostics PRECEDENCE. The opaque Yjs encode failure
 // (`Unknown node type: undefined`) is a node-SHAPE problem, so the shared
 // findInvalidNode is consulted FIRST and yields a path-anchored node message;
 // only a shape-sound doc falls back to findUnstorableAttr (undefined/function/

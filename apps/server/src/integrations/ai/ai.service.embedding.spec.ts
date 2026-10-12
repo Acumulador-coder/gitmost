@@ -1,7 +1,7 @@
 import { AiService, computeEmbeddingFingerprint } from './ai.service';
 
 /**
- * #530 Search Phase B (PR-1) unit coverage for the embedding layer:
+ * Unit coverage for the embedding layer:
  *  - computeEmbeddingFingerprint: a revision bump / prefix toggle MUST change the
  *    fingerprint even when the bare model name + dimension are unchanged (it is
  *    deliberately NOT the bare model name);
@@ -147,5 +147,77 @@ describe('AiService.embedWithModel timeout (#530)', () => {
     await expect(
       svc.embedWithModel(hangingModel, 'ws-1', ['x'], 30),
     ).rejects.toThrow(/timed out/i);
+  });
+});
+
+describe('AiService.embedWithModel batching', () => {
+  // A model that accepts far more than 32 values per call, so any split into
+  // requests of at most 32 is embedWithModel's own doing. It records each
+  // request's size and returns index-encoded vectors (`v7` -> [7]), so the
+  // result order is checkable. `hangOnCall` makes that call (1-based) hang
+  // until its abort signal fires.
+  function makeModel(hangOnCall?: number) {
+    const callSizes: number[] = [];
+    const model: any = {
+      specificationVersion: 'v3',
+      provider: 'fake',
+      modelId: 'fake',
+      maxEmbeddingsPerCall: 1000,
+      supportsParallelCalls: true,
+      doEmbed: ({
+        values,
+        abortSignal,
+      }: {
+        values: string[];
+        abortSignal?: AbortSignal;
+      }) => {
+        callSizes.push(values.length);
+        if (callSizes.length === hangOnCall) {
+          return new Promise((_resolve, reject) => {
+            abortSignal?.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          });
+        }
+        return Promise.resolve({
+          embeddings: values.map((v) => [Number(v.slice(1))]),
+          warnings: [],
+        });
+      },
+    };
+    return { model, callSizes };
+  }
+
+  const inputs = (n: number) => Array.from({ length: n }, (_, i) => `v${i}`);
+
+  it('sends 65 values as requests of 32, 32 and 1, results in input order', async () => {
+    const svc = new AiService({} as any, {} as any, {} as any);
+    const { model, callSizes } = makeModel();
+
+    const vectors = await svc.embedWithModel(model, 'ws-1', inputs(65));
+
+    expect(callSizes).toEqual([32, 32, 1]);
+    expect(vectors).toEqual(inputs(65).map((_, i) => [i]));
+  });
+
+  it('makes no request for an empty input', async () => {
+    const svc = new AiService({} as any, {} as any, {} as any);
+    const { model, callSizes } = makeModel();
+
+    await expect(svc.embedWithModel(model, 'ws-1', [])).resolves.toEqual([]);
+    expect(callSizes).toEqual([]);
+  });
+
+  it('a timeout on the second request names that batch', async () => {
+    const svc = new AiService({} as any, {} as any, {} as any);
+    const { model, callSizes } = makeModel(2);
+
+    await expect(
+      svc.embedWithModel(model, 'ws-1', inputs(65), 30),
+    ).rejects.toThrow(/batch 2\/3/);
+    // The third request is never sent after the second one failed.
+    expect(callSizes).toEqual([32, 32]);
   });
 });

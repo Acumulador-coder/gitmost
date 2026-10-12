@@ -33,7 +33,7 @@ interface AiMcpServerRowProps {
 }
 
 /**
- * A single external MCP server row, shared (#686) by the admin and the personal
+ * A single external MCP server row, shared by the admin and the personal
  * (account) pages: name/badge/url on the left and the Test / Switch / Edit /
  * Delete controls on the right. Each row owns its own test mutation (passed in
  * as a hook) so the inline Test result and loading state are independent per row

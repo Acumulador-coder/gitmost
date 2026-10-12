@@ -100,7 +100,7 @@ describe('buildInAppDeferredCatalog (#332)', () => {
 });
 
 /**
- * F3 — the deferred <tool_catalog> is built from STATIC metadata (INLINE_TOOL_TIERS
+ * The deferred <tool_catalog> is built from STATIC metadata (INLINE_TOOL_TIERS
  * + SHARED_TOOL_SPECS), but the loadable-by-name set is derived at RUNTIME from the
  * actual toolset (`Object.keys(baseTools)` in ai-chat.service.ts). Those two must
  * agree or a tool becomes loadable-but-invisible (agent thinks it doesn't exist) or
@@ -108,9 +108,9 @@ describe('buildInAppDeferredCatalog (#332)', () => {
  * no compile-time link to the tools AiChatToolsService.forUser() builds, so nothing
  * else catches that drift. This test uses forUser()'s LIVE keys as the source of
  * truth (mirroring ai-chat-tools.service.spec.ts's loader mock) and asserts a
- * two-way partition against buildInAppDeferredCatalog — replacing the old magic
- * toHaveLength(28), so a tool added to forUser() without a catalog line (or a
- * catalog line without a real tool) fails the suite instead of silently vanishing.
+ * two-way partition against buildInAppDeferredCatalog, so a tool added to
+ * forUser() without a catalog line (or a catalog line without a real tool) fails
+ * the suite instead of silently vanishing.
  */
 describe('deferred catalog ↔ live forUser() toolset partition (#332, F3)', () => {
   let toolKeys: string[];
@@ -140,16 +140,11 @@ describe('deferred catalog ↔ live forUser() toolset partition (#332, F3)', () 
         generateCollabToken: jest.fn().mockResolvedValue('collab-token'),
       } as never,
       {} as never, // aiService — not exercised while merely BUILDING the tools
-      {} as never, // pageEmbeddingRepo
-      {} as never, // spaceMemberRepo
-      {} as never, // pagePermissionRepo
+      {} as never, // searchService
       // sandboxStore: forUser() eagerly calls asSink() to wire the stash tool.
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,

@@ -13,7 +13,7 @@ import {
 // ---------------------------------------------------------------------------
 // Round-trip STABILITY matrix for image + the media family.
 //
-// Guards the "empty-string-vs-absent" churn class (GS-EDIT-REVERT family): a
+// Guards the "empty-string-vs-absent" churn class: a
 // stored node authored WITHOUT a string attr (alt/title/caption/aria-label/...)
 // must not gain a phantom `attr: ""` after `markdownToProseMirror(convert…)`.
 // Each spec sweeps the at-risk string attrs at DEFAULT (absent) and at a real
@@ -29,14 +29,13 @@ import {
 const SPECS: NodeStabilitySpec[] = [
   {
     // Image carries the most at-risk string attrs. `alt` is the one marked
-    // materializes as `<img alt="">` on `![](src)` import (the real bug); title
-    // and caption are covered as the same class. attachmentId is a string attr
-    // that must stay absent when unset (control).
+    // materializes as `<img alt="">` on `![](src)` import (the real bug); caption
+    // is covered as the same class. attachmentId is a string attr that must stay
+    // absent when unset (control).
     type: "image",
     baseAttrs: { src: "/i.png" },
     attrMatrix: [
       { attr: "alt", default: undefined, nonDefault: "a real alt text", emptyStringClass: true },
-      { attr: "title", default: undefined, nonDefault: "a real title", emptyStringClass: true },
       { attr: "caption", default: undefined, nonDefault: "a real caption" },
       { attr: "attachmentId", default: undefined, nonDefault: "att-42" },
     ],
@@ -98,22 +97,23 @@ const SPECS: NodeStabilitySpec[] = [
     ],
   },
   {
-    // drawio: image-form diagram. `title` + `alt` string attrs (data-title/-alt).
+    // drawio: image-form diagram. `title` + `alt` string attrs (data-title/-alt);
+    // an explicit "" is kept as "", so they are not in the empty-string class.
     type: "drawio",
     baseAttrs: { src: "blob:drawio" },
     attrMatrix: [
-      { attr: "title", default: undefined, nonDefault: "flow chart", emptyStringClass: true },
-      { attr: "alt", default: undefined, nonDefault: "an alt", emptyStringClass: true },
+      { attr: "title", default: undefined, nonDefault: "flow chart" },
+      { attr: "alt", default: undefined, nonDefault: "an alt" },
       { attr: "attachmentId", default: undefined, nonDefault: "att-5" },
     ],
   },
   {
-    // excalidraw: image-form diagram, same shared diagramAttributes set.
+    // excalidraw: image-form diagram, same attrs as drawio (editor-ext).
     type: "excalidraw",
     baseAttrs: { src: "blob:excalidraw" },
     attrMatrix: [
-      { attr: "title", default: undefined, nonDefault: "sketch", emptyStringClass: true },
-      { attr: "alt", default: undefined, nonDefault: "an alt", emptyStringClass: true },
+      { attr: "title", default: undefined, nonDefault: "sketch" },
+      { attr: "alt", default: undefined, nonDefault: "an alt" },
       { attr: "attachmentId", default: undefined, nonDefault: "att-6" },
     ],
   },
@@ -132,18 +132,15 @@ describe("round-trip stability matrix (image + media family)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// THIRD STATE: an attr EXPLICITLY stored as a literal "" (GS-EDIT-REVERT: a user
-// typed alt/title/name/... then deleted it, so Tiptap persisted `attr: ""` — a
-// value DISTINCT from "attr was never set"). Unlike the absent case above, this
-// state is NOT first-pass byte-stable: the fix's `"" -> default` coercion is a
+// THIRD STATE: an attr EXPLICITLY stored as a literal "" (a user typed
+// alt/title/name/... then deleted it, so Tiptap persisted `attr: ""` — a value
+// DISTINCT from "attr was never set"). Unlike the absent case above, this state
+// is NOT first-pass byte-stable: the `"" -> default` coercion is a
 // deliberate ONE-TIME normalization on the FIRST sync round-trip, stable
 // thereafter. We therefore assert a DIFFERENT contract — "converges to default
 // on pass 1, then idempotent from pass 2 on" — for every empty-string-class attr
-// across the whole node family (image/video/pdf/attachment/drawio/excalidraw).
-//
-// IMPORTANT for a future sync/QA pass: the pass-1 `"" -> null` diff is the
-// converter canon, not corruption. It appears at most once per affected node and
-// must NOT be flagged as "the converter is losing/corrupting page data".
+// across the node family (image/video/pdf/attachment). The pass-1 `"" -> null`
+// diff appears at most once per affected node and is not data loss.
 // ---------------------------------------------------------------------------
 describe("round-trip third state: explicit empty string converges once, then idempotent", () => {
   for (const spec of SPECS) {

@@ -3,36 +3,22 @@ import { AiChatService } from './ai-chat.service';
 import * as metricsRegistry from '../../integrations/metrics/metrics.registry';
 
 /**
- * #665 birth page-binding gate (acceptance criteria 11 & 12).
+ * Birth page-binding gate. Right after the FIRST persisted user message of a
+ * chat sent from a page, the server upserts that page's binding to point at the
+ * chat. The gate is `oldHistory.length === 0` (history loaded before the new
+ * row), NOT `isNewChat`:
  *
- * The server is the BIRTH writer of the page->chat binding: right after the
- * FIRST persisted user message of a chat sent FROM a page, it upserts that
- * page's binding to point at the chat. The gate that decides "is this the
- * birth message?" is a FACT — `oldHistory.length === 0` (the history loaded
- * BEFORE the new row) — deliberately NOT `isNewChat`. That distinction is the
- * whole point of criteria 11/12 and is otherwise unprotected, so these tests
- * pin it down:
+ *  - a chat with isNewChat === false (e.g. an orphan created when a prior turn's
+ *    runHooks.begin failed) but oldHistory.length === 0 MUST bind on its retry —
+ *    to the validated openPageContext.id, never to ai_chats.page_id;
+ *  - when runHooks.begin throws, execution never reaches the gate, so no
+ *    bind/unbind happens and any existing binding is untouched;
+ *  - the bind is fail-soft: a bind throw must not fail the message or the turn.
  *
- *  - Criterion 11: a chat with isNewChat === false (an existing row, e.g. an
- *    orphan created when a prior turn's runHooks.begin failed) but
- *    oldHistory.length === 0 MUST bind on its retry — to the VALIDATED
- *    openPageContext.id, never to ai_chats.page_id.
- *  - Criterion 12: when the chat "dies" before the user-message insert
- *    (runHooks.begin throws), execution never reaches the gate, so NO
- *    bind/unbind happens and any existing binding is untouched.
- *  - The bind is best-effort / fail-soft: a bind throw must not fail the user
- *    message or the turn.
- *
- * Non-vacuity: criterion 11 drives an existing chat (isNewChat === false).
- * Flipping the source gate back to `isNewChat` makes the gate false here, so
- * the upsert is not called and this suite goes RED — proven by hand.
- *
- * Method: drive the REAL stream() on a bare prototype instance (Object.create,
- * bypassing the heavy DI constructor) wired with only the collaborators reached
- * before/at the gate, and cut the turn off IMMEDIATELY after the gate by making
- * the next call — detectPageChange() — throw a sentinel. With no runHooks the
- * outer catch (runId undefined) just rethrows the sentinel, so the assertion is
- * on the REAL control flow through the gate, not a reimplementation of it.
+ * Drives the real stream() on a bare prototype instance (Object.create) wired
+ * with only the collaborators reached before/at the gate, and cuts the turn off
+ * right after the gate by making detectPageChange() throw a sentinel. The fake
+ * run has no onSettled hook, so the outer catch just rethrows it.
  */
 describe('AiChatService #665 birth page-binding gate (criteria 11 & 12)', () => {
   const SENTINEL = 'STOP_AFTER_BIRTH_BIND';
@@ -89,9 +75,15 @@ describe('AiChatService #665 birth page-binding gate (criteria 11 & 12)', () => 
     res: {
       raw: { write: jest.fn(), writableEnded: false, headersSent: false },
     } as never,
-    signal: new AbortController().signal,
     model: {} as never,
     role: null,
+    // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+    runHooks: {
+      begin: async () => ({
+        runId: 'run-1',
+        signal: new AbortController().signal,
+      }),
+    },
     ...overrides,
   });
 

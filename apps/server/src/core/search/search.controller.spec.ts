@@ -11,8 +11,6 @@ describe('SearchController', () => {
     controller = new SearchController(
       {} as any, // searchService
       {} as any, // spaceAbility
-      {} as any, // environmentService
-      {} as any, // moduleRef
     );
   });
 

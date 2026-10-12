@@ -9,7 +9,7 @@ import {
 } from './ws.utils';
 
 /**
- * WsService server-side unit tests (M7 item 2):
+ * WsService server-side unit tests:
  *  - spaceHasRestrictions cache lifecycle (miss -> read+set with TTL; hit ->
  *    no re-read; documents the stale-false window).
  *  - broadcastToAuthorizedUsers fan-out (authorized-only delivery, multi-socket

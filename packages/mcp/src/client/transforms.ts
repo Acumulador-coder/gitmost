@@ -1,6 +1,4 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Mixin over the shared client context (see client/context.ts).
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import {
   updatePageContentRealtime,
@@ -28,7 +26,7 @@ import {
 import { normalizeAndMergeFootnotes } from "../lib/footnote-normalize-merge.js";
 import vm from "node:vm";
 
-// Public method surface of TransformsMixin (issue #450) — a NAMED type so the factory
+// Public method surface of TransformsMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements ITransformsMixin` fails to compile on drift.

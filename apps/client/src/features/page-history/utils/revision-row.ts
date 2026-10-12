@@ -2,10 +2,10 @@ import { IPageHistory } from "@/features/page-history/types/page.types";
 import { historyKindMeta } from "@/features/page-history/utils/history-kind-meta";
 
 /**
- * #568 — pure `IPageHistory → dense-row` adapter for the redesigned page-history
+ * Pure `IPageHistory → dense-row` adapter for the page-history
  * panel. No React / Mantine here so it is unit-tested without mounting.
  *
- * TWO orthogonal signals are honored (per #370/#300):
+ * TWO orthogonal signals are honored:
  *  - GLYPH is by AUTHOR IDENTITY: `lastUpdatedSource === 'agent'` with an
  *    `agent` present → a square role glyph + "via <launcher>"; otherwise the
  *    human's round avatar. (An agent AUTOSAVE keeps its agent identity.)
@@ -48,6 +48,8 @@ export interface RevisionRowData {
   launcherName?: string | null;
   authorName?: string;
   authorAvatarUrl?: string;
+  /** provenance badge: the version was written by git-sync (a git push). */
+  isGitSync: boolean;
   /** intentionality badge: SAVED shown only when true (kind === 'manual'). */
   saved: boolean;
   /** historyKindMeta().version — non-versions (autosaves) are dimmed. */
@@ -68,6 +70,7 @@ export function toRevisionRow(item: IPageHistory, tz: string): RevisionRowData {
     launcherName: item.launcher?.name ?? null,
     authorName: item.lastUpdatedBy?.name,
     authorAvatarUrl: item.lastUpdatedBy?.avatarUrl,
+    isGitSync: item.lastUpdatedSource === "git-sync",
     saved: item.kind === "manual",
     version: historyKindMeta(item.kind).version,
   };
@@ -128,15 +131,13 @@ export function dayGroupLabel(
 }
 
 /**
- * Heatmap tier ceilings for a day's TOTAL revision count (#605). The heatmap now
- * counts ALL revisions per day (any kind), not just versions, so daily sums are
- * an order of magnitude larger than the old version-only counts and the old
- * ≤2 / ≤4 ceilings degenerated to a single top tier.
+ * Heatmap tier ceilings for a day's TOTAL revision count (all kinds, not just
+ * versions).
  *
- * These ceilings are a roughly log/tertile-flavored split of the real stage
- * daily sums (8, 13, 19, 48, 73, 76, 163, 426): low days (8–19) land in tier 1,
- * mid days (48–76) in tier 2, and heavy days (163, 426) in tier 3 — all three
- * tiers used, low and high genuinely distinct (issue #605 acceptance criterion 4).
+ * These ceilings are a roughly log/tertile-flavored split of real daily sums
+ * (8, 13, 19, 48, 73, 76, 163, 426): low days (8–19) land in tier 1, mid days
+ * (48–76) in tier 2, and heavy days (163, 426) in tier 3 — all three tiers
+ * used, low and high genuinely distinct.
  */
 export const HEAT_LOW_TO_MID_CEILING = 20;
 export const HEAT_MID_TO_HIGH_CEILING = 100;

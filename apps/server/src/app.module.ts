@@ -28,11 +28,13 @@ import { ClsModule } from 'nestjs-cls';
 import { AuditModule } from './integrations/audit/audit.module';
 import { ThrottleModule } from './integrations/throttle/throttle.module';
 import { McpModule } from './integrations/mcp/mcp.module';
+import { GitSyncModule } from './integrations/git-sync/git-sync.module';
 import { SandboxModule } from './integrations/sandbox/sandbox.module';
 import { AiModule } from './integrations/ai/ai.module';
 import { AiChatModule } from './core/ai-chat/ai-chat.module';
 import { MetricsModule } from './integrations/metrics/metrics.module';
 import { ClientTelemetryModule } from './core/telemetry/client-telemetry.module';
+import { CollabAccessPublisher } from './collaboration/collab-access-relay';
 
 const enterpriseModules = [];
 try {
@@ -92,6 +94,8 @@ try {
     TelemetryModule,
     ThrottleModule,
     McpModule,
+    // Gated: registers nothing unless GIT_SYNC_ENABLED=true.
+    GitSyncModule.register(),
     SandboxModule,
     AiModule,
     AiChatModule,
@@ -108,6 +112,9 @@ try {
       provide: APP_INTERCEPTOR,
       useClass: AuditActorInterceptor,
     },
+    // The access events emitted here reach the separate collab process (see
+    // collab-access-relay.ts).
+    CollabAccessPublisher,
   ],
 })
 export class AppModule {}

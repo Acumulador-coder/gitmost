@@ -35,7 +35,7 @@ vi.mock("@/lib/local-emitter.ts", () => ({
 
 // convertProseMirrorToMarkdown echoes a marker carried on the fake editor's
 // getJSON() doc, so each test controls the markdown purely via the fake page
-// editor (issue #347: the hook now serializes editor JSON through the package).
+// editor (the hook serializes editor JSON through the package).
 vi.mock("@docmost/prosemirror-markdown/browser", () => ({
   convertProseMirrorToMarkdown: (doc: { __md?: string }) => doc?.__md ?? "",
 }));

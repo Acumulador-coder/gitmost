@@ -2,13 +2,12 @@ import { AiChatController } from './ai-chat.controller';
 import type { User, Workspace } from '@docmost/db/types/entity.types';
 
 /**
- * Wiring spec for POST /ai-chat/bound-chat after #665: the resolver now reads the
- * mutable `ai_chat_page_bindings` pointer (AiChatPageBindingRepo.findChatIdByPage),
- * NOT the retired findLatestByPage heuristic. #312 is still honoured: `dto.pageId`
- * carries a slugId OR a uuid, so the controller FIRST resolves it via
- * PageRepo.findById (which accepts both) and a page in a different workspace (or an
- * unknown id) yields { chatId: null } without ever touching the binding lookup.
- * Hand-rolled mocks, no Nest graph and no DB.
+ * Wiring spec for POST /ai-chat/bound-chat: the resolver reads the
+ * `ai_chat_page_bindings` pointer (AiChatPageBindingRepo.findChatIdByPage).
+ * `dto.pageId` carries a slugId OR a uuid, so the controller first resolves it
+ * via PageRepo.findById, and a page in another workspace (or an unknown id)
+ * yields { chatId: null } without touching the binding lookup. Hand-rolled mocks,
+ * no Nest graph and no DB.
  */
 describe('AiChatController.boundChat', () => {
   const user = { id: 'u1' } as User;
@@ -32,7 +31,6 @@ describe('AiChatController.boundChat', () => {
       {} as never, // aiTranscription
       pageRepo as never,
       undefined, // streamRegistry
-      undefined, // environment
       undefined, // aiChatRunStepRepo
       bindingRepo as never,
     );

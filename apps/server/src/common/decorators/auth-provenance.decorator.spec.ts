@@ -96,6 +96,31 @@ describe('agentSourceFields', () => {
     ).toEqual({ lastUpdatedSource: 'agent', lastUpdatedAiChatId: null });
   });
 
+  it("stamps ONLY the source column 'git-sync' (no chat key) for a git-sync write", () => {
+    // The git-sync data plane has no internal ai_chats row, so it stamps the
+    // *Source column 'git-sync' and OMITS the chat key entirely (unlike the agent
+    // branch). Pinned here because page.service.spec only covers it indirectly.
+    expect(
+      agentSourceFields(
+        { actor: 'git-sync', aiChatId: null },
+        'lastUpdatedSource',
+        'lastUpdatedAiChatId',
+      ),
+    ).toEqual({ lastUpdatedSource: 'git-sync' });
+  });
+
+  it("ignores any aiChatId on a git-sync write (chat key never written)", () => {
+    // Even if a non-null aiChatId is present, the git-sync branch must not emit
+    // the chat key.
+    expect(
+      agentSourceFields(
+        { actor: 'git-sync', aiChatId: 'should-be-ignored' },
+        'createdSource',
+        'aiChatId',
+      ),
+    ).toEqual({ createdSource: 'git-sync' });
+  });
+
   it('returns {} for a user write so the column keeps its default', () => {
     expect(
       agentSourceFields(

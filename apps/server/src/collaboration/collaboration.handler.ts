@@ -3,9 +3,12 @@ import { Hocuspocus, Document } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import {
   applyPmJsonToFragment,
+  flushPendingStore,
+  isCanonicalPageDocumentName,
   isEmptyParagraphDoc,
   prosemirrorNodeToYElement,
   tiptapExtensions,
+  inEditorShape,
 } from './collaboration.util';
 import { pageContentHash } from './content-hash.util';
 import {
@@ -17,14 +20,20 @@ import {
 } from './yjs.util';
 import * as Y from 'yjs';
 import { User } from '@docmost/db/types/entity.types';
+import {
+  fragmentKeysYielding,
+  LiveBlockKeys,
+  mergeXmlFragments,
+  mergeXmlFragments3WayWithStats,
+} from './merge/yjs-body-merge';
 
 export type CollabEventHandlers = ReturnType<
   CollaborationHandler['getHandlers']
 >;
 
 /**
- * #647 refinement B — result of the `readLiveContent` probe (the owner-side half
- * of the `readLiveIfLoaded` primitive #654 depends on).
+ * Result of the `readLiveContent` probe (the owner-side half of
+ * `readLiveIfLoaded`).
  *  - `loaded:true`  → the document IS in this instance's memory and `content`/
  *    `hash` are the FULLY HYDRATED live doc (property 5). `hash` is coherent with
  *    `content` (both derived from the same `fromYdoc`).
@@ -38,13 +47,13 @@ export type ReadLiveContentResult =
   | { loaded: false };
 
 /**
- * #647 §C — verdict of the server-side write-CAS (`replaceIfMatch`).
+ * Verdict of the server-side write-CAS (`replaceIfMatch`).
  *  - `applied:true`  → `baseHash` matched the authoritative live doc and the
  *    structural overwrite was applied; `newHash` is the post-write content hash.
  *  - `applied:false` (no `reason`) → `baseHash` did NOT match: a concurrent edit
  *    landed between the agent's read and this write. `currentHash` is the live
  *    hash to re-read against. No mutation happened → REST maps this to HTTP 409.
- *  - `applied:false` + `reason:'empty-replace-refused'` → §C/B4: the replacement
+ *  - `applied:false` + `reason:'empty-replace-refused'` → the replacement
  *    would empty a non-empty page. Refused (fail-closed) rather than risking the
  *    store-side empty-guard rolling the write back into a hash/content desync with
  *    a poisoned `newHash`. REST maps this to 422.
@@ -121,7 +130,7 @@ export class CollaborationHandler {
         },
       ) => {
         const { commentId, user } = payload;
-        // Ephemeral suggestions (#329): when a suggestion-edit is dismissed or an
+        // Ephemeral suggestions: when a suggestion-edit is dismissed or an
         // applied one has no replies, the comment is hard-deleted and its inline
         // anchor must vanish too. Mirror resolveCommentMark exactly, but instead
         // of flipping the mark's `resolved` attribute we STRIP the `comment` mark
@@ -216,29 +225,26 @@ export class CollaborationHandler {
         );
       },
       /**
-       * #647 §C — server-side write-CAS (`replaceIfMatch`), the authoritative
-       * compare-and-swap that closes the "agent reads H, human/another agent
-       * edits, agent's full overwrite silently clobbers it" race.
+       * Server-side write-CAS (`replaceIfMatch`): closes the "agent reads H,
+       * someone edits, agent's full overwrite clobbers it" race.
        *
        * Routed to the document OWNER as a WRITE event (`handleYjsEvent` →
-       * `redisSync.handleEvent`, 30s TTL): if the owner is unreachable the bridge
-       * TIMES OUT and throws, so the caller fails CLOSED (retryable) — it never
-       * falls back to comparing against a stale DB snapshot (which is exactly why
-       * the compare here reads the LIVE `fromYdoc(doc)` inside the transaction and
-       * NOT `getLiveContentPair`, whose `unreachable`→DB-reconstruct collapse
-       * would let a write clobber an unreachable owner's newer state).
+       * `redisSync.handleEvent`, 30s TTL): an unreachable owner makes the bridge
+       * time out and throw, so the caller fails closed (retryable). It never
+       * compares against a DB snapshot — the compare reads the live
+       * `fromYdoc(doc)` inside the transaction, not `getLiveContentPair`, whose
+       * unreachable→DB-reconstruct fallback would let a write clobber newer state.
        *
        * Inside `connection.transact` (synchronous, atomic):
-       *  1. hash the AUTHORITATIVE live doc (`fromYdoc`);
-       *  2. `!== baseHash` → return `{applied:false, currentHash}`, NO mutation;
-       *  3. B4 empty-guard → refuse an empty-over-non-empty replace;
+       *  1. hash the authoritative live doc (`fromYdoc`);
+       *  2. `!== baseHash` → return `{applied:false, currentHash}`, no mutation;
+       *  3. empty-guard → refuse an empty-over-non-empty replace;
        *  4. else apply via the STRUCTURAL diff (`applyPmJsonToFragment` /
-       *     `updateYFragment`, NOT delete+recreate) so an idle human editor's
-       *     cursor is preserved (#152), and return `{applied:true, newHash}`.
+       *     `updateYFragment`, not delete+recreate) so an idle human editor's
+       *     cursor is preserved, and return `{applied:true, newHash}`.
        *
-       * B3 attribution: the connection context carries `{user, actor, aiChatId,
-       * apiKeyId}` (not just `{user}` like the legacy `updatePageContent`), so the
-       * debounced store stamps `lastUpdatedSource='agent'` and preserves the
+       * The connection context carries `{user, actor, aiChatId, apiKeyId}`, so
+       * the debounced store stamps `lastUpdatedSource='agent'` and keeps the
        * `apiKeyId`/`aiChatId` of the write.
        */
       replaceIfMatch: async (
@@ -267,7 +273,7 @@ export class CollaborationHandler {
               return { applied: false, currentHash };
             }
 
-            // (3) B4 empty-guard: an empty replacement over non-empty content
+            // (3) Empty-guard: an empty replacement over non-empty content
             // would be silently rolled back by the store-side empty-guard
             // (persistence.extension), leaving the broadcast/newHash out of sync
             // with the persisted row. Refuse it here (fail-closed) instead. An
@@ -294,9 +300,8 @@ export class CollaborationHandler {
         );
       },
       /**
-       * #647 refinement B — NON-CLAIMING, NON-FORCE-LOADING read of the live doc.
-       *
-       * The owner-side half of `readLiveIfLoaded` (#654's gating primitive). It
+       * Non-claiming, non-force-loading read of the live doc — the owner-side
+       * half of `readLiveIfLoaded`. It
        * reads ONLY what is already hydrated in this instance's memory:
        *  - property 2 (no force-load): we consult `hocuspocus.documents` directly
        *    and NEVER call `openDirectConnection` (which would load from the DB);
@@ -315,6 +320,189 @@ export class CollaborationHandler {
         }
         const content = TiptapTransformer.fromYdoc(doc, 'default');
         return { loaded: true, content, hash: pageContentHash(content) };
+      },
+      /**
+       * Git-sync body write, applied as a block-level MERGE into the live doc on
+       * the instance that OWNS it (routed via the custom-event channel, see
+       * CollaborationGateway.writePageBody). The merge mutates the shared
+       * Document, whose update is broadcast to every connection, so a connected
+       * editor converges on the git change instead of reverting it on autosave.
+       *
+       * With a `baseProsemirrorJson` (the last-synced common ancestor) it does a
+       * THREE-WAY merge — a block only the human changed is kept, a block only
+       * git changed is taken (conflicts -> git). Without a base it falls back to
+       * the 2-way merge, which REFUSES (throws) an empty body over a non-empty
+       * live doc.
+       *
+       * An aborted `signal` stops the write at the next step before the merge
+       * transaction (which is atomic): the live doc is then left untouched.
+       */
+      gitSyncWriteBody: async (
+        documentName: string,
+        payload: {
+          prosemirrorJson: any;
+          baseProsemirrorJson?: any;
+          userId: string;
+        },
+        signal?: AbortSignal,
+      ) => {
+        const { prosemirrorJson, baseProsemirrorJson, userId } = payload;
+        // CO-7 — git-sync assumes ONE live document per page: `page.<uuid>`.
+        // Hocuspocus would happily open an alias (`page.<slugId>`, any other
+        // prefix) as a SEPARATE Y.Doc of the same page, whose stale state an
+        // editor's later store would then write over this merge. Refuse it.
+        if (!isCanonicalPageDocumentName(documentName)) {
+          const message =
+            `git-sync write for ${documentName} refused: the document name ` +
+            `is not the canonical page.<uuid> of a page`;
+          this.logger.error(message);
+          throw new Error(message);
+        }
+        const targetEmpty = isEmptyParagraphDoc(prosemirrorJson);
+        // Only git clearing a file that HAD content (empty body, non-empty base)
+        // may persist an empty doc over a non-empty page; the store-side
+        // empty-guard (PersistenceExtension) honors exactly this flag.
+        const gitSyncIntentionalClear =
+          targetEmpty &&
+          baseProsemirrorJson != null &&
+          !isEmptyParagraphDoc(baseProsemirrorJson);
+
+        // Build the incoming (and base) Yjs docs BEFORE opening the connection /
+        // touching the live doc. If a transform throws (a malformed/unsupported
+        // doc) we must NOT have mutated the live body — otherwise a conversion
+        // failure could leave the page empty (crash-safe conversion). Both are
+        // in the shape the editor leaves an opened doc in (trailing paragraph,
+        // block ids), so opening the page later is not an edit; the base gets
+        // the same trailing paragraph as the stored doc it stands for (the
+        // block merge ignores ids).
+        const targetDoc = TiptapTransformer.toYdoc(
+          inEditorShape(prosemirrorJson),
+          'default',
+          tiptapExtensions,
+        );
+        const baseDoc =
+          baseProsemirrorJson != null
+            ? TiptapTransformer.toYdoc(
+                inEditorShape(baseProsemirrorJson),
+                'default',
+                tiptapExtensions,
+              )
+            : null;
+
+        // Block keys (markdown projections) of the git body and the base,
+        // computed in yielding chunks BEFORE the merge transaction (AGENTS
+        // invariant 3): nobody else mutates these two docs.
+        const targetFrag = targetDoc.getXmlFragment('default');
+        signal?.throwIfAborted();
+        const targetKeys = await fragmentKeysYielding(targetFrag, signal);
+        const baseFrag = baseDoc ? baseDoc.getXmlFragment('default') : null;
+        const baseKeys = baseFrag
+          ? await fragmentKeysYielding(baseFrag, signal)
+          : null;
+
+        // Flush the pending store first. The 3-way merge runs against the LIVE
+        // Y.Doc, and a user's edit is debounced before it lands (the collab store
+        // up to 10s), so the merge could run against a pre-edit doc and silently
+        // drop an in-flight UI edit, even on a different block. The flush (a)
+        // drains the event loop so a just-arrived client update is applied, and
+        // (b) persists the live doc so the baseline is current on the
+        // reload-from-DB path. A same-block edit is then detected as a conflict
+        // and the PersistenceExtension boundary snapshot pins it to history.
+        // A flush failure must not abort the git-sync write: it is logged and
+        // the merge proceeds.
+        try {
+          await flushPendingStore(hocuspocus, documentName);
+        } catch (err) {
+          this.logger.error(
+            `git-sync pre-merge flush failed for ${documentName}: ` +
+              (err instanceof Error ? err.message : String(err)),
+            err instanceof Error ? err.stack : undefined,
+          );
+        }
+
+        signal?.throwIfAborted();
+        // actor:'git-sync' + the service user flow into PersistenceExtension
+        // (lastUpdatedSource='git-sync', lastUpdatedById=userId).
+        const connection = await hocuspocus.openDirectConnection(documentName, {
+          actor: 'git-sync',
+          user: { id: userId },
+          gitSyncIntentionalClear,
+        });
+        let liveKeys: LiveBlockKeys | null = null;
+        let refused = false;
+        try {
+          // The live doc's keys are primed in yielding chunks too; edits landing
+          // meanwhile mark their blocks stale, and only those are re-projected
+          // inside the transaction.
+          liveKeys = new LiveBlockKeys(
+            connection.document!.getXmlFragment('default'),
+          );
+          await liveKeys.prime(signal);
+          signal?.throwIfAborted();
+          await connection.transact((doc) => {
+            const liveFrag = doc.getXmlFragment('default');
+            const liveBlockKeys = liveKeys!.keysOf(liveFrag.toArray());
+            if (baseFrag) {
+              const { conflicts } = mergeXmlFragments3WayWithStats(
+                liveFrag,
+                targetFrag,
+                baseFrag,
+                { live: liveBlockKeys, target: targetKeys, base: baseKeys! },
+              );
+              // SAME-BLOCK conflict contract (SPEC §9): a block both the human
+              // and git changed resolves to GIT (deterministic). Make that
+              // OBSERVABLE rather than silent — log it. The losing human content
+              // is NOT destroyed: the persistence extension's boundary snapshot
+              // pins the pre-merge page state to history on this user->git-sync
+              // transition, so it stays recoverable.
+              if (conflicts > 0) {
+                this.logger.warn(
+                  `git-sync merge for ${documentName}: ${conflicts} same-block ` +
+                    `conflict(s) resolved to the git version; the prior page ` +
+                    `state is preserved in page history (recoverable).`,
+                );
+              }
+            } else {
+              // No base: the 2-way merge makes the live doc EQUAL the target, so
+              // an empty target would delete every live block. Nothing proves
+              // git cleared this page — refuse, leaving the live doc untouched.
+              // A live doc with NO blocks (a fresh page shell) is empty too.
+              if (
+                targetEmpty &&
+                liveFrag.length > 0 &&
+                !isEmptyParagraphDoc(TiptapTransformer.fromYdoc(doc, 'default'))
+              ) {
+                refused = true;
+                return;
+              }
+              mergeXmlFragments(liveFrag, targetFrag, {
+                live: liveBlockKeys,
+                target: targetKeys,
+              });
+            }
+          });
+        } catch (err) {
+          // Includes MergeBudgetExceededError: the plan is computed before the
+          // first mutation, so that refusal leaves the live doc untouched.
+          const message =
+            `git-sync write for ${documentName} failed: ` +
+            (err instanceof Error ? err.message : String(err));
+          this.logger.error(
+            message,
+            err instanceof Error ? err.stack : undefined,
+          );
+          throw new Error(message);
+        } finally {
+          liveKeys?.dispose();
+          await connection.disconnect();
+        }
+        if (refused) {
+          const message =
+            `git-sync write for ${documentName} refused: an empty body with ` +
+            `no merge base would wipe the non-empty live page`;
+          this.logger.error(message);
+          throw new Error(message);
+        }
       },
     };
   }

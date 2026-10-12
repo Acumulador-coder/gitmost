@@ -2,13 +2,12 @@ import { AiChatToolsService } from './ai-chat-tools.service';
 import * as loader from './docmost-client.loader';
 import type { DocmostClientLike } from './docmost-client.loader';
 
-// Test-double type for the loopback client. `DocmostClientLike` is now DERIVED
-// from the real `DocmostClient` (issue #446), so its method RETURN types are the
-// concrete client shapes. These stubs deliberately return minimal recording
-// shapes (e.g. `{ ok: true }`), which no longer satisfy those concrete returns —
-// so the doubles are typed with the same method NAMES but loose async returns.
-// Each is still cast to `DocmostClientLike` at the (return-erased) mock site, so
-// the positional-call type-safety on the PRODUCTION client is unaffected.
+// Test-double type for the loopback client. `DocmostClientLike` is DERIVED from
+// the real `DocmostClient`, so its method RETURN types are the concrete client
+// shapes. These stubs return minimal recording shapes (e.g. `{ ok: true }`), so
+// the doubles are typed with the same method NAMES but loose async returns. Each
+// is still cast to `DocmostClientLike` at the (return-erased) mock site, so the
+// positional-call type-safety on the PRODUCTION client is unaffected.
 type FakeDocmostClient = Partial<
   Record<keyof DocmostClientLike, (...args: any[]) => Promise<any>>
 >;
@@ -74,12 +73,10 @@ describe('AiChatToolsService deletePage guardrail (H4)', () => {
         return fakeClient as DocmostClientLike;
       } as unknown as loader.DocmostClientCtor),
     );
-    // The new semanticSearch deps (aiService + repos) are not exercised by the
-    // deletePage guardrail tests; pass stubs to satisfy the constructor arity.
+    // aiService + searchService are not exercised by the deletePage guardrail
+    // tests; pass stubs to satisfy the constructor arity.
     service = new AiChatToolsService(
       tokenServiceStub as never,
-      {} as never,
-      {} as never,
       {} as never,
       {} as never,
       // sandboxStore: forUser() eagerly calls asSink() to wire the stash tool,
@@ -88,9 +85,6 @@ describe('AiChatToolsService deletePage guardrail (H4)', () => {
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,
@@ -204,17 +198,12 @@ describe('AiChatToolsService expanded toolset guardrails', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       // sandboxStore: forUser() eagerly calls asSink() to wire the stash tool,
       // even though these tests never execute it — return a no-op sink so the
       // tool wiring in forUser() succeeds.
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,
@@ -338,17 +327,12 @@ describe('AiChatToolsService node-arg JSON-string coercion', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       // sandboxStore: forUser() eagerly calls asSink() to wire the stash tool,
       // even though these tests never execute it — return a no-op sink so the
       // tool wiring in forUser() succeeds.
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,
@@ -536,14 +520,14 @@ describe('AiChatToolsService node-arg JSON-string coercion', () => {
 });
 
 /**
- * Model-friendly tool-call validation (#190): when the model drops a required
+ * Model-friendly tool-call validation: when the model drops a required
  * `pageId` in a parallel/batch tool call, the built-in input schema must return
  * a CLEAR, actionable message (naming the parameter, reminding it not to drop
  * ids in batches) instead of zod's raw "expected string, received undefined" —
  * while a valid call still validates. This is wired centrally via
- * modelFriendlyInput, so it applies to every in-app tool; createComment (the
- * tool from the bug report) and a sharedTool-built tool (getPage's sibling
- * getOutline) are exercised here end-to-end through forUser().
+ * modelFriendlyInput, so it applies to every in-app tool; createComment and a
+ * sharedTool-built tool (getOutline) are exercised here end-to-end through
+ * forUser().
  */
 describe('AiChatToolsService model-friendly input validation (#190)', () => {
   const fakeClient: FakeDocmostClient = {};
@@ -563,17 +547,12 @@ describe('AiChatToolsService model-friendly input validation (#190)', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       // sandboxStore: forUser() eagerly calls asSink() to wire the stash tool,
       // even though these tests never execute it — return a no-op sink so the
       // tool wiring in forUser() succeeds.
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,
@@ -613,7 +592,7 @@ describe('AiChatToolsService model-friendly input validation (#190)', () => {
     expect(result.success).toBe(false);
     expect(result.error?.message).toContain('parameter "pageId": missing (required)');
     expect(result.error?.message).toContain('parallel/batch tool calls');
-    // Not the raw zod text the model previously received.
+    // Not zod's raw text.
     expect(result.error?.message).not.toContain('received undefined');
   });
 
@@ -654,12 +633,12 @@ describe('AiChatToolsService model-friendly input validation (#190)', () => {
 });
 
 /**
- * #294 F1 — the contract-parity test introspects only the ADVERTISED schema keys
- * (buildShape), not the execute bodies. Most execs are unchanged pass-throughs,
- * but two wirings actually CHANGED in the migration and are otherwise untested:
- *   - movePage now forwards the newly-added optional `position` field to the
- *     client (client.movePage(pageId, parentPageId, position));
- *   - the table trio unified its `tableRef` param to `table` and must forward it
+ * The contract-parity test introspects only the ADVERTISED schema keys
+ * (buildShape), not the execute bodies. Most execs are plain pass-throughs; two
+ * wirings are not and are otherwise untested:
+ *   - movePage forwards the optional `position` field to the client
+ *     (client.movePage(pageId, parentPageId, position));
+ *   - the table trio takes its param as `table` and must forward it
  *     positionally. A field destructured under the wrong name would silently pass
  *     `undefined` to the client (execute is `any`-cast, so tsc won't catch it).
  */
@@ -705,14 +684,9 @@ describe('AiChatToolsService #294 changed execute wirings', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,
@@ -772,8 +746,8 @@ describe('AiChatToolsService #294 changed execute wirings', () => {
 });
 
 /**
- * #410 — the footnote + image tools were promoted from MCP-only into the shared
- * registry and are now wired in-app. Assert they are REGISTERED in the in-app
+ * The footnote + image tools come from the shared registry and are wired in-app.
+ * Assert they are REGISTERED in the in-app
  * toolset and forward their args to the client with the correct arg->method
  * mapping (the schema fields `imageUrl`/`attachmentId` map onto the client's
  * positional `url`/`oldAttachmentId`). A field destructured under the wrong name
@@ -816,14 +790,9 @@ describe('AiChatToolsService #410 footnote + image tools', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,
@@ -920,14 +889,9 @@ describe('AiChatToolsService getCurrentPage selection (#388)', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,
@@ -1013,14 +977,9 @@ describe('AiChatToolsService drawio layout passthrough (#440)', () => {
       tokenServiceStub as never,
       {} as never,
       {} as never,
-      {} as never,
-      {} as never,
       {
         asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
       } as never,
-      // #599: EmbeddingGenerationService (active-generation fingerprint for
-      // the hybrid RAG read). Unused by this spec (the RAG path falls back).
-      {} as never,
       // #629: EnvironmentService (DRAWIO_RASTER_ENABLED mirror). Flag OFF here
       // so viewImage's drawio no-raster path stays inert (resvg fallback).
       { isDrawioRasterEnabled: () => false } as never,
@@ -1077,5 +1036,123 @@ describe('AiChatToolsService drawio layout passthrough (#440)', () => {
       {} as never,
     );
     expect(createCalls[0][4]).toBeUndefined();
+  });
+});
+
+/**
+ * searchPages runs the shared SearchService (#701) AS the requesting user: the
+ * `userId` is what scopes the search to the user's member spaces and runs the
+ * page-permission filter. `items` (real matches) become `results`; `related`
+ * (non-matching semantic neighbours) stay separate, so a miss is `total: 0`.
+ */
+describe('AiChatToolsService searchPages (shared SearchService)', () => {
+  const tokenServiceStub = {
+    generateAccessToken: jest.fn().mockResolvedValue('access-token'),
+    generateCollabToken: jest.fn().mockResolvedValue('collab-token'),
+  };
+  const searchPage = jest.fn();
+
+  let service: AiChatToolsService;
+
+  beforeEach(() => {
+    searchPage.mockReset();
+    jest.spyOn(loader, 'loadDocmostMcp').mockResolvedValue(
+      mockLoaded(function () {
+        return {} as DocmostClientLike;
+      } as unknown as loader.DocmostClientCtor),
+    );
+    service = new AiChatToolsService(
+      tokenServiceStub as never,
+      {} as never,
+      { searchPage } as never,
+      {
+        asSink: () => ({ put: jest.fn(), has: jest.fn(), evict: jest.fn() }),
+      } as never,
+      { isDrawioRasterEnabled: () => false } as never,
+    );
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  const buildTools = () =>
+    service.forUser(
+      { id: 'user-42', email: 'u@example.com', workspaceId: 'ws-9' } as never,
+      'session-1',
+      'ws-9',
+      'chat-1',
+    );
+
+  it('calls searchPage as the requesting user and maps items -> results, related -> related', async () => {
+    searchPage.mockResolvedValue({
+      items: [
+        { id: 'p1', title: 'Invoice flow', snippet: 'how invoices work' },
+        { id: 'p2', title: null, snippet: 'untitled hit' },
+      ],
+      related: [{ id: 'r1', title: 'Billing', snippet: 'near miss' }],
+      total: 2,
+    });
+    const tools = await buildTools();
+
+    const out = await tools.searchPages.execute(
+      { query: '  invoice  ', limit: 5 } as never,
+      {} as never,
+    );
+
+    expect(searchPage).toHaveBeenCalledTimes(1);
+    expect(searchPage).toHaveBeenCalledWith(
+      { query: 'invoice', limit: 5 },
+      { userId: 'user-42', workspaceId: 'ws-9' },
+    );
+    expect(out).toEqual({
+      results: [
+        { id: 'p1', title: 'Invoice flow', snippet: 'how invoices work' },
+        { id: 'p2', title: '', snippet: 'untitled hit' },
+      ],
+      related: [{ id: 'r1', title: 'Billing', snippet: 'near miss' }],
+      total: 2,
+    });
+  });
+
+  it('a miss is results: [] and total: 0, with the neighbours only in related', async () => {
+    searchPage.mockResolvedValue({
+      items: [],
+      related: [{ id: 'r1', title: 'Billing', snippet: 'near miss' }],
+      total: 0,
+    });
+    const tools = await buildTools();
+
+    const out = await tools.searchPages.execute(
+      { query: 'nonexistent thing' } as never,
+      {} as never,
+    );
+
+    expect(out).toEqual({
+      results: [],
+      related: [{ id: 'r1', title: 'Billing', snippet: 'near miss' }],
+      total: 0,
+    });
+  });
+
+  it('prefers the match highlight over the leading-text snippet', async () => {
+    searchPage.mockResolvedValue({
+      items: [
+        {
+          id: 'p1',
+          title: 'Invoices',
+          highlight: 'approve <b>invoices</b> in step 7',
+          snippet: 'contents 1. intro 2. setup',
+        },
+      ],
+      related: [],
+      total: 1,
+    });
+    const tools = await buildTools();
+
+    const out = (await tools.searchPages.execute(
+      { query: 'invoices' } as never,
+      {} as never,
+    )) as { results: { snippet: string }[] };
+
+    expect(out.results[0].snippet).toBe('approve <b>invoices</b> in step 7');
   });
 });

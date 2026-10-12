@@ -1,4 +1,12 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { createStore, getDefaultStore } from "jotai";
 import { QueryClient } from "@tanstack/react-query";
 import type { IPage } from "@/features/page/types/page.types";
@@ -59,15 +67,22 @@ function persistedMetaKeys(): string[] {
   return keys;
 }
 
+// The FIRST import of this module graph is cold — the first Vite transform of
+// the app modules plus the first load of the heavy deps they pull in
+// transitively (@mantine/core and icon packs via lib/config -> lib/utils.tsx ->
+// components/ui/page-icon.tsx) — and costs ~0.6s locally vs ~2ms for every
+// re-import after vi.resetModules(). Inside a test body that cost counts against
+// the default 5s test timeout, and on a loaded CI runner it tipped the first test
+// over it. Pay it once here, under its own generous budget.
+beforeAll(async () => {
+  await freshImport();
+}, 30000);
+
 beforeEach(() => {
   localStorage.clear();
-  // The cache is default-off; the flag is mirrored from the server into
-  // window.CONFIG (process.env in DEV/test — see lib/config.ts).
-  process.env.LOCAL_FIRST_ENABLED = "true";
 });
 
 afterEach(() => {
-  delete process.env.LOCAL_FIRST_ENABLED;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -162,35 +177,6 @@ describe("pageMetaCacheAtom (localStorage boot cache)", () => {
         slug1: { id: "x", slugId: "slug1", title: "Leaked", lastAccess: 1 },
       }),
     );
-  });
-
-  it("LOCAL_FIRST_ENABLED=false: neither reads nor writes (today's behavior)", async () => {
-    const seeded = JSON.stringify({
-      slug1: {
-        id: "11111111-1111-4111-8111-111111111111",
-        slugId: "slug1",
-        title: "Roadmap",
-        lastAccess: 1,
-      },
-    });
-    localStorage.setItem(SCOPE_KEY, seeded);
-    process.env.LOCAL_FIRST_ENABLED = "false";
-
-    const off = await freshImport();
-    const offStore = createStore();
-    offStore.set(off.currentUserAtom, currentUser("w1", "u1"));
-
-    expect(offStore.get(off.pageMetaCacheAtom)).toEqual({});
-    offStore.set(off.writePageMetaAtom, page({ title: "Written while off" }));
-    expect(offStore.get(off.pageMetaCacheAtom)).toEqual({});
-    expect(localStorage.getItem(SCOPE_KEY)).toBe(seeded);
-
-    // Non-vacuity: the very same seed IS served with the flag on.
-    process.env.LOCAL_FIRST_ENABLED = "true";
-    const on = await freshImport();
-    const onStore = createStore();
-    onStore.set(on.currentUserAtom, currentUser("w1", "u1"));
-    expect(onStore.get(on.pageMetaCacheAtom)["slug1"].title).toBe("Roadmap");
   });
 
   it("degrades silently on corrupt JSON and on non-entry shapes", async () => {

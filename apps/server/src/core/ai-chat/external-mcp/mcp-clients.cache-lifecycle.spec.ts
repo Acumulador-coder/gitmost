@@ -2,10 +2,10 @@ import { McpClientsService, McpAuthUnreadableError } from './mcp-clients.service
 import { CACHE_KEY_SEP } from './mcp.constants';
 
 /**
- * #686 phase 3 — per-user cache lifecycle correctness.
+ * Per-user cache lifecycle correctness.
  *
- * The toolset cache is now keyed PER-USER (`${workspaceId}\0${userId}`), and its
- * lifecycle carries several enumerated hazards. Every test here NEUTER-PROVES the
+ * The toolset cache is keyed PER-USER (`${workspaceId}\0${userId}`), and its
+ * lifecycle carries several hazards. Every test here NEUTER-PROVES the
  * guard it names (the comment on each states what reddens if the guard is removed):
  *   - per-user key + admin∪personal union with admin-first name disambiguation;
  *   - split invalidation: admin CRUD = workspace PREFIX fan-out;

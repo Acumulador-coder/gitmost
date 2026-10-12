@@ -25,13 +25,16 @@ import { SecretBoxService } from '../crypto/secret-box';
 import { AiDriver } from './ai.types';
 import { createHash } from 'node:crypto';
 
+// Values per embeddings request: TEI's default max client batch size.
+const EMBED_BATCH_SIZE = 32;
+
 /**
- * A resolved embedding provider for #530 semantic search. `model` is the AI SDK
+ * A resolved embedding provider for semantic search. `model` is the AI SDK
  * embedding model; `queryPrefix`/`docPrefix` are prepended to a query / a stored
  * chunk respectively (e5-style `"query: "` / `"passage: "`, empty for a non-e5
  * provider); `fingerprint` is the deterministic id of the whole configuration.
  *
- * #599 `modelId` — the bare model NAME (the same value the indexer stamps into
+ * `modelId` — the bare model NAME (the same value the indexer stamps into
  * `page_embeddings.model_name`). It is a COARSER key than the fingerprint: a
  * revision bump or a prefix toggle changes the fingerprint but NOT the model id.
  * That distinction is what lets a reader decide whether the old generation's rows
@@ -42,7 +45,7 @@ import { createHash } from 'node:crypto';
  */
 export interface ResolvedEmbeddingProvider {
   model: EmbeddingModel;
-  /** Bare model name, mirrored per row in `page_embeddings.model_name` (#599). */
+  /** Bare model name, mirrored per row in `page_embeddings.model_name`. */
   modelId: string;
   queryPrefix: string;
   docPrefix: string;
@@ -50,7 +53,7 @@ export interface ResolvedEmbeddingProvider {
 }
 
 /**
- * Deterministic embedding FINGERPRINT (#530). Encodes model id + revision +
+ * Deterministic embedding FINGERPRINT. Encodes model id + revision +
  * prefix scheme + dimensions so that ANY of them changing (a revision bump, a
  * prefix toggle) yields a DIFFERENT fingerprint even when the bare model name and
  * dimension are unchanged. Deliberately NOT the bare model name: two rows from
@@ -59,21 +62,13 @@ export interface ResolvedEmbeddingProvider {
  * Exported as a pure function so it can be unit-tested in isolation and reused by
  * the indexer without a service instance.
  *
- * KNOWN GAP (#599 R8b, inherited from PR-1 — follow-up, NOT fixed here): the
- * fingerprint does NOT include the provider ENDPOINT (`embeddingBaseUrl` /
- * `EMBEDDING_ENDPOINT`) or the driver. Repoint a workspace at a DIFFERENT service
- * that happens to serve a SAME-NAMED model (a private fine-tune called
- * `bge-base-en`, a second TEI sidecar with different weights, a proxy that maps the
- * name elsewhere) and the fingerprint is IDENTICAL: no swap window opens, the
- * generation pointer never moves, `modelChanged` stays false — and the D2 guard,
- * whose whole premise is "a different embedding space always shows up as a
- * different model name", is bypassed. Search then serves a cross-space cosine
- * (query from the new weights vs rows from the old ones) and RRF promotes the
- * resulting noise. Mitigating it means folding the endpoint (and driver) into the
- * fingerprint, which forces a full reindex on any endpoint move — including benign
- * ones (a host rename, an HA re-address), so it is a deliberate follow-up decision,
- * not a drive-by change here. Until then: an operator who repoints the embedding
- * endpoint at different weights MUST click "Reindex now".
+ * KNOWN GAP: the fingerprint does NOT include the provider ENDPOINT
+ * (`embeddingBaseUrl` / `EMBEDDING_ENDPOINT`) or the driver. Repointing a
+ * workspace at a different service serving a SAME-NAMED model with different
+ * weights leaves the fingerprint identical: no swap window opens and search
+ * serves a cross-space cosine. Including the endpoint would force a full
+ * reindex on any endpoint move, including a host rename. An operator who
+ * repoints the embedding endpoint at different weights MUST click "Reindex now".
  */
 export function computeEmbeddingFingerprint(parts: {
   modelId: string;
@@ -114,7 +109,7 @@ export interface ChatModelOverride {
  *
  * The provider client is built PER WORKSPACE on demand — never cached globally —
  * and the decrypted API key is held only for the duration of the call and is
- * never logged (§6.2/§8).
+ * never logged.
  */
 @Injectable()
 export class AiService {
@@ -234,11 +229,11 @@ export class AiService {
         // (NOT inferred from baseUrl — a custom URL can front real OpenAI too).
         // Both branches hit Chat Completions (/chat/completions); the provider
         // fetch is the instrumented streaming fetch (finite-but-generous stream
-        // timeouts, #175).
+        // timeouts).
         //
         // 'openai-compatible' (default) maps the third-party provider's streamed
-        // `reasoning_content` to reasoning parts (z.ai/GLM, DeepSeek, ...) — the
-        // point of #175. It has no default endpoint, so it requires a baseURL;
+        // `reasoning_content` to reasoning parts (z.ai/GLM, DeepSeek, ...). It
+        // has no default endpoint, so it requires a baseURL;
         // when there is none (real OpenAI, or a role's cross-driver override that
         // cleared baseUrl) we fall back to the official provider.
         if (chatApiStyle === 'openai-compatible' && baseUrl) {
@@ -267,10 +262,7 @@ export class AiService {
       case 'gemini':
         // Route gemini through the same instrumented streaming fetch as openai
         // (finite silence timeouts + keep-alive recycling + pre-response
-        // connection-reset retry). Without it the provider ran on the global
-        // undici fetch — no keep-alive recycle, no reset retries, default
-        // (unbounded silence) timeout — so incident classes #140/#175/#310 were
-        // reproducible for gemini too.
+        // connection-reset retry) instead of the global undici fetch.
         return createGoogleGenerativeAI({
           apiKey,
           fetch: this.aiProviderFetch,
@@ -288,7 +280,7 @@ export class AiService {
 
   /**
    * Resolve the workspace config and build the text-embedding model used by the
-   * RAG indexer / semanticSearch (§6.7 stage D). Built PER WORKSPACE on demand,
+   * RAG indexer / semanticSearch. Built PER WORKSPACE on demand,
    * same as getChatModel; the decrypted key is never logged.
    *
    * Uses the embedding-specific endpoint/key (`embeddingBaseUrl` /
@@ -441,7 +433,7 @@ export class AiService {
   }
 
   /**
-   * #530: resolve the embedding provider for a workspace. Prefers the workspace's
+   * Resolve the embedding provider for a workspace. Prefers the workspace's
    * own configured embedding provider; falls back to the GLOBAL env provider (a
    * TEI sidecar via the OpenAI-compatible path) when the workspace has none.
    * Returns the model + the query/doc prefixes + the config fingerprint. Throws
@@ -510,13 +502,13 @@ export class AiService {
   }
 
   /**
-   * #530: embed a SEARCH QUERY. Resolves the provider, prepends its query prefix,
+   * Embed a SEARCH QUERY. Resolves the provider, prepends its query prefix,
    * and embeds the single value under its OWN short timeout
    * (SEARCH_EMBED_TIMEOUT_MS, default 800ms) — NOT the long batch-indexing
    * timeout — so a slow/hung sidecar degrades search fast. Throws on
    * timeout/error (the caller degrades to the lexical-only path). Returns the
    * vector plus the fingerprint AND the model id of the provider that produced it
-   * (#599: the model id is the key the reader compares against the ACTIVE
+   * (the model id is the key the reader compares against the ACTIVE
    * generation's model to decide whether the two live in the same embedding space
    * — see EmbeddingGenerationService.embedQueryForActiveGeneration).
    */
@@ -539,11 +531,12 @@ export class AiService {
   }
 
   /**
-   * Embed values with an EXPLICIT model, bounded by `timeoutMs` (default: the
-   * batch-indexing timeout). Shared core of embedTexts / embedQuery: a slow/hung
-   * embeddings endpoint must fail loudly instead of blocking forever. The single
-   * signal caps the WHOLE call, including the SDK's internal retries/backoff
-   * (embedMany defaults to maxRetries: 2).
+   * Embed values with an EXPLICIT model. Shared core of embedTexts / embedQuery.
+   * Values are sent in requests of at most EMBED_BATCH_SIZE: TEI rejects larger
+   * ones (422 "batch size > 32", or 413 for a giant page). Each request is
+   * bounded by `timeoutMs`
+   * (default: the batch-indexing timeout), so a slow/hung embeddings endpoint
+   * fails loudly instead of blocking forever.
    */
   async embedWithModel(
     model: EmbeddingModel,
@@ -551,7 +544,37 @@ export class AiService {
     texts: string[],
     timeoutMs: number = AiService.embeddingTimeoutMs(),
   ): Promise<number[][]> {
-    if (texts.length === 0) return [];
+    const embeddings: number[][] = [];
+    const batches = Math.ceil(texts.length / EMBED_BATCH_SIZE);
+    for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
+      const batch = texts.slice(i, i + EMBED_BATCH_SIZE);
+      const position =
+        `batch ${i / EMBED_BATCH_SIZE + 1}/${batches}, ` +
+        `${batch.length} of ${texts.length} value(s)`;
+      embeddings.push(
+        ...(await this.embedBatch(
+          model,
+          workspaceId,
+          batch,
+          timeoutMs,
+          position,
+        )),
+      );
+    }
+    return embeddings;
+  }
+
+  /**
+   * One embeddings request. The signal caps the whole request, including the
+   * SDK's internal retries/backoff (embedMany defaults to maxRetries: 2).
+   */
+  private async embedBatch(
+    model: EmbeddingModel,
+    workspaceId: string,
+    texts: string[],
+    timeoutMs: number,
+    position: string,
+  ): Promise<number[][]> {
     const signal = AbortSignal.timeout(timeoutMs);
     try {
       const { embeddings } = await embedMany({
@@ -576,7 +599,7 @@ export class AiService {
       if (signal.aborted && abortLike) {
         throw new Error(
           `Embedding request timed out after ${timeoutMs}ms ` +
-            `(workspace ${workspaceId}, ${texts.length} value(s)). ` +
+            `(workspace ${workspaceId}, ${position}). ` +
             `Increase the embedding timeout or check the embeddings endpoint.`,
         );
       }
@@ -585,8 +608,9 @@ export class AiService {
   }
 
   /**
-   * Per-embedding-call timeout in ms. Configurable via AI_EMBEDDING_TIMEOUT_MS;
-   * falls back to 120000 (2 min) when unset or invalid.
+   * Timeout per embeddings request (at most EMBED_BATCH_SIZE values) in ms.
+   * Configurable via AI_EMBEDDING_TIMEOUT_MS; falls back to 120000 (2 min) when
+   * unset or invalid.
    */
   private static embeddingTimeoutMs(): number {
     const raw = Number(process.env.AI_EMBEDDING_TIMEOUT_MS);

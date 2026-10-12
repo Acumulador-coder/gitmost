@@ -3,7 +3,7 @@ import { render } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 
 /**
- * F1 regression: every floating anchor in the editor must start `autoUpdate`
+ * Every floating anchor in the editor must start `autoUpdate`
  * with `{ layoutShift: false }`.
  *
  * `layoutShift: true` (the library default) starts `observeMove()`, which

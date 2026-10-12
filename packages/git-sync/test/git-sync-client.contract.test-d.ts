@@ -14,13 +14,13 @@ import type {
 // exact result fields the engine consumes) — the assertions live in the TYPE
 // system, not the runtime body.
 //
-// ENFORCEMENT (Finding #1): this file is a vitest TYPE test (`.test-d.ts`).
+// ENFORCEMENT: this file is a vitest TYPE test (`.test-d.ts`).
 // `vitest.config.ts` enables `test.typecheck` scoped to `test/**/*.test-d.ts`,
 // so `npx vitest run` runs `tsc` over THIS file and turns every `expectTypeOf` /
 // `@ts-expect-error` / `satisfies GitSyncClient` below into a real build-time
 // assertion. If the GitSyncClient result shapes drift (e.g. createPage stops
 // returning `{ data: { id: string } }`), the typecheck pass FAILS and the whole
-// `vitest run` goes red. (The 35 runtime `*.test.ts` suites are NOT typechecked
+// `vitest run` goes red. (The runtime `*.test.ts` suites are NOT typechecked
 // — the `-d` include scopes this to the contract file only.) The trivial
 // `expect(true)` calls just keep the test reporter honest; they are NOT the
 // guard.
@@ -65,6 +65,16 @@ describe('GitSyncClient contract (type-level)', () => {
     expect(true).toBe(true);
   });
 
+  it('pageIdsExist(ids) -> ids subset (D-P3-1 ghost guard seam)', () => {
+    expectTypeOf<GitSyncClient['pageIdsExist']>().parameters.toEqualTypeOf<
+      [string[]]
+    >();
+    expectTypeOf<
+      Awaited<ReturnType<GitSyncClient['pageIdsExist']>>
+    >().toEqualTypeOf<string[]>();
+    expect(true).toBe(true);
+  });
+
   it('a structurally-correct adapter satisfies GitSyncClient (drift => compile error)', () => {
     // A minimal dummy adapter mirroring the EXACT result shapes the engine reads.
     // The `satisfies GitSyncClient` clause is the contract guard: any drift in a
@@ -74,6 +84,7 @@ describe('GitSyncClient contract (type-level)', () => {
         pages: [] as GitSyncPageNodeLite[],
         complete: true,
       }),
+      pageIdsExist: async (_pageIds: string[]) => [] as string[],
       getPageJson: async (pageId: string) => ({
         id: pageId,
         slugId: 'slug',
@@ -130,6 +141,7 @@ describe('GitSyncClient contract (type-level)', () => {
     // in BOTH directions).
     const bad = {
       listSpaceTree: async () => ({ pages: [] as GitSyncPageNodeLite[], complete: true }),
+      pageIdsExist: async () => [] as string[],
       getPageJson: async (pageId: string) => ({
         id: pageId,
         slugId: 's',

@@ -1,4 +1,4 @@
-// Unit coverage for MediaMixin.uploadFile (issue #608) — the byte-fed upload
+// Unit coverage for MediaMixin.uploadFile — the byte-fed upload
 // primitive. The network (uploadAttachmentBuffer), the page-id resolution
 // (resolvePageId) and the insert (insertNode) are all STUBBED on the instance,
 // so these tests exercise ONLY uploadFile's own logic: base64 normalization,

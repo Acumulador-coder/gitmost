@@ -10,7 +10,7 @@ import {
 } from '@/features/page/types/page.types';
 import { QueryParams } from "@/lib/types";
 import { IPagination } from "@/lib/types.ts";
-import { offlineCriticalRequestConfig } from "@/lib/config";
+import { OFFLINE_CRITICAL_REQUEST_CONFIG } from "@/lib/config";
 import { saveAs } from "file-saver";
 import { InfiniteData } from "@tanstack/react-query";
 import { IFileTask } from '@/features/file-task/types/file-task.types.ts';
@@ -30,7 +30,7 @@ export async function getPageById(
   const req = await api.post<IPage>(
     "/pages/info",
     pageInput,
-    offlineCriticalRequestConfig(),
+    OFFLINE_CRITICAL_REQUEST_CONFIG,
   );
   return req.data;
 }

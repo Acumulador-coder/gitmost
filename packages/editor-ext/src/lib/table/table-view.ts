@@ -49,16 +49,12 @@ export function updateColumns(
             hasWidth,
           );
           // `getColStyleDeclaration` writes EITHER `width` (sized column) or
-          // `min-width` (unsized one), so a column losing its width leaves the
-          // old `width` behind and the browser keeps honouring it. Upstream
-          // tiptap has the same bug — plus it compares `style.width` against a
-          // value it may write to `min-width`, so the compared and written
-          // properties diverge — but it was UNREACHABLE here until this branch
-          // installed columnResizing: without it `colwidth` never changed at
-          // runtime. Now undo-after-resize, restoring an older page version and
-          // remote collab edits all hit it, so the opposite property is cleared
-          // explicitly. (prosemirror-tables' own TableView does not suffer from
-          // this: it always assigns `style.width`, and the empty string clears.)
+          // `min-width` (unsized one), so a column losing its width would leave
+          // the old `width` behind and the browser keeps honouring it (upstream
+          // tiptap has the same bug). Undo-after-resize, restoring an older page
+          // version and remote collab edits all reach this, so the opposite
+          // property is cleared explicitly. (prosemirror-tables' own TableView
+          // always assigns `style.width`, and the empty string clears.)
           const otherKey = propertyKey === 'width' ? 'min-width' : 'width';
           if (
             existingCol.style.getPropertyValue(propertyKey) !== propertyValue ||

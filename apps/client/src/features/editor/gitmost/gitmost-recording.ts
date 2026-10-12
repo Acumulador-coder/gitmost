@@ -248,11 +248,11 @@ export async function gitmostUploadFileToEditor(
 // mark-parsing surface. Each kept line is trimmed (drops an indent that would
 // leak into the display). A line that begins with a col-0 markdown block
 // trigger (`#`/`-`/`>`/`1.`/fence/`---`/…) needs no client-side workaround: the
-// git-sync serializer (packages/prosemirror-markdown, `case "paragraph"`) now
+// git-sync serializer (packages/prosemirror-markdown, `case "paragraph"`)
 // block-escapes such a leading trigger, so the doc->markdown->doc round-trip
-// keeps the line a paragraph on its own — the former invisible-ZWSP defense is
-// gone. This is best-effort and meant to run AFTER the audio has already been
-// inserted; the caller must guard against a throw so a transcript failure never
+// keeps the line a paragraph on its own. This is best-effort and meant to run
+// AFTER the audio has already been inserted; the caller must guard against a
+// throw so a transcript failure never
 // fails the (already successful) recording. Returns true when a block was
 // inserted, false when there was nothing to insert (transcript
 // undefined/empty/not-a-string). A non-string value is a no-op, not an error.

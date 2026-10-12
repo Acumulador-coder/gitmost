@@ -85,10 +85,10 @@ jest.mock('ai', () => {
 });
 
 /**
- * Unit tests for the token-degeneration detector (#444) — the sole anti-babble
- * guard once the final-step lockdown is OFF. The two rules must fire on real
- * degeneration (the "loadTools." incident, a no-newline repeat) and MUST NOT fire
- * on legitimate long output (edit lists, tables, code).
+ * Unit tests for the token-degeneration detector — the sole anti-babble guard
+ * when the final-step lockdown is OFF. The two rules must fire on real
+ * degeneration ("loadTools." ×N, a no-newline repeat) and MUST NOT fire on
+ * legitimate long output (edit lists, tables, code).
  */
 describe('hasRepeatedLineRun (rule 1: identical-line run)', () => {
   it('POSITIVE: fires on "loadTools.\\n" repeated many times (the incident)', () => {
@@ -173,10 +173,9 @@ const config = { retries: 3, timeout: 5000, backoff: 'exp' };
     expect(hasPeriodicTail('ababab')).toBe(false);
   });
 
-  // Regression (#444): a trivial single-char period (p===1) must NOT flag
-  // legitimate divider/underline/whitespace runs. These are common in real
-  // model output and previously false-positived at ~20 identical chars, aborting
-  // the run and truncating output. They must all be treated as clean.
+  // A trivial single-char period (p===1) must NOT flag legitimate
+  // divider/underline/whitespace runs. These are common in real model output
+  // and must all be treated as clean.
   it('NEGATIVE: a markdown horizontal rule is not flagged', () => {
     const text = 'text\n' + '-'.repeat(40);
     expect(hasPeriodicTail(text)).toBe(false);
@@ -219,7 +218,7 @@ const config = { retries: 3, timeout: 5000, backoff: 'exp' };
   });
 
   // Positive counterparts: a GENUINE single-char runaway (hundreds+ of repeats)
-  // and the real incident (period>=2, "loadTools." ×N) must still fire.
+  // and a multi-char block loop (period>=2, "loadTools." ×N) must still fire.
   it('POSITIVE: a genuine single-char runaway is still flagged', () => {
     const text = 'x'.repeat(5000);
     expect(hasPeriodicTail(text)).toBe(true);
@@ -259,12 +258,12 @@ describe('truncateDegeneratedTail', () => {
 });
 
 /**
- * Throttle + step-boundary reset (#486). The stream keeps a watermark
+ * Throttle + step-boundary reset. The stream keeps a watermark
  * (`lastDegenerationCheckLen`) that is an OFFSET into the accumulated step text.
  * On a step boundary the accumulator resets to '', so the watermark MUST reset to
  * 0 too — otherwise the throttle goes silent for the whole next step. These tests
  * pin the pure decision AND the reset property that ai-chat.service.onStepFinish
- * now enforces.
+ * enforces.
  */
 describe('shouldCheckDegeneration (throttle) + step-boundary reset (#486)', () => {
   it('fires once the text grows a full DEGENERATION_CHECK_STEP past the mark', () => {
@@ -298,13 +297,13 @@ describe('shouldCheckDegeneration (throttle) + step-boundary reset (#486)', () =
 });
 
 /**
- * BEHAVIOR guard for the ACTUAL fix (#486, ai-chat.service.onStepFinish resets
- * lastDegenerationCheckLen to 0). The pure tests above use a hard-coded
- * resetWatermark, so a REVERT of the real `lastDegenerationCheckLen = 0` line
- * would not redden any of them. This drives the REAL onChunk/onStepFinish
- * closures from stream() end to end and asserts the run is aborted when a fresh
- * degenerate burst arrives in the step AFTER a long clean step — which only
- * happens if the watermark was actually zeroed on the step boundary.
+ * Behavior guard for ai-chat.service.onStepFinish resetting
+ * lastDegenerationCheckLen to 0. The pure tests above use a hard-coded
+ * resetWatermark, so removing the real `lastDegenerationCheckLen = 0` line would
+ * not redden any of them. This drives the REAL onChunk/onStepFinish closures from
+ * stream() end to end and asserts the run is aborted when a fresh degenerate burst
+ * arrives in the step AFTER a long clean step — which only happens if the
+ * watermark was actually zeroed on the step boundary.
  */
 describe('AiChatService: onStepFinish re-arms the degeneration watermark (#486)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -399,10 +398,15 @@ describe('AiChatService: onStepFinish re-arms the degeneration watermark (#486)'
         ],
       } as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
-      // No runHooks -> legacy path (socket signal), degeneration guard active.
+      // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+      runHooks: {
+        begin: async () => ({
+          runId: 'run-1',
+          signal: new AbortController().signal,
+        }),
+      },
     });
 
     expect(streamTextMock).toHaveBeenCalledTimes(1);

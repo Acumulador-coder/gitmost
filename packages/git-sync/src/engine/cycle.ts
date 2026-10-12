@@ -1,244 +1,386 @@
-import { VaultGit, DEFAULT_BRANCH } from "./git.js";
+import {
+  VaultGit,
+  DEFAULT_BRANCH,
+  LAST_EXPORT_REF,
+  BOT_AUTHOR_NAME,
+  BOT_AUTHOR_EMAIL,
+} from "./git.js";
 import { GitSyncClient } from "./client.types.js";
 import { Settings } from "./settings.js";
-import { readExisting, computePullActions, applyPullActions } from "./pull.js";
-import { runPush } from "./push.js";
-import { assertVaultPathSafe, type PathGuardIo } from "./path-guard.js";
+import {
+  readExisting,
+  computePullActions,
+  buildExportTree,
+  logDeletionDecision,
+  type PullFailure,
+} from "./pull.js";
+import { runPush, type CreatedPage, type PushFailure } from "./push.js";
+import { upgradeLegacyVault, type UpgradeVaultDeps } from "./upgrade.js";
+import { throwIfAborted } from "./abort.js";
 
-/**
- * Absolute-path filesystem primitives the cycle needs. Injected (not imported)
- * so the engine stays IO-free and unit-testable. `mkdir` is recursive; `rm` is
- * force (a missing file is a no-op).
- *
- * `lstat`/`realpath` back the SYMLINK GUARD (see ./path-guard.ts): every
- * read/write/mkdir is screened so a pushed symlink (e.g. `leak.md -> /etc/passwd`
- * or `-> .env`) cannot be followed to publish or overwrite a file outside the
- * vault. Both MUST resolve to `null` on ENOENT and reject on any other error.
- */
-export interface CycleFs extends PathGuardIo {
-  readFile: (absPath: string) => Promise<string>;
-  writeFile: (absPath: string, text: string) => Promise<void>;
-  mkdir: (absDir: string) => Promise<void>;
-  rm: (absPath: string) => Promise<void>;
-}
+/** Provenance of an export commit on `main` (SPEC §7.3): `docmost`. */
+const SOURCE_TRAILER = "Docmost-Sync-Source";
+/** The last-export pointer an export commit started from. */
+const PREV_EXPORT_TRAILER = "Docmost-Sync-Prev-Export";
+/** Where the pointer goes after it: a record commit, or `self`. */
+const LAST_EXPORT_TRAILER = "Docmost-Sync-Last-Export";
+
+/** The most per-page push failures one cycle names in the log. */
+const LOGGED_PUSH_FAILURES = 20;
 
 export interface RunCycleDeps {
   spaceId: string;
-  /** The Docmost seam (reads for pull, writes for push). */
+  /** The Docmost seam (reads for the export, writes for the apply). */
   client: GitSyncClient;
-  /** The per-space git vault (a real working repo). */
+  /** The per-space bare git vault. */
   vault: VaultGit;
-  /** Engine settings; `vaultPath` roots the relPath -> absolute-path mapping. */
+  /** Engine settings. */
   settings: Settings;
-  fs: CycleFs;
   log: (line: string) => void;
   /**
-   * Optional cooperative-abort signal. The caller (orchestrator) wires this to
-   * the per-space lock: if a heartbeat refresh cannot CONFIRM the lock is still
-   * held (CAS-miss / Redis error), the signal is aborted and the cycle bails at
-   * its next checkpoint (before the pull-apply and before the push-apply — the
-   * two destructive write phases) instead of writing blind after a possible
-   * lock loss. This is a COARSE best-effort guard; a fully fenced cross-process
-   * single-writer still needs the fencing-token redesign (follow-up).
+   * Warning channel for events an operator must notice (per-page failures, the
+   * vault self-heals). Falls back to `log` when not supplied.
+   */
+  warn?: (line: string) => void;
+  /**
+   * The caller-owned export-key map of THIS space (pageId -> key of the page's
+   * last successful export, see `exportKeyOf`). The export reuses the last
+   * export's file of a live page whose key is unchanged. The cycle REBUILDS it
+   * only after the whole cycle succeeded, so it holds at most one entry per live
+   * page; it CLEARS it when the cycle throws or `prepareVault` had to repair the
+   * vault, so the next cycle is a full pass. Omitted -> every cycle is a full
+   * pass.
+   */
+  exportKeys?: Map<string, string>;
+  /**
+   * Optional cooperative-abort signal. The caller (orchestrator) aborts it when
+   * a heartbeat refresh cannot CONFIRM the per-space lock is still held, or
+   * when the cycle's deadline passes. The cycle checks it before the apply,
+   * before the export and before `main` moves; the apply and the export check
+   * it between page operations and hand it to every conversion. An abort ends
+   * the cycle with a `CycleAbortedError` instead of writing blind after a
+   * possible lock loss: no ref moves before `main`'s compare-and-swap, and the
+   * next cycle re-applies the same changes, which is idempotent. A COARSE
+   * best-effort guard, not a fenced cross-process single-writer.
    */
   signal?: AbortSignal;
 }
 
 export interface RunCycleResult {
   ran: boolean;
-  /** Set when the cycle short-circuited without running pull/push. */
-  skipped?: "merge-in-progress";
-  pull?: { written: number; deleted: number; conflict: boolean };
-  push?: { mode: string; failures: number };
   /**
-   * Forwarded from the push result: `true` when the push REFUSED to fast-forward
-   * a divergent `docmost` mirror (the §5 invariant — `docmost` mirrors what
-   * Docmost contains — is broken). Surfaced here so a caller driving `runCycle`
-   * can detect the breach without scraping logs (red-team #15).
+   * The export: pages fetched and files of removed pages dropped. `failures`
+   * counts the live pages the export could not place (they did not reach git
+   * this cycle and are retried the next); `firstFailure` is the first of them
+   * (absent when none).
    */
-  divergentDocmost?: boolean;
+  pull?: {
+    written: number;
+    deleted: number;
+    failures: number;
+    firstFailure?: PullFailure;
+  };
+  /** `firstFailure` is the first per-page apply failure (absent when none). */
+  push?: { mode: string; failures: number; firstFailure?: PushFailure };
 }
 
 /**
- * Run ONE full reconcile cycle for a space: PULL (Docmost -> vault) then PUSH
- * (vault -> Docmost), under the engine's required branch choreography. This is
- * the single entry point the app drives — it owns the staging order so it can
- * never drift from the engine it ships with.
+ * Run ONE reconcile cycle for a space, under the caller's space lock. There is
+ * one merge domain — the collaboration layer's block 3-way merge — and the
+ * vault never runs `git merge`:
  *
- * Staging (the ⭐ data-loss-critical order, SPEC §6/§9):
- *   1. assertGitAvailable + ensureRepo (the git state store must exist).
- *   2. refuse on an unresolved merge (a prior conflicting pull); next checkout
- *      would fail otherwise.
- *   3. ensureBranch('docmost','main') + checkout('docmost'). Pull writes MUST
- *      land on `docmost`, not `main`: applyPullActions commits on `docmost`,
- *      then checks out `main` and merges docmost -> main. Writing Docmost
- *      content straight onto `main` would clobber local file edits before push
- *      can diff them.
- *   4. PULL: readExisting -> listSpaceTree -> computePullActions -> apply.
- *   5. PUSH: vault -> Docmost apply.
+ *   0. `prepareVault`: repo, stale locks, legacy upgrade, `main`, pointer.
+ *   1. APPLY: when `main`'s tree differs from the last export's, the user's
+ *      changes since that export reach Docmost by `gitmost_id` (`runPush`); an
+ *      update is a block 3-way merge with the last export's body as its base,
+ *      and git wins a block both sides changed.
+ *   2. EXPORT: Docmost (read after step 1) becomes a tree built with plumbing
+ *      on top of `main`'s, committed on `main` with a compare-and-swap
+ *      `update-ref`; the pointer moves after it. A page whose apply failed
+ *      keeps git's file on `main`, and the pointer keeps its last-export
+ *      version, so the next cycle retries it alone.
  *
  * Lock POLICY lives in the caller; this owns only the mechanics. Deletes are
- * soft (Trash, reversible) and always logged, so there is no per-cycle
- * delete-cap — engine convergence is the guard against phantom deletions.
+ * soft (Trash, reversible) and always logged.
+ *
+ * Any throw clears `deps.exportKeys` (the next cycle is a full pass) and is
+ * re-thrown unchanged.
  */
 export async function runCycle(deps: RunCycleDeps): Promise<RunCycleResult> {
-  const { spaceId, client, vault, settings, fs, log, signal } = deps;
-  const vaultRoot = settings.vaultPath;
-  const abs = (relPath: string) => `${vaultRoot}/${relPath}`;
-
-  // SYMLINK GUARD (defense-in-depth, see ./path-guard.ts). Wrap the injected
-  // read/write/mkdir primitives so EVERY engine file access is screened: a path
-  // that is — or traverses — a symlink, or whose realpath escapes the vault, is
-  // refused. `rm` is deliberately NOT wrapped: removing a path only deletes the
-  // link itself (force, non-recursive), never the target, and we WANT to be able
-  // to clean up a stray pushed symlink. A refusal THROWS; the pull/push loops
-  // already isolate per-file errors (skip + log), so a single poisoned entry is
-  // skipped while the rest of the space keeps syncing.
-  const guard = (p: string) => assertVaultPathSafe(fs, vaultRoot, p);
-  const safeFs = {
-    readFile: async (p: string): Promise<string> => {
-      await guard(p);
-      return fs.readFile(p);
-    },
-    writeFile: async (p: string, text: string): Promise<void> => {
-      await guard(p);
-      return fs.writeFile(p, text);
-    },
-    mkdir: async (p: string): Promise<void> => {
-      await guard(p);
-      return fs.mkdir(p);
-    },
-    rm: (p: string): Promise<void> => fs.rm(p),
-  };
-
-  // 1. The engine state store is git: make sure the repo + branches exist
-  //    before any tracked-file listing or diff.
-  await vault.assertGitAvailable();
-  await vault.ensureRepo();
-
-  // 1b. CLEAR stale git lock files left by an interrupted git op (bug D3-N3). A
-  //     hard crash / OOM-kill / abrupt container stop mid `git add`/`commit`/
-  //     `checkout` leaves a `.git/index.lock` (or a ref `*.lock`); git then refuses
-  //     every later op ("Unable to create '…/index.lock': File exists"), wedging the
-  //     space forever with no self-heal. Only locks OLDER than the staleness
-  //     threshold are removed (a fresh lock from a concurrent replica in the
-  //     TTL-lapse window is preserved), before the merge check + any checkout/diff
-  //     below.
-  await vault.clearStaleGitLocks();
-
-  // 1c. RESTORE a missing `main` branch (bug D3-N1). Ref-store damage can leave an
-  //     existing repo without `main`; the ensureBranch("docmost","main") + checkout
-  //     below would then throw every cycle ("pathspec 'main' did not match"),
-  //     wedging the space forever. Re-create it from `docmost`/HEAD before use.
-  await vault.ensureMainBranch();
-
-  // 2. RECOVER from a vault left mid-merge by a PRIOR cycle (SPEC §9 wedge fix).
-  //    A leftover merge used to WEDGE THE WHOLE SPACE: this check returned
-  //    `skipped: "merge-in-progress"` so EVERY later cycle skipped the entire
-  //    space (all pages, both directions) forever, with no recovery. The pull
-  //    phase below no longer leaves the vault mid-merge (it commits a conflicting
-  //    merge with markers and isolates the one bad page), but a vault wedged by a
-  //    PRE-FIX build (or a manual/interrupted git op) must still self-heal.
-  //    So instead of skipping, ABORT the stale half-merge and continue — the
-  //    fresh pull re-runs and, on a real conflict, commits-with-markers rather
-  //    than re-wedging. A stray unmerged index that `merge --abort` can't clear
-  //    (no MERGE_HEAD) is force-cleared with a hard reset to HEAD.
-  if (await vault.isMergeInProgress()) {
-    log(
-      `vault was left mid-merge by a prior cycle — aborting the stale merge and ` +
-        `continuing so the space is not wedged (SPEC §9 recovery).`,
-    );
-    await vault.abortMerge();
-    if (await vault.isMergeInProgress()) {
-      log(
-        `vault still mid-merge after 'merge --abort' — hard-resetting to HEAD ` +
-          `to recover (SPEC §9).`,
-      );
-      await vault.resetHardToHead();
-    }
-  }
-
   try {
-    // 3. Pull writes happen on `docmost`; be on it BEFORE applying (see docstring).
-    await vault.ensureBranch("docmost", "main");
-    await vault.checkout("docmost");
+    return await runCycleOnce(deps);
+  } catch (err) {
+    deps.exportKeys?.clear();
+    throw err;
+  }
+}
 
-    // 4. PULL ------------------------------------------------------------------
-    const existing = await readExisting({
-      listTracked: () => vault.listTrackedFiles("*.md"),
-      readFile: (relPath) => safeFs.readFile(abs(relPath)),
-    });
+/** IO for `prepareVault`. */
+export type PrepareVaultDeps = UpgradeVaultDeps;
 
-    const tree = await client.listSpaceTree(spaceId);
-    const pullActions = computePullActions({
-      pages: tree.pages,
-      treeComplete: tree.complete,
-      existing,
-    });
+/**
+ * Bring the vault to a state a cycle can run on: an initialized repo, no stale
+ * git locks, a legacy vault upgraded to the bare layout, a `main` branch and a
+ * last-export pointer that is not behind an export commit on `main`. Runs under
+ * the space lock, before every cycle and before an external push's
+ * receive-pack. Returns true when it had to repair anything.
+ */
+export async function prepareVault(deps: PrepareVaultDeps): Promise<boolean> {
+  const { vault } = deps;
+  await vault.assertGitAvailable();
+  let repaired = await vault.ensureRepo();
+  if ((await vault.clearStaleGitLocks()) > 0) repaired = true;
+  if (await upgradeLegacyVault(deps)) repaired = true;
+  if (await vault.ensureMainBranch()) repaired = true;
+  if (await repairPointer(deps)) repaired = true;
+  return repaired;
+}
 
-    // Bail before the first destructive write phase if the lock was lost.
-    signal?.throwIfAborted();
+/**
+ * An export moves `main` first and the pointer second. When a crash fell
+ * between the two, `main`'s tip is that export commit and the pointer is still
+ * at the export's start (its Prev trailer): move the pointer where the export
+ * meant it to go (its Last trailer, `self` for the commit itself).
+ */
+async function repairPointer(deps: PrepareVaultDeps): Promise<boolean> {
+  const { spaceId, vault } = deps;
+  const warn = deps.warn ?? deps.log;
+  const tip = await vault.revParse(`refs/heads/${DEFAULT_BRANCH}`);
+  const pointer = await vault.revParse(LAST_EXPORT_REF);
+  if (tip === null || pointer === null || tip === pointer) return false;
+  const trailers = new Map<string, string>();
+  for (const line of (await vault.commitMessage(tip)).split("\n")) {
+    const m = line.match(/^([\w-]+): (.+)$/);
+    if (m) trailers.set(m[1], m[2]);
+  }
+  if (trailers.get(SOURCE_TRAILER) !== "docmost") return false;
+  if (trailers.get(PREV_EXPORT_TRAILER) !== pointer) return false;
+  const last = trailers.get(LAST_EXPORT_TRAILER);
+  if (last === undefined) return false;
+  const target = last === "self" ? tip : last;
+  // An export whose record is its own start (every change it kept back) leaves
+  // the pointer where it is: nothing was cut off.
+  if (target === pointer) return false;
+  await vault.updateRef(LAST_EXPORT_REF, target, pointer);
+  warn(
+    `space ${spaceId}: the export ${tip.slice(0, 8)} was cut off before the ` +
+      `last-export pointer moved — moved it to ${target.slice(0, 8)}.`,
+  );
+  return true;
+}
 
-    const pullResult = await applyPullActions(
-      {
-        client,
-        git: vault,
-        writeFile: (absPath, text) => safeFs.writeFile(absPath, text),
-        mkdir: (absDir) => safeFs.mkdir(absDir),
-        rm: (absPath) => safeFs.rm(absPath),
-        log,
-      },
-      pullActions,
-      vaultRoot,
+async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
+  const { spaceId, client, vault, settings, log, signal, exportKeys } = deps;
+  const warn = deps.warn ?? log;
+
+  // 0. Any self-heal means the vault may not hold what the recorded export keys
+  //    describe: forget them so this cycle re-exports every live page.
+  if (await prepareVault({ spaceId, vault, log, warn })) exportKeys?.clear();
+
+  const main0 = await vault.revParse(`refs/heads/${DEFAULT_BRANCH}`);
+  const base0 = await vault.revParse(LAST_EXPORT_REF);
+  if (main0 === null || base0 === null) {
+    throw new Error(
+      `space ${spaceId}: the vault has no '${DEFAULT_BRANCH}' or no ${LAST_EXPORT_REF}`,
     );
+  }
+  const mainTree = await vault.revParse(`${main0}^{tree}`);
+  const baseTree = await vault.revParse(`${base0}^{tree}`);
+  // A symlink entry is never a page: never applied, never read as one.
+  const symlinks = new Set(
+    (await vault.lsTree(main0)).filter((e) => e.mode === "120000").map((e) => e.path),
+  );
 
-    // 5. PUSH ------------------------------------------------------------------
-    const pushDeps = {
-      settings,
-      git: vault,
-      makeClient: () => client,
-      readFile: (relPath: string) => safeFs.readFile(abs(relPath)),
-      writeFile: (relPath: string, text: string) =>
-        safeFs.writeFile(abs(relPath), text),
-      log,
-    };
-
-    // Bail before pushing to Docmost if the lock was lost during pull.
-    signal?.throwIfAborted();
-
-    const pushResult = await runPush(pushDeps, { dryRun: false });
-
-    return {
-      ran: true,
-      pull: {
-        written: pullResult.written,
-        deleted: pullResult.deleted,
-        conflict: pullResult.merge.conflict,
+  // 1. APPLY ---------------------------------------------------------------
+  throwIfAborted(signal, "before applying the user's changes");
+  let failures: PushFailure[] = [];
+  let created: CreatedPage[] = [];
+  if (mainTree !== baseTree) {
+    const pushed = await runPush(
+      {
+        settings,
+        git: vault,
+        makeClient: () => client,
+        baseRef: base0,
+        headRef: main0,
+        symlinks,
+        log,
+        signal,
       },
-      push: {
-        mode: pushResult.mode,
-        failures: pushResult.failures?.length ?? 0,
-      },
-      // Forward a divergent-`docmost` escalation so the caller can act on the §5
-      // invariant breach without scraping logs (red-team #15).
-      divergentDocmost: pushResult.divergentDocmost ?? false,
-    };
-  } finally {
-    // STABLE SERVED HEAD (bug #3). The pull transiently checks out the read-only
-    // `docmost` mirror, and the smart-HTTP host advertises whatever HEAD resolves
-    // to — so a clone racing a cycle could default to `docmost`. The happy path
-    // already ends on `main` (runPush), but a throw mid-pull would leave HEAD on
-    // `docmost`; restore it here so the advertised default branch is `main` BETWEEN
-    // cycles. Best-effort: skipped if the lock was lost (do not write the working
-    // tree after a possible takeover), and a failing checkout (e.g. a dirty tree
-    // from an aborted write) is swallowed — the next cycle's recovery resyncs and
-    // the read advertisement pins HEAD under the lock regardless.
-    if (!signal?.aborted) {
-      try {
-        await vault.checkout(DEFAULT_BRANCH);
-      } catch {
-        /* best-effort: next cycle recovers; advertisement pins HEAD under lock */
-      }
+      { dryRun: false },
+    );
+    failures = pushed.failures ?? [];
+    created = pushed.created ?? [];
+    // Name each failed page and its reason (the status carries only the first
+    // one), capped so a mass failure cannot flood the log.
+    for (const f of failures.slice(0, LOGGED_PUSH_FAILURES)) {
+      warn(`space ${spaceId}: push ${f.kind} of ${f.path} failed: ${f.error}`);
+    }
+    if (failures.length > LOGGED_PUSH_FAILURES) {
+      warn(
+        `space ${spaceId}: … and ${failures.length - LOGGED_PUSH_FAILURES} ` +
+          `more push failure(s)`,
+      );
     }
   }
+
+  // 2. EXPORT --------------------------------------------------------------
+  const tree = await client.listSpaceTree(spaceId);
+  const existing = await readExisting({
+    candidates: async () =>
+      (await vault.pageIdsAtRef(main0)).filter((e) => !symlinks.has(e.path)),
+    readFiles: (paths) => vault.readFilesAtRef(main0, paths),
+  });
+
+  // D-P3-1 ghost guard: an absence-delete must not remove a git file whose
+  // pageId was NEVER a page (a hand-authored file with an unknown id). Only the
+  // tracked ids absent from the live tree that the datasource knows as a page
+  // row (incl. trashed / other spaces) may be absence-deleted. On an INCOMPLETE
+  // fetch many live pages look absent, but `computePullActions` then suppresses
+  // every absence delete anyway.
+  const livePageIds = new Set(tree.pages.filter((p) => p && p.id).map((p) => p.id));
+  const candidateDeleteIds = existing
+    .map((e) => e.pageId)
+    .filter((id) => !livePageIds.has(id));
+  const deletableIds =
+    candidateDeleteIds.length > 0 ? await client.pageIdsExist(candidateDeleteIds) : [];
+
+  const plan = computePullActions({
+    pages: tree.pages,
+    treeComplete: tree.complete,
+    existing,
+    deletableIds,
+    exportKeys,
+  });
+  logDeletionDecision(log, plan);
+
+  // Bail before the export moves any ref if the lock was lost.
+  throwIfAborted(signal, "before the export");
+
+  // A failed page keeps git's files on `main` (no export of it this cycle), and
+  // its paths keep their last-export version in the recorded base.
+  const pinnedPaths = new Set(
+    failures.flatMap((f) => (f.oldPath !== undefined ? [f.path, f.oldPath] : [f.path])),
+  );
+  const pinnedIds = new Set(failures.flatMap((f) => (f.pageId ? [f.pageId] : [])));
+  // A page whose export key is unchanged since the last export (and whose file
+  // `main` holds at its path) takes the last export's blob, unfetched.
+  const toFetch = new Set(plan.toWrite.map((w) => w.pageId));
+  const baseBlobs = new Map(
+    (await vault.lsTree(base0))
+      .filter((e) => e.mode === "100644")
+      .map((e) => [e.path, e.sha] as const),
+  );
+  const filesById = new Map<string, string[]>();
+  for (const e of existing) {
+    filesById.set(e.pageId, [...(filesById.get(e.pageId) ?? []), e.relPath]);
+  }
+  const pages = plan.live
+    .filter((p) => !pinnedIds.has(p.pageId))
+    .map((p) => {
+      const blob = toFetch.has(p.pageId) ? undefined : baseBlobs.get(p.relPath);
+      return blob === undefined ? p : { ...p, blob };
+    });
+  const exported = await buildExportTree(
+    { client, git: vault, log, signal },
+    {
+      start: main0,
+      pages,
+      // Each page's files elsewhere on `main` go once its file is placed.
+      removeIfWritten: pages.flatMap((p) =>
+        (filesById.get(p.pageId) ?? [])
+          .filter((path) => path !== p.relPath)
+          .map((path) => ({ pageId: p.pageId, path })),
+      ),
+      // A created file is placed again, with its id, at the page's layout path.
+      // When that page is not exported this cycle (failed fetch, pinned layout
+      // path), its file is absent from `main` until the next export places it;
+      // its text is already in Docmost. Keeping the file would leave an id-less
+      // copy beside the page or, kept out of the record, have the next cycle
+      // create the page again.
+      remove: [...created.map((c) => c.path), ...plan.toDelete],
+      pinned: pinnedPaths,
+    },
+  );
+  // Pages the export could not place never reach git while the cycle itself
+  // succeeds: WARN the count and the first one (the export's log names each).
+  if (exported.failed > 0) {
+    const first = exported.firstFailure;
+    warn(
+      `space ${spaceId}: the export could not place ${exported.failed} ` +
+        `page(s) in the vault (retried next cycle)` +
+        (first ? `; first: page ${first.pageId}: ${first.error}` : ""),
+    );
+  }
+
+  const recordTree =
+    pinnedPaths.size === 0
+      ? exported.tree
+      : await vault.treeWithPathsFrom(exported.tree, base0, [...pinnedPaths]);
+  const bot = { authorName: BOT_AUTHOR_NAME, authorEmail: BOT_AUTHOR_EMAIL };
+  const newBase =
+    recordTree === exported.tree
+      ? null
+      : recordTree === baseTree
+        ? base0
+        : await vault.commitTree(
+            recordTree,
+            [base0],
+            `docmost: record (${failures.length} failed, kept back)`,
+            bot,
+          );
+  // Removed paths of pages Docmost no longer has (a created file's old path is
+  // not one: its page is placed again).
+  const deleted = plan.toDelete.filter((p) => !pinnedPaths.has(p)).length;
+  const subject =
+    deleted > 0
+      ? `docmost: export ${exported.written} page(s), ${deleted} deleted`
+      : `docmost: export ${exported.written} page(s)`;
+  // The last check before `main` moves: the export may have run long.
+  throwIfAborted(signal, `before moving '${DEFAULT_BRANCH}'`);
+  const newMain =
+    exported.tree === mainTree
+      ? main0
+      : await vault.commitTree(exported.tree, [main0], subject, {
+          ...bot,
+          trailers: [
+            `${SOURCE_TRAILER}: docmost`,
+            `${PREV_EXPORT_TRAILER}: ${base0}`,
+            `${LAST_EXPORT_TRAILER}: ${newBase ?? "self"}`,
+          ],
+        });
+  // `main` first, then the pointer: a crash in between leaves the pointer at the
+  // export's start, which `repairPointer` moves on. Under the space lock nothing
+  // else moves `main`, so a failed compare-and-swap throws.
+  if (newMain !== main0) {
+    await vault.updateRef(`refs/heads/${DEFAULT_BRANCH}`, newMain, main0);
+  }
+  const pointer = newBase ?? newMain;
+  if (pointer !== base0) await vault.updateRef(LAST_EXPORT_REF, pointer, base0);
+
+  // Record the export keys only NOW that the export landed. Rebuilt from the
+  // live tree, so a page that left the tree loses its key; a page whose export
+  // or apply failed gets none (it is exported again next cycle).
+  if (exportKeys) {
+    const skip = new Set([...exported.failedPageIds, ...pinnedIds]);
+    exportKeys.clear();
+    for (const [pageId, key] of plan.liveExportKeys) {
+      if (!skip.has(pageId)) exportKeys.set(pageId, key);
+    }
+  }
+
+  return {
+    ran: true,
+    pull: {
+      written: exported.written,
+      deleted,
+      failures: exported.failed,
+      ...(exported.firstFailure ? { firstFailure: exported.firstFailure } : {}),
+    },
+    push: {
+      mode: "apply",
+      failures: failures.length,
+      ...(failures.length ? { firstFailure: failures[0] } : {}),
+    },
+  };
 }

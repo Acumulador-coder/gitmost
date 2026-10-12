@@ -30,4 +30,17 @@ describe("page-file thin format", () => {
     expect(parsePageFile("").id).toBeNull();
     expect(parsePageFile("   \n  ").body).toBe("");
   });
+
+  it("parses a 1 MB whitespace run inside the id value in linear time", () => {
+    // The former `^gitmost_id:\s*(.+?)\s*$` backtracked quadratically on such a
+    // value (40k spaces: ~0.7 s of blocked event loop; 1 MB: hours), and every
+    // tracked file is parsed on every sync cycle.
+    const run = " ".repeat(1024 * 1024);
+    const started = performance.now();
+    const hostile = parsePageFile(`---\ngitmost_id: a${run}b\n---\nbody`);
+    const blank = parsePageFile(`---\ngitmost_id:${run}\n---\nbody`);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(hostile).toEqual({ id: `a${run}b`, body: "body" });
+    expect(blank).toEqual({ id: null, body: "body" });
+  });
 });

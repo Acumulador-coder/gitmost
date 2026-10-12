@@ -1,10 +1,10 @@
-// Mock collab tests for the #413 MARKDOWN path of patchNode / insertNode and the
+// Mock collab tests for the MARKDOWN path of patchNode / insertNode and the
 // markdown-default getNode. These stand up a real Hocuspocus collab server seeded
 // with a chosen document (mirroring ambiguous-node-id.test.mjs), let the client
 // run its real transform against a live Y.Doc, and read the persisted result back
 // to assert on the written document.
 //
-// Coverage (issue #413):
+// Coverage:
 //  - CANON CONVERGENCE: a block written via patchNode(markdown) is canonically
 //    equal to the SAME content run through a full markdown import (no "second
 //    canon" appears on the block-level path).
@@ -159,24 +159,26 @@ after(async () => {
   );
 });
 
-// A seed doc with two neighbour paragraphs around a target paragraph.
+// A seed doc with two neighbour paragraphs around a target paragraph. The
+// paragraphs carry the schema default `indent: 0` that the Y.Doc build stamps,
+// so the neighbour byte-identity checks compare the stored shape.
 function seed3() {
   return {
     type: "doc",
     content: [
       {
         type: "paragraph",
-        attrs: { id: "before-id" },
+        attrs: { id: "before-id", indent: 0 },
         content: [{ type: "text", text: "before" }],
       },
       {
         type: "paragraph",
-        attrs: { id: "target-id" },
+        attrs: { id: "target-id", indent: 0 },
         content: [{ type: "text", text: "old target" }],
       },
       {
         type: "paragraph",
-        attrs: { id: "after-id" },
+        attrs: { id: "after-id", indent: 0 },
         content: [{ type: "text", text: "after" }],
       },
     ],

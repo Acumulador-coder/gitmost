@@ -4,8 +4,8 @@ import { observeHttp } from './metrics.registry';
 
 // URL path prefixes served by @fastify/static (client build output under
 // client/dist). `/assets/` holds the content-hashed bundle (index-*.js,
-// chunk-*.js) — a NEW set of names every deploy, i.e. an UNBOUNDED label set
-// (#362); the others (/vad/, /brand/, /locales/, /icons/ — copied verbatim from
+// chunk-*.js) — a NEW set of names every deploy, i.e. an UNBOUNDED label set;
+// the others (/vad/, /brand/, /locales/, /icons/ — copied verbatim from
 // public/) have stable names, so they are merely repetitive per-file labels
 // rather than unbounded. Either way none of these belong in the API-route
 // histogram: collapse them all to one bounded `static` label. (Edge latency for
@@ -21,7 +21,7 @@ const STATIC_PATH_PREFIXES = [
 /**
  * Resolve the BOUNDED route label for an HTTP response.
  *
- * HARD REQUIREMENT (#355): use the ROUTE TEMPLATE (`/pages/:id`), NEVER a raw
+ * HARD REQUIREMENT: use the ROUTE TEMPLATE (`/pages/:id`), NEVER a raw
  * URL (`/pages/abc-123` or `/assets/index-CAbxDtto.js`), so label cardinality
  * stays finite. Fastify exposes the matched template on `req.routeOptions.url`,
  * BUT @fastify/static serves each file through a route whose matched url is the

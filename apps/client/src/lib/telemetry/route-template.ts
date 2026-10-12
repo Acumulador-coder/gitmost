@@ -1,12 +1,12 @@
 /**
- * Map a raw pathname to a BOUNDED route TEMPLATE (#355).
+ * Map a raw pathname to a BOUNDED route TEMPLATE.
  *
  * Perf metrics must be labelled by route template only — never a raw path with
  * slugs/ids — so the server-side `route` column and any downstream aggregation
  * stay low-cardinality and carry NO page slugs/titles (privacy). Anything that
  * does not match a known pattern collapses to `other`.
  *
- * The template vocabulary mirrors the issue's example (`/s/:space/p/:slug`).
+ * Templates look like `/s/:space/p/:slug`.
  */
 const ROUTE_PATTERNS: { re: RegExp; template: string }[] = [
   // Share pages (public).

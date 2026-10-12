@@ -1,5 +1,8 @@
-import { ForbiddenException } from '@nestjs/common';
-import { AiChatController } from './ai-chat.controller';
+import { ForbiddenException, Logger } from '@nestjs/common';
+import {
+  AiChatController,
+  ATTACH_TAIL_WRITE_TIMEOUT_MS,
+} from './ai-chat.controller';
 import type {
   RunStreamAttachment,
   RunStreamCallbacks,
@@ -8,14 +11,13 @@ import { SUBSCRIBER_MAX_BUFFERED_BYTES } from './ai-chat-stream-registry.service
 import type { User, Workspace } from '@docmost/db/types/entity.types';
 
 /**
- * Wiring spec for the #184 phase 1.5 attach endpoint (tail-only #491)
- * (`GET /ai-chat/runs/:chatId/stream`). Owner-gated via assertOwnedChat; the
- * registry is mocked so this exercises ONLY the controller's tail-write/live/204/
- * cleanup wiring against a fake raw socket. The attach signature is now
- * `(chatId, anchor, n, cb)` — the client hands its persisted step frontier `n`
- * and its assistant row id `anchor`. Constructor order is (aiChatService,
- * aiChatRunService, aiChatRepo, aiChatMessageRepo, aiTranscription, pageRepo,
- * streamRegistry, environment).
+ * Wiring spec for the attach endpoint (`GET /ai-chat/runs/:chatId/stream`).
+ * Owner-gated via assertOwnedChat; the registry is mocked so this exercises only
+ * the controller's tail-write/live/204/cleanup wiring against a fake raw socket.
+ * The attach signature is `(chatId, anchor, n, cb)` — the client's persisted
+ * step frontier `n` and its assistant row id `anchor`. Constructor order is
+ * (aiChatService, aiChatRunService, aiChatRepo, aiChatMessageRepo,
+ * aiTranscription, pageRepo, streamRegistry, environment).
  */
 describe('AiChatController attach endpoint (#184 phase 1.5)', () => {
   const user = { id: 'u1' } as User;
@@ -99,7 +101,6 @@ describe('AiChatController attach endpoint (#184 phase 1.5)', () => {
         },
       ),
     };
-    const environment = { isAiChatResumableStreamEnabled: () => true };
     const controller = new AiChatController(
       {} as never, // aiChatService
       {} as never, // aiChatRunService
@@ -108,7 +109,6 @@ describe('AiChatController attach endpoint (#184 phase 1.5)', () => {
       {} as never, // aiTranscription
       {} as never, // pageRepo
       streamRegistry as never,
-      environment as never,
     );
     return {
       controller,
@@ -328,6 +328,77 @@ describe('AiChatController attach endpoint (#184 phase 1.5)', () => {
     expect(attachment.unsubscribe).toHaveBeenCalled();
   });
 
+  // AI-3: a reader that neither drains nor closes must not park the handler
+  // (and the replay + paused subscriber it pins) forever.
+  it('tears the attach down when the tail is not drained within the deadline', async () => {
+    jest.useFakeTimers();
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const start = jest.fn();
+      const attachment = makeAttachment({ replay: ['f1', 'f2'], start });
+      const { controller } = makeController({ chat: owned, attachment });
+      const { res, raw } = makeRawRes();
+      // The kernel buffer is full and never drains; 'close' never fires either.
+      raw.write.mockImplementation((f: string) => {
+        raw.written.push(f);
+        return false;
+      });
+      const { req } = makeReq();
+      let settled = false;
+      const handling = controller
+        .attachRunStream('c1', undefined, '0', req, res, user, workspace)
+        .then(() => {
+          settled = true;
+        });
+
+      await jest.advanceTimersByTimeAsync(ATTACH_TAIL_WRITE_TIMEOUT_MS - 1);
+      expect(settled).toBe(false); // still waiting for the drain
+      await jest.advanceTimersByTimeAsync(2);
+      await handling;
+
+      expect(raw.written).toEqual(['f1']); // stopped at the undrained write
+      expect(raw.destroy).toHaveBeenCalled(); // write buffer released
+      expect(attachment.unsubscribe).toHaveBeenCalled(); // paused subscriber dropped
+      expect(start).not.toHaveBeenCalled(); // never went live
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('did not drain'),
+      );
+    } finally {
+      warn.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it('a socket that closes mid-tail is torn down without going live', async () => {
+    const start = jest.fn();
+    const attachment = makeAttachment({ replay: ['f1', 'f2'], start });
+    const { controller } = makeController({ chat: owned, attachment });
+    const { res, raw } = makeRawRes();
+    raw.write.mockImplementation((f: string) => {
+      raw.written.push(f);
+      return false;
+    });
+    // The socket closes while the handler waits for the drain.
+    raw.once.mockImplementation((ev: string, fn: () => void) => {
+      if (ev === 'close') setImmediate(fn);
+    });
+    const { req } = makeReq();
+    await controller.attachRunStream(
+      'c1',
+      undefined,
+      '0',
+      req,
+      res,
+      user,
+      workspace,
+    );
+    expect(raw.written).toEqual(['f1']);
+    expect(attachment.unsubscribe).toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it('onFrame destroys the socket when the buffered length exceeds the cap', async () => {
     const attachment = makeAttachment({ replay: [] });
     const { controller, getCb } = makeController({ chat: owned, attachment });
@@ -357,22 +428,19 @@ describe('AiChatController attach endpoint (#184 phase 1.5)', () => {
 });
 
 /**
- * The begin-hook `open()` flag gate (#184 phase 1.5). `open()` lives ONLY in the
- * stream() begin-hook, gated on the resumable flag. If it regressed, a flag-off
- * turn would create an EMPTY registry entry (never bound, never finished) and a
- * later attach would find a non-null paused attachment -> a hung SSE that never
- * gets a frame and never ends, instead of a clean 204. These drive stream() only
- * far enough to capture the runHooks it hands to the service, then invoke the
- * begin-hook and assert whether the registry was opened.
+ * The begin-hook `open()` (#184 phase 1.5). `open()` lives ONLY in the stream()
+ * begin-hook. This drives stream() only far enough to capture the runHooks it
+ * hands to the service, then invokes the begin-hook and asserts the registry
+ * was opened.
  */
-describe('AiChatController begin-hook open() flag gate (#184 phase 1.5)', () => {
+describe('AiChatController begin-hook open() (#184 phase 1.5)', () => {
   const user = { id: 'u1' } as User;
   const workspace = {
     id: 'ws1',
-    settings: { ai: { chat: true, autonomousRuns: true } },
+    settings: { ai: { chat: true } },
   } as unknown as Workspace;
 
-  function makeController(opts: { resumable: boolean }) {
+  function makeController() {
     let capturedArgs: any;
     const aiChatService = {
       resolveRoleForRequest: jest.fn(async () => null),
@@ -389,9 +457,6 @@ describe('AiChatController begin-hook open() flag gate (#184 phase 1.5)', () => 
       })),
     };
     const streamRegistry = { open: jest.fn(), attach: jest.fn() };
-    const environment = {
-      isAiChatResumableStreamEnabled: () => opts.resumable,
-    };
     const controller = new AiChatController(
       aiChatService as never,
       aiChatRunService as never,
@@ -400,7 +465,6 @@ describe('AiChatController begin-hook open() flag gate (#184 phase 1.5)', () => 
       {} as never, // aiTranscription
       {} as never, // pageRepo
       streamRegistry as never,
-      environment as never,
     );
     return {
       controller,
@@ -426,26 +490,8 @@ describe('AiChatController begin-hook open() flag gate (#184 phase 1.5)', () => 
     return { req, res };
   }
 
-  it('flag OFF: the begin-hook does NOT open a registry entry (no hung empty entry)', async () => {
-    const { controller, streamRegistry, aiChatRunService, getRunHooks } =
-      makeController({ resumable: false });
-    const { req, res } = makeReqRes();
-    await controller.stream(req, res, user, workspace);
-
-    const runHooks = getRunHooks();
-    expect(runHooks).toBeDefined();
-    const handle = await runHooks.begin('chat-1');
-    // The run still begins (the durable-run feature is independent of resume)...
-    expect(aiChatRunService.beginRun).toHaveBeenCalled();
-    expect(handle).toEqual({ runId: 'run-1', signal: expect.anything() });
-    // ...but with the flag off the registry entry is NEVER opened.
-    expect(streamRegistry.open).not.toHaveBeenCalled();
-  });
-
-  it('flag ON: the begin-hook opens the registry entry with (chatId, runId)', async () => {
-    const { controller, streamRegistry, getRunHooks } = makeController({
-      resumable: true,
-    });
+  it('the begin-hook opens the registry entry with (chatId, runId)', async () => {
+    const { controller, streamRegistry, getRunHooks } = makeController();
     const { req, res } = makeReqRes();
     await controller.stream(req, res, user, workspace);
 

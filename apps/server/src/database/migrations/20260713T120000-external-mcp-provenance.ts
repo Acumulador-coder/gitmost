@@ -1,7 +1,7 @@
 import { type Kysely } from 'kysely';
 
 /**
- * External-MCP provenance backbone (#559, Phase 3C of #556).
+ * External-MCP provenance.
  *
  * An edit/comment made by an EXTERNAL MCP agent authenticates via an `api_key`,
  * so it must be attributed to a separate "External MCP" persona named after the

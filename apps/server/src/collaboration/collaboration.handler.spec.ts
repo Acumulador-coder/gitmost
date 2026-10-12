@@ -4,7 +4,7 @@ import * as yjsUtil from './yjs.util';
 import { User } from '@docmost/db/types/entity.types';
 
 /**
- * Unit tests for the `applyCommentSuggestion` collab handler (phase 3 of #315).
+ * Unit tests for the `applyCommentSuggestion` collab handler.
  *
  * The handler runs `replaceYjsMarkedText` inside the owning instance's Y
  * transaction and returns the verdict to the caller. We exercise it against a

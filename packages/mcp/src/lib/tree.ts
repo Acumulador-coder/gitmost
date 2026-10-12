@@ -1,9 +1,9 @@
 /**
- * Options for `buildPageTree`. Fully OPTIONAL so the existing call form
- * `buildPageTree(nodes)` keeps its historic behaviour (lean `{id, slugId,
- * title, children?}` output, no depth cut) unchanged.
+ * Options for `buildPageTree`. Fully OPTIONAL: the plain call form
+ * `buildPageTree(nodes)` yields the lean `{id, slugId, title, children?}`
+ * output with no depth cut.
  *
- *  - `shape: "getTree"` — emit the #443 `getTree` output node shape
+ *  - `shape: "getTree"` — emit the `getTree` output node shape
  *    `{pageId, title, children?, hasChildren?}` instead of the lean
  *    `{id, slugId, title, children?}` shape. `slugId`/`icon`/`position` are
  *    never exposed (INVARIANT: only the UUID `pageId` leaves the MCP layer).
@@ -32,7 +32,7 @@ export interface BuildPageTreeOptions {
  * lean (nesting alone conveys the structure; parentPageId/position/hasChildren
  * are intentionally dropped from the output).
  *
- * Output (`shape: "getTree"`, the #443 tool shape): each node is
+ * Output (`shape: "getTree"`, the getTree tool shape): each node is
  *   { pageId, title, children?, hasChildren? }
  * — the server `id` is exposed as `pageId` (never `slugId`/`icon`/`position`).
  * `children` is omitted for leaves and for nodes trimmed by `maxDepth`.

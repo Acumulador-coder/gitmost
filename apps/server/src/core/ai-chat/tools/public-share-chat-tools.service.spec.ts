@@ -1,4 +1,5 @@
 import { PublicShareChatToolsService } from './public-share-chat-tools.service';
+import { SHARE_SEARCH_DISABLED_APPROVED } from '../../search/search.service';
 
 /**
  * Mock-based integration tests for the anonymous public-share toolset built by
@@ -109,13 +110,50 @@ describe('PublicShareChatToolsService.forShare', () => {
   });
 
   describe('searchSharePages blank guard', () => {
-    it('blank query => [] WITHOUT calling searchService', async () => {
+    it('blank query => empty results WITHOUT calling searchService', async () => {
       const { svc, searchService } = makeService({ searchPage: jest.fn() });
       const tools = svc.forShare('SHARE-A', 'ws-1');
       await expect(
         (tools.searchSharePages as unknown as ToolExec).execute({ query: '   ' }),
-      ).resolves.toEqual([]);
+      ).resolves.toEqual({ results: [], related: [] });
       expect(searchService.searchPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('searchSharePages results', () => {
+    it('passes the semantic neighbours through as `related`', async () => {
+      const { svc } = makeService({
+        searchPage: jest.fn().mockResolvedValue({
+          items: [{ id: 'p1', title: 'Match', highlight: '<b>hit</b>' }],
+          related: [{ id: 'p2', title: 'Near', highlight: null, snippet: 'lead' }],
+        }),
+      });
+      const tools = svc.forShare('SHARE-A', 'ws-1');
+      await expect(
+        (tools.searchSharePages as unknown as ToolExec).execute({ query: 'x' }),
+      ).resolves.toEqual({
+        results: [{ id: 'p1', title: 'Match', snippet: '<b>hit</b>' }],
+        related: [{ id: 'p2', title: 'Near', snippet: 'lead' }],
+      });
+    });
+
+    it('an approved-mode share reports search as unavailable, explicitly', async () => {
+      const { svc } = makeService({
+        searchPage: jest.fn().mockResolvedValue({
+          items: [],
+          related: [],
+          disabledReason: SHARE_SEARCH_DISABLED_APPROVED,
+        }),
+      });
+      const tools = svc.forShare('SHARE-A', 'ws-1');
+      await expect(
+        (tools.searchSharePages as unknown as ToolExec).execute({ query: 'x' }),
+      ).resolves.toEqual({
+        results: [],
+        related: [],
+        unavailable:
+          'Search is unavailable on this share because it publishes only saved versions.',
+      });
     });
   });
 

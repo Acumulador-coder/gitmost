@@ -15,7 +15,7 @@ import {
 } from './db';
 
 /**
- * #370 Stage B — "approved" (publish-only-the-saved-version) share mode, against
+ * "Approved" (publish-only-the-saved-version) share mode, against
  * real Postgres (so the migration column + the hand-written recursive-CTE
  * threading in getShareForPage are exercised for real, not mocked).
  *
@@ -243,14 +243,11 @@ describe('share published_mode (approved) [integration]', () => {
 
   // --- resolveReadableSharePage content freeze -----------------------------
 
-  // --- atomicity regression lock (F1) --------------------------------------
+  // --- atomicity --------------------------------------------------------------
   // The share-write and the approved baseline mint MUST commit in ONE
-  // transaction. If a future change moves the mint off `trx` back onto
-  // `this.db`, an "approved" share could durably persist WITHOUT a baseline —
-  // the fail-open confidentiality hole the fix closed. These two tests fail the
-  // moment that atomicity is broken: with the mint outside the trx, the failed
-  // mint would no longer roll back the share row (test 1) / the mode UPDATE
-  // (test 2), so the post-condition assertions below would flip.
+  // transaction: with the mint on `this.db` instead of `trx`, an "approved" share
+  // could durably persist WITHOUT a baseline (fail-open confidentiality). A
+  // failed mint must roll back the share row (test 1) / the mode UPDATE (test 2).
 
   it('createShare(approved) rolls back the shares insert when the baseline mint throws', async () => {
     const pageId = await newPage('mint-fail create body');

@@ -49,12 +49,11 @@ export function isRunTerminal(status: string | null | undefined): boolean {
 }
 
 /**
- * #487: the outcome a run's {@link AiChatRunService.finalizeRun} settled with.
- * `terminalWriteFailed` = the terminal write GAVE UP after the bounded retry, so
- * the row is still non-terminal ('running') and a ZOMBIE record holds the
- * `intended` status for a later re-drive (reconcile / supersede / boot sweep). A
- * subscriber (supersede, #487 commit 3) uses this to decide whether the slot is
- * genuinely free or must first have the intended status applied.
+ * The outcome a run's {@link AiChatRunService.finalizeRun} settled with.
+ * `terminalWriteFailed` = the terminal write gave up after the bounded retry, so
+ * the row is still 'running' and a ZOMBIE record holds the `intended` status for
+ * a later re-drive (reconcile / supersede / boot sweep). Supersede uses it to
+ * decide whether the slot is free or the intended status must be applied first.
  */
 export interface RunSettleOutcome {
   status: RunTerminalStatus;
@@ -63,13 +62,11 @@ export interface RunSettleOutcome {
 }
 
 /**
- * #487: how long a supersede waits for the target run to settle after Stop before
- * it degrades to `SUPERSEDE_TIMEOUT`. W=10s is generous under a HEALTHY DB: commit
- * 1's race-on-abort makes an in-app tool abort->settle in ms/hundreds of ms, so a
- * live run releases its slot well within the window. Under a DB brownout the
- * timeout is normal (the write cannot land); W must NOT be raised to paper
- * over a slow DB — a SUPERSEDE_TIMEOUT is the honest signal (nothing persisted,
- * the composer keeps the user's text). Env-tunable for ops, default 10s.
+ * How long a supersede waits for the target run to settle after Stop before it
+ * degrades to `SUPERSEDE_TIMEOUT`. On a healthy DB an aborted run settles in
+ * ms/hundreds of ms; under a DB brownout the timeout is the honest signal
+ * (nothing persisted, the composer keeps the user's text), so do not raise it to
+ * paper over a slow DB. Env-tunable, default 10s.
  */
 export const SUPERSEDE_SETTLE_TIMEOUT_MS = (() => {
   const raw = Number(process.env.AI_CHAT_SUPERSEDE_TIMEOUT_MS);
@@ -77,7 +74,7 @@ export const SUPERSEDE_SETTLE_TIMEOUT_MS = (() => {
 })();
 
 /**
- * #487: the result of the supersede CAS ({@link AiChatRunService.supersede}).
+ * The result of the supersede CAS ({@link AiChatRunService.supersede}).
  *  - `degrade`  : no active run on the chat (it ended between click and POST) —
  *                 the caller sends a NORMAL turn (NOT a mismatch);
  *  - `invalid`  : the target runId belongs to a DIFFERENT chat (malformed CAS 400);
@@ -103,12 +100,11 @@ interface Deferred<T> {
 }
 
 /**
- * #487: a run whose terminal write GAVE UP (every bounded attempt failed). The
- * row is stranded non-terminal ('running'); this record is the ONLY thing that
- * distinguishes it from a live run, and carries the `intended` terminal status so
- * a re-drive can apply it via the conditional UPDATE. Process-local (phase-1
- * single-process assumption): a restart drops it, and the boot sweep then writes
- * 'aborted' over the intended — a documented loss (see finalizeRun).
+ * A run whose terminal write gave up (every bounded attempt failed). The row is
+ * stranded 'running'; this record is the only thing that distinguishes it from a
+ * live run, and carries the `intended` terminal status for a re-drive via the
+ * conditional UPDATE. Process-local: a restart drops it, and the boot sweep then
+ * writes 'aborted' over the intended status (see finalizeRun).
  */
 interface ZombieRun {
   workspaceId: string;
@@ -131,7 +127,8 @@ export function mapTurnStatusToRun(
 
 /** An in-flight run held in process memory: its AbortController is the ONLY thing
  *  that can stop the turn (an explicit user stop), independent of the browser
- *  socket. A mere disconnect never touches it, so the run keeps going. */
+ *  socket. A mere disconnect never touches it, so the run keeps going (except
+ *  #714: a new chat whose client left before the first frame). */
 interface ActiveRun {
   controller: AbortController;
   chatId: string;
@@ -147,23 +144,20 @@ export interface RunHandle {
 }
 
 /**
- * AiChatRunService (#184 phase 1) — owns the agent RUN as a first-class,
- * server-side lifecycle object detached from the HTTP request / browser window.
- *
- * Responsibilities:
- *  - create a run row when a turn starts (inserted directly as 'running'; the
- *    'pending' status is only the column default + a reserved value, never
- *    written by code in phase 1) and register an in-memory AbortController for it
- *    (the explicit-stop lever);
+ * Owns the agent RUN as a server-side lifecycle object detached from the HTTP
+ * request / browser window:
+ *  - create a run row when a turn starts (inserted directly as 'running';
+ *    'pending' is only the column default) and register an in-memory
+ *    AbortController for it;
  *  - finalize the run row (succeeded / failed / aborted) and unregister it;
- *  - service an EXPLICIT user stop (`requestStop`) — the ONLY thing that aborts a
- *    run; a browser disconnect deliberately does NOT;
- *  - crash-recovery sweep of dangling runs on startup.
+ *  - service an explicit user stop (`requestStop`) — the only thing that aborts a
+ *    run; a browser disconnect does not (except: the stream controller stops a
+ *    new chat's run whose client left before the first frame);
+ *  - sweep dangling runs on startup and reclaim stale active runs periodically
+ *    (`reconcileStaleRuns`, driven by the AiChatService reconcile timer).
  *
- * The agent loop itself still runs in AiChatService.stream (reusing #183's
- * step-granular durable write path, `consumeStream` already drains it independent
- * of the socket); this service only wraps it in a durable lifecycle and an
- * abort handle that outlives the subscriber.
+ * The agent loop itself runs in AiChatService.stream; this service only wraps it
+ * in a durable lifecycle and an abort handle that outlives the subscriber.
  */
 @Injectable()
 export class AiChatRunService implements OnModuleInit {
@@ -204,8 +198,8 @@ export class AiChatRunService implements OnModuleInit {
   // brief connection blip). Riding out that blip in-place matters because the
   // dominant success path (streamText onFinish) settles exactly ONCE — if that
   // write is dropped and never retried, the row is stranded 'running' and the
-  // one-active-run gate 409s every future turn in the chat until a restart (no
-  // periodic sweep in phase 1).
+  // one-active-run gate 409s every future turn in the chat until the periodic
+  // reconcile re-drives it as a zombie (every 2 min by default).
   private static readonly FINALIZE_MAX_ATTEMPTS = 3;
   private static readonly FINALIZE_RETRY_BASE_MS = 50;
 
@@ -215,17 +209,13 @@ export class AiChatRunService implements OnModuleInit {
   ) {}
 
   /**
-   * Crash-recovery sweep on server start: settle EVERY run still left
-   * pending/running to 'aborted' (F1 / DECISION C). The boot sweep is
-   * UNCONDITIONAL — no staleness window — because phase 1 is single-process: on a
-   * fresh boot any pending|running run is definitionally hung (no live runner owns
-   * it), so even a fast restart (deploy/OOM within minutes of the last step) can
-   * no longer leave a run stuck 'running' forever (which would make the
-   * one-active-run gate 409 every future turn in that chat). The staleness window
-   * is reintroduced only for the phase-2 multi-instance timer sweep, where a
-   * booting replica must not abort a run another replica is actively executing.
-   * Best-effort — a sweep failure is logged but MUST NOT block startup (mirrors
-   * AiChatService.onModuleInit for #183).
+   * Startup sweep: settle every run still pending/running to 'aborted',
+   * unconditionally (no staleness window). Runs are single-process, so on a fresh
+   * boot no live runner owns any of them, and a run left 'running' would make the
+   * one-active-run gate 409 every future turn in that chat. A multi-instance
+   * sweep would need a staleness window so a booting replica does not abort a run
+   * another replica executes. Best-effort: failures are logged and never block
+   * startup.
    */
   async onModuleInit(): Promise<void> {
     this.warnIfMultiInstance();
@@ -247,31 +237,23 @@ export class AiChatRunService implements OnModuleInit {
   }
 
   /**
-   * F2 (DECISION A): autonomous runs are SINGLE-INSTANCE-ONLY in phase 1. An
-   * explicit Stop, and the in-memory AbortController that backs it, are
-   * process-local: a Stop only aborts the live turn if it lands on the SAME
-   * replica that owns the run (it still stamps `stop_requested_at` cross-instance,
-   * but nothing reads that flag during an active run yet). Cross-instance pub/sub
-   * stop is phase 2. So if the deployment is horizontally scaled, warn loudly at
-   * startup that a Stop may not reach a run executing on another replica.
+   * Agent runs are single-instance only. A Stop and its in-memory AbortController
+   * are process-local: a Stop aborts the live turn only on the replica that owns
+   * the run (it stamps `stop_requested_at` cross-instance, but nothing reads it
+   * during a run). Warn at startup when the deployment is horizontally scaled.
    *
-   * DETECTION: this codebase always wires the socket.io Redis adapter (REDIS_URL
-   * is mandatory), so the adapter alone is NOT a horizontal-scaling signal. The
-   * authoritative signal the codebase has is `CLOUD=true` (EnvironmentService
-   * .isCloud()), the Docmost-cloud multi-replica deployment. We warn whenever that
-   * is set, because any workspace could enable settings.ai.autonomousRuns. A
-   * self-hosted operator running multiple replicas behind a load balancer is also
-   * multi-instance; the deploy docs (.env.example / AGENTS.md) spell out the
-   * single-instance constraint for that case.
+   * The socket.io Redis adapter is always wired (REDIS_URL is mandatory), so it is
+   * not a scaling signal; `CLOUD=true` (EnvironmentService.isCloud()) is. Operators
+   * running multiple self-hosted replicas are covered by the deploy docs
+   * (.env.example / AGENTS.md).
    */
   private warnIfMultiInstance(): void {
     if (this.environment.isCloud()) {
       this.logger.warn(
-        'Autonomous agent runs (settings.ai.autonomousRuns) are SINGLE-INSTANCE-ONLY ' +
-          'in phase 1: a horizontally-scaled deployment was detected (CLOUD=true). ' +
-          'An explicit Stop only aborts a run executing on the same replica that owns ' +
-          'it (cross-instance Stop is not yet reliable — phase 2). Run a single ' +
-          'instance if you enable autonomousRuns, or keep the flag off.',
+        'Agent runs are SINGLE-INSTANCE-ONLY in phase 1: a horizontally-scaled ' +
+          'deployment was detected (CLOUD=true). An explicit Stop only aborts a run ' +
+          'executing on the same replica that owns it (cross-instance Stop is not ' +
+          'yet reliable — phase 2). Run a single instance.',
       );
     }
   }
@@ -366,42 +348,30 @@ export class AiChatRunService implements OnModuleInit {
 
   /**
    * Finalize a run to its terminal status (succeeded / failed / aborted) via a
-   * CONDITIONAL UPDATE, stamping finishedAt + any error. Atomically safe against a
-   * concurrent settle AND robust against a transient terminal-write failure.
+   * CONDITIONAL UPDATE, stamping finishedAt + any error.
    *
-   * ATOMIC ONCE-CLAIM (the gate must close in ONE synchronous tick): two
-   * finalizeRun calls for the SAME run can race — the documented real path is
-   * AiChatService.stream's safety-net catch settling the turn to 'error' while a
-   * streamText terminal callback (onFinish/onAbort/onError) ALSO settles it. The
-   * claim happens via `active.delete`, a SYNCHRONOUS check-and-clear with NO await
-   * between the gate and the entry removal: the second concurrent caller finds the
-   * entry already gone and returns in the same tick, before any UPDATE.
+   * ATOMIC ONCE-CLAIM: two finalizeRun calls for the same run can race
+   * (AiChatService.stream's safety-net catch vs a streamText terminal callback).
+   * The claim is `active.delete`, a synchronous check-and-clear with no await
+   * between gate and removal, so the second caller returns in the same tick.
    *
-   * ALL TERMINAL WRITES ARE CONDITIONAL (#487): `finalizeIfActive` only flips a
-   * row still in pending|running (mirror of the assistant message's
-   * `onlyIfStreaming`). So even a settle that DID reach the UPDATE (e.g. a
-   * reconcile stamp racing an owner finalize) can never clobber a terminal status
-   * — the loser matches nothing and is a benign no-op. `active.delete` is the
-   * fast, in-process gate; the conditional WHERE is the authoritative one.
+   * ALL TERMINAL WRITES ARE CONDITIONAL: `finalizeIfActive` only flips a row still
+   * pending|running (like the message's `onlyIfStreaming`), so a settle that does
+   * reach the UPDATE (e.g. a reconcile racing an owner finalize) can never clobber
+   * a terminal status. `active.delete` is the fast in-process gate; the
+   * conditional WHERE is the authoritative one.
    *
-   * ZOMBIE ON GIVE-UP (#487): if every bounded attempt THROWS (the DB is down for
-   * the whole finalize), we do NOT restore the entry. The row is stranded
-   * non-terminal ('running'); we record a ZOMBIE `{ terminalWriteFailed, intended
-   * }` (the ONLY thing distinguishing this dead run from a live one) and resolve
-   * the settle notifier with `terminalWriteFailed: true`. A restore would make the
-   * zombie indistinguishable from a live run to every reader; instead a re-drive
-   * (settleZombie, called by the periodic reconcile / supersede / opportunistic
-   * paths) applies the intended status later via the same conditional UPDATE.
+   * ZOMBIE ON GIVE-UP: if every bounded attempt throws, the entry is NOT restored
+   * (a restore would make the dead run look live). A ZOMBIE `{ terminalWriteFailed,
+   * intended }` is recorded and the settle notifier resolves with
+   * `terminalWriteFailed: true`; settleZombie (periodic reconcile / supersede /
+   * opportunistic paths) applies the intended status later.
    *
-   * DOCUMENTED LOSS (#487, single-process phase 1): if the process RESTARTS before
-   * a zombie is re-driven, the in-memory zombie map is gone and the boot sweep
-   * (unconditional) writes 'aborted' over the ACTUAL intended status. This is
-   * unavoidable while the run lifecycle is single-process — there is no durable
-   * record of `intended`; a cross-process durable intent is deferred to phase 2.
+   * KNOWN LOSS: if the process restarts before a zombie is re-driven, the boot
+   * sweep writes 'aborted' over the intended status; `intended` is not durable.
    *
-   * IDEMPOTENT: the settle notifier resolves EXACTLY ONCE; a second settle is
-   * stopped at `settled.has` or the `active.delete` claim, so a double-settle
-   * collapses to a single write and can never double-resolve or clobber the row.
+   * IDEMPOTENT: the settle notifier resolves exactly once; a second settle stops
+   * at `settled.has` or the `active.delete` claim.
    */
   async finalizeRun(
     runId: string,
@@ -480,11 +450,10 @@ export class AiChatRunService implements OnModuleInit {
   }
 
   /**
-   * #487: re-drive a zombie run's intended terminal write (the conditional
-   * UPDATE). Called by the periodic reconcile (commit 4), an opportunistic
-   * single-chat reconcile, and supersede (commit 3). On success — the row is now
-   * terminal (written OR found already terminal) — the zombie is cleared and the
-   * once-gate armed; on another failure the zombie is kept for a later retry.
+   * Re-drive a zombie run's intended terminal write (the conditional UPDATE).
+   * Called by the periodic reconcile, an opportunistic single-chat reconcile, and
+   * supersede. When the row is terminal (written or found terminal) the zombie is
+   * cleared and the once-gate armed; on failure the zombie is kept for a retry.
    * Returns true when the row is now terminal. Best-effort; never throws.
    */
   async settleZombie(runId: string): Promise<boolean> {
@@ -508,7 +477,7 @@ export class AiChatRunService implements OnModuleInit {
   }
 
   /**
-   * #487 reconcile clause (c): abort runs the DB still shows active (pending|
+   * Reconcile clause (c): abort runs the DB still shows active (pending|
    * running) but that this replica does NOT own — NO live entry AND NO zombie —
    * and that have been UNTOUCHED past `staleMs` (from last-progress `updated_at`,
    * NOT startedAt, so a legit long marathon is never a candidate). "No entry" is
@@ -575,12 +544,11 @@ export class AiChatRunService implements OnModuleInit {
   }
 
   /**
-   * #487: await a run's settle outcome, bounded by `timeoutMs`. Returns the
-   * outcome on settle, or undefined on TIMEOUT (or when this replica has no record
-   * of the run and its row is not terminal). Uses the LIVE settle notifier / the
-   * zombie synth when present; else reads the row (the DB is the source of truth
-   * once the in-memory record is gone). The subscriber (supersede) grabs this
-   * right after Stop; commit 1's race makes the settle land in ms on a healthy DB.
+   * Await a run's settle outcome, bounded by `timeoutMs`. Returns the outcome on
+   * settle, or undefined on timeout (or when this replica has no record of the
+   * run and its row is not terminal). Uses the live settle notifier / zombie
+   * synth when present, else reads the row (the DB is the source of truth once
+   * the in-memory record is gone).
    */
   async awaitSettled(
     runId: string,
@@ -614,18 +582,15 @@ export class AiChatRunService implements OnModuleInit {
   }
 
   /**
-   * #487: the SERVER supersede CAS for `POST /stream { supersede: { runId: X } }`.
-   * Atomically transitions "X is the chat's active run" -> "X is stopped, settled,
-   * slot free" so the caller can start a replacement run. See {@link
-   * SupersedeResult} for the branch semantics.
+   * The server supersede CAS for `POST /stream { supersede: { runId: X } }`:
+   * transitions "X is the chat's active run" -> "X is stopped, settled, slot free"
+   * so the caller can start a replacement run. See {@link SupersedeResult}.
    *
-   * On a `ready` result the caller MUST still go through the normal beginRun gate
-   * (the partial unique index) — between the slot freeing here and beginRun a
-   * neighbouring tab's ordinary POST can win the slot (documented SLOT-THEFT: the
-   * loser then gets a MISMATCH carrying the NEW runId). There is also NO side-
-   * effect quiescence: an in-flight write of the stopped run may still land AFTER
-   * the new run starts (commit 1 stops the NEXT call, not one already committing),
-   * so the caller adds a prompt note to the new run.
+   * On `ready` the caller must still go through the beginRun gate (the partial
+   * unique index): a neighbouring tab's POST can win the freed slot, and the loser
+   * gets a MISMATCH carrying the new runId. There is no side-effect quiescence: an
+   * in-flight write of the stopped run may land after the new run starts, so the
+   * caller adds a prompt note to the new run.
    */
   async supersede(
     chatId: string,
@@ -659,26 +624,16 @@ export class AiChatRunService implements OnModuleInit {
     if (outcome.terminalWriteFailed) {
       const settled = await this.settleZombie(targetRunId);
       if (!settled && !(await this.rowIsTerminal(targetRunId, workspaceId))) {
-        // settleZombie returned false in one of TWO ways we MUST NOT conflate:
-        //   (1) our OWN re-drive threw (the DB is still down) — the row is
-        //       genuinely stranded non-terminal, a real SUPERSEDE_TIMEOUT
-        //       (nothing persisted, the slot is NOT free); or
-        //   (2) S5 micro-race: a CONCURRENT re-driver (the periodic zombie
-        //       reconcile) already settled AND cleared this zombie in the tiny
-        //       window between awaitSettled reading the zombie synth
-        //       (terminalWriteFailed: true) and this settleZombie call, so the
-        //       zombie map is empty HERE (settleZombie sees `!z` -> false) even
-        //       though the row is now terminal and the slot IS free.
-        // Reporting a timeout in case (2) is a FALSE SUPERSEDE_TIMEOUT: it
-        // self-heals (the caller retries and the next supersede sees the freed
-        // slot), but it needlessly bounces a supersede whose slot is already
-        // free. `rowIsTerminal` re-reads the row to tell the cases apart. This
-        // can NEVER mask a real timeout, so it does not weaken the invariant:
-        // the "one active run per chat" slot is enforced by the partial unique
-        // index over pending|running rows, which a TERMINAL row does not occupy;
-        // and the caller still re-gates through beginRun, so a `ready` that lost
-        // its slot to a neighbour in between just gets a clean MISMATCH there.
-        // Only a still-non-terminal row (or an unreadable one) is a timeout.
+        // settleZombie returned false in one of two ways:
+        //   (1) our own re-drive threw (DB still down): the row is stranded
+        //       non-terminal, a real SUPERSEDE_TIMEOUT; or
+        //   (2) the periodic zombie reconcile settled and cleared this zombie
+        //       between awaitSettled and this call: the row is terminal and the
+        //       slot is free.
+        // `rowIsTerminal` re-reads the row to tell them apart. A terminal row does
+        // not occupy the partial unique index, and the caller re-gates through
+        // beginRun anyway, so this never masks a real timeout. Only a
+        // non-terminal (or unreadable) row is a timeout.
         return { kind: 'timeout' };
       }
     }
@@ -749,15 +704,14 @@ export class AiChatRunService implements OnModuleInit {
   }
 
   /**
-   * Request an EXPLICIT stop of a run (the user pressed Stop). This is the ONLY
-   * thing that aborts a run — distinct from a browser disconnect, which leaves
-   * the run going. Aborts the in-process controller FIRST (the only thing that
-   * actually stops the run, if this replica owns it), then makes a best-effort
-   * attempt to stamp `stop_requested_at` — that audit write stamps only while the
-   * row is active and may be skipped on a DB error or lost to the finalize race,
-   * which is acceptable since the row still settles as 'aborted'. Returns true
-   * when a stop took effect (row marked and/or controller aborted), false when
-   * there was nothing active to stop.
+   * Request an explicit stop of a run (the user pressed Stop). This is the only
+   * thing that aborts a run; a browser disconnect does not (except: a new chat's
+   * client that left before the first frame never learned the chat id, so the
+   * stream controller calls this itself). Aborts the in-process controller first
+   * (the only thing that stops the run, if this replica owns it), then
+   * best-effort stamps `stop_requested_at` (only while the row is active; it may
+   * be skipped or lose the finalize race — the row still settles 'aborted').
+   * Returns true when a stop took effect, false when nothing was active.
    */
   async requestStop(runId: string, workspaceId: string): Promise<boolean> {
     const entry = this.active.get(runId);

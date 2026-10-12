@@ -3,13 +3,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TableReadonlySort } from './table-readonly-sort';
 
 /**
- * The plugin view used to run on EVERY ProseMirror transaction, including
- * selection-only ones and every remote Yjs step: a full-editor
- * querySelectorAll('table'), then a chevron querySelector plus three
- * setAttribute calls and a `.title` write on every <th> of every table. Table
- * drag-and-drop dispatches hover meta-transactions on every mousemove, so that
- * whole sweep ran per mouse move over a table — a large chunk of the pegged-CPU
- * symptom on table pages.
+ * The plugin view must skip selection-only transactions and remote Yjs steps
+ * that leave the doc alone. Its sweep (a full-editor querySelectorAll('table'),
+ * then a chevron querySelector plus three setAttribute calls and a `.title`
+ * write on every <th> of every table) would otherwise run per mouse move over a
+ * table, since table drag-and-drop dispatches hover meta-transactions on every
+ * mousemove.
  *
  * Skipping that work costs the chevrons their implicit repair pass, so the
  * click-time self-heal below is part of the same contract.

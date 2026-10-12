@@ -8,14 +8,11 @@ import {
   parseAttachedComment,
 } from '../src/lib/attached-comment.js';
 
-// #293 canon decision #9: paragraph/heading `textAlign` serializes as an
-// ATTACHED HTML comment at the END of the block line —
+// Paragraph/heading `textAlign` serializes as an ATTACHED HTML comment at the
+// END of the block line —
 //   `some text <!--attrs {"textAlign":"center"}-->`
-// — replacing the old `<div align>` / `<p style="text-align:…">` wrappers, which
-// did NOT round-trip cleanly (alignment was lost on the first stabilize pass).
-// These tests are non-vacuous: they assert the EXACT emitted markdown (so they
-// fail against any wrapper form) AND that the alignment survives a full
-// PM -> MD -> PM round trip (which the old `<div align>` never did).
+// These tests assert the EXACT emitted markdown AND that the alignment survives
+// a full PM -> MD -> PM round trip.
 
 const doc = (...nodes: any[]) => ({ type: 'doc', content: nodes });
 const text = (t: string) => ({ type: 'text', text: t });

@@ -19,7 +19,7 @@ export default function AccountNameForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [user, setUser] = useAtom(userAtom);
 
-  // Build the schema with friendly, translated validation messages (issue #130)
+  // Build the schema with friendly, translated validation messages
   const formSchema = z.object({
     name: z
       .string()

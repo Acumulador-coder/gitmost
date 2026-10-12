@@ -1,14 +1,19 @@
 import { Kysely, sql } from 'kysely';
 import { getTestDb, destroyTestDb } from './db';
 import * as migration from '../../src/database/migrations/20260707T130000-search-ru-en-config';
+import * as dropFts from '../../src/database/migrations/20261011T120000-drop-page-embeddings-fts';
 
 /**
- * #529 A1 — the ru_en config migration must be REVERSIBLE in the correct order:
+ * The ru_en config migration must be REVERSIBLE in the correct order:
  * down() moves pages.tsv + page_embeddings.fts back to `english` BEFORE dropping
  * the ru_en config (a generated column still depending on ru_en would block the
  * DROP). This roundtrips down()→up() on the already-migrated test DB and asserts
  * the config, the pages trigger and the fts generated expression each flip and
  * flip back — the deploy-critical property.
+ *
+ * The latest schema has no `fts` at all (20261011T120000 drops it), so the first
+ * test checks that and then rolls the drop back, putting the DB in the state the
+ * ru_en migration ran against; afterAll re-applies the drop.
  */
 describe('search ru_en config migration [integration]', () => {
   let db: Kysely<any>;
@@ -30,6 +35,14 @@ describe('search ru_en config migration [integration]', () => {
     return r.rows[0]?.def ?? '';
   };
 
+  const ftsIndexExists = async () => {
+    const r = await sql<{ n: number }>`
+      SELECT count(*)::int AS n FROM pg_indexes
+      WHERE indexname = 'idx_page_embeddings_fts'
+    `.execute(db);
+    return r.rows[0].n > 0;
+  };
+
   const triggerSrc = async () => {
     const r = await sql<{ src: string }>`
       SELECT prosrc AS src FROM pg_proc WHERE proname = 'pages_tsvector_trigger'
@@ -47,7 +60,16 @@ describe('search ru_en config migration [integration]', () => {
     // no-ops) and re-asserts both stored sides to ru_en.
     delete process.env.SEARCH_EMBEDDINGS_FTS_INLINE_REWRITE;
     await migration.up(db);
+    await dropFts.up(db);
     await destroyTestDb();
+  });
+
+  it('latest has no fts column or index; rolling the drop back restores them on ru_en', async () => {
+    expect(await ftsDef()).toBe('');
+    expect(await ftsIndexExists()).toBe(false);
+    await dropFts.down(db);
+    expect(await ftsDef()).toContain('ru_en');
+    expect(await ftsIndexExists()).toBe(true);
   });
 
   it('starts at ru_en (config present, trigger + fts on ru_en)', async () => {

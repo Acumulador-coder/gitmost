@@ -1,11 +1,10 @@
-// Progressive-disclosure authoring reference for the `drawioGuide` tool
-// (issue #424, stage 2). The FULL draw.io authoring guide would bloat every
-// context window, so it is split into small sections the model reads on demand:
+// Progressive-disclosure authoring reference for the `drawioGuide` tool. The
+// FULL draw.io authoring guide would bloat every context window, so it is split
+// into small sections the model reads on demand:
 //   skeleton | layout | containers | icons-aws | icons-azure
-// Content is written directly from the issue #424 appendix (the layout
-// heuristics, container rules, AWS icon patterns + gotchas + blocklist, and
-// Azure image-style paths). ACCEPTANCE: each section stays <= ~4 KB so pulling
-// one is cheap.
+// Covers the layout heuristics, container rules, AWS icon patterns + gotchas +
+// blocklist, and Azure image-style paths. Each section stays <= ~4 KB so
+// pulling one is cheap.
 
 export type GuideSection =
   | "skeleton"

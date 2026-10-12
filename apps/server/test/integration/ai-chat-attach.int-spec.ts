@@ -22,21 +22,20 @@ import {
 } from './db';
 
 /**
- * #184 phase 1.5 — the resumable transport end to end against REAL Postgres,
+ * The resumable transport end to end against REAL Postgres,
  * the REAL `streamText` (seeded via MockLanguageModelV3) and a REAL Node
  * ServerResponse, driving the REAL `AiChatService.stream` run-wrapped path with a
  * REAL `AiChatStreamRegistryService`. The run-hooks mirror the controller: they
  * begin a durable run and `open()` the registry entry at begin, and the service
  * tees the SSE frames into it via `consumeSseStream` while stamping the DB row id
- * via `generateMessageId` (both gated on runId + the resumable flag).
+ * via `generateMessageId`.
  *
- * Proven here (tail-only #491): a finished run attached at its persisted frontier
+ * Proven here: a finished run attached at its persisted frontier
  * N_final delivers only the TAIL past N (a synthetic `start` carrying the run-fact
  * + the terminal `finish`/`[DONE]`) — the step content below N lives in the seeded
  * DB row, NOT the ring; the anchor check (invariant 6); an attach opened BEFORE the
  * first frame follows the live stream from frame 0; an explicit stop surfaces
- * `{"type":"abort"}` + `[DONE]` + end to the subscriber; and the legacy (non-run)
- * path tees nothing.
+ * `{"type":"abort"}` + `[DONE]` + end to the subscriber.
  */
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -169,8 +168,8 @@ describe('AiChatService run-stream attach [integration]', () => {
     }),
   };
 
-  // Build the service with the run-stream registry wired and the resumable flag
-  // ON (the property under test). Deferred tools OFF (irrelevant here).
+  // Build the service with the run-stream registry wired (the property under
+  // test). Deferred tools OFF (irrelevant here).
   function buildService(registry: AiChatStreamRegistryService): AiChatService {
     return new AiChatService(
       { getChatModel: async () => null } as any,
@@ -185,7 +184,6 @@ describe('AiChatService run-stream attach [integration]', () => {
       {} as any,
       {
         isAiChatDeferredToolsEnabled: () => false,
-        isAiChatResumableStreamEnabled: () => true,
         isAiChatFinalStepLockdownEnabled: () => false,
         isAiChatViewImageEnabled: () => false,
       } as any,
@@ -231,7 +229,7 @@ describe('AiChatService run-stream attach [integration]', () => {
 
   async function startRun(opts: {
     registry: AiChatStreamRegistryService;
-    runService?: AiChatRunService;
+    runService: AiChatRunService;
     model: MockLanguageModelV3;
     chatId: string;
     body: any;
@@ -239,16 +237,13 @@ describe('AiChatService run-stream attach [integration]', () => {
   }): Promise<{ res: http.ServerResponse; cleanup: () => Promise<void> }> {
     const service = buildService(opts.registry);
     const { res, cleanup } = await makeRealResponse();
-    const runHooks = opts.runService
-      ? makeRunHooks(opts.runService, opts.registry, opts.box ?? {})
-      : undefined;
+    const runHooks = makeRunHooks(opts.runService, opts.registry, opts.box ?? {});
     await service.stream({
       user: { id: userId, workspaceId } as any,
       workspace: { id: workspaceId, name: 'WS' } as any,
       sessionId: 'sess-1',
       body: opts.body,
       res: { raw: res } as any,
-      signal: new AbortController().signal,
       model: opts.model as any,
       role: null,
       runHooks,
@@ -517,7 +512,6 @@ describe('AiChatService run-stream attach [integration]', () => {
       {} as any,
       {
         isAiChatDeferredToolsEnabled: () => false,
-        isAiChatResumableStreamEnabled: () => true,
         isAiChatFinalStepLockdownEnabled: () => false,
         isAiChatViewImageEnabled: () => false,
       } as any,
@@ -533,7 +527,6 @@ describe('AiChatService run-stream attach [integration]', () => {
           sessionId: 'sess-1',
           body: { chatId, messages: [userUiMessage('will throw')] },
           res: { raw: res } as any,
-          signal: new AbortController().signal,
           model: model as any,
           role: null,
           runHooks: makeRunHooks(runService, registry, box),
@@ -548,37 +541,6 @@ describe('AiChatService run-stream attach [integration]', () => {
       // Finished with an EMPTY ring (aborted before any frame) -> null -> the
       // client degrades to poll instead of hanging on an empty stream.
       expect(await registry.attach(chatId, undefined, 0, sink.cb)).toBeNull();
-    } finally {
-      registry.onModuleDestroy();
-      await cleanup();
-    }
-  });
-
-  it('legacy (no run-hooks): the registry is never populated', async () => {
-    const chatId = (await createChat(db, { workspaceId, creatorId: userId })).id;
-    const registry = new AiChatStreamRegistryService();
-    const model = new MockLanguageModelV3({
-      doStream: async () => ({ stream: successStream() }),
-    } as any);
-
-    // No runHooks -> runId undefined -> the run-wrapped tee is never wired.
-    const { cleanup } = await startRun({
-      registry,
-      model,
-      chatId,
-      body: { chatId, messages: [userUiMessage('Legacy hi')] },
-    });
-    try {
-      await waitFor(async () => {
-        const rows = await msgRepo.findAllByChat(chatId, workspaceId);
-        return rows.some(
-          (r: any) => r.role === 'assistant' && r.status === 'completed',
-        );
-      });
-      const sink = liveSink();
-      // No entry was ever opened; attach always yields null.
-      expect(await registry.attach(chatId, undefined, 0, sink.cb)).toBeNull();
-      expect(await registry.attach(chatId, 'anything', 1, sink.cb)).toBeNull();
     } finally {
       registry.onModuleDestroy();
       await cleanup();

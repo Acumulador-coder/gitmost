@@ -2,9 +2,13 @@
  * Provenance actor for a write: who the action is attributed to. Derived only
  * from the SIGNED token claim (never a request body), so 'agent' is unspoofable.
  * Single source of truth so a typo like 'agnet' can't slip through as a bare
- * string (#143 review). Distinct from `ActorType` (auth principal kind).
+ * string. Distinct from `ActorType` (auth principal kind).
+ *
+ * 'git-sync' marks writes made by the git-sync data plane. It NEVER
+ * travels in a user-facing token; it is set in-process on the collab connection
+ * context by the native datasource, so it cannot be spoofed from a request.
  */
-export type ProvenanceSource = 'user' | 'agent';
+export type ProvenanceSource = 'user' | 'agent' | 'git-sync';
 
 export enum JwtType {
   ACCESS = 'access',
@@ -26,7 +30,8 @@ export type JwtPayload = {
   // normal user token (treated as 'user'); set only when the internal agent
   // mints a provenance access token so REST writes (create/rename/move page,
   // comment create/resolve) record a non-spoofable 'agent' marker (§6.5 / §15
-  // C3 / §14 N2).
+  // C3 / §14 N2). (git-sync writes use the in-process actor, not a token — see
+  // the ProvenanceSource note.)
   actor?: ProvenanceSource;
   // Nullable: an external MCP agent has no internal ai_chats row, so it carries
   // an 'agent' actor with a null aiChatId.
@@ -34,7 +39,7 @@ export type JwtPayload = {
 };
 
 // The AUTH-PRINCIPAL kind behind a collab token — distinct from `actor`
-// (provenance). Stamped into EVERY newly-minted collab token (#501): 'session'
+// (provenance). Stamped into EVERY newly-minted collab token: 'session'
 // for a normal user/session (incl. the internal AI agent, which is session-
 // backed), 'api_key' when the token was minted by an api-key principal (an
 // external MCP agent). The discriminator keys on the token's ORIGIN, so the
@@ -50,7 +55,8 @@ export type JwtCollabPayload = {
   type: 'collab';
   // Optional agent-edit provenance, signed into the collab token. Absent for
   // the human collab path (treated as 'user'); set only when the internal agent
-  // mints a provenance collab token (§6.6 / §15 C2).
+  // mints a provenance collab token (§6.6 / §15 C2). 'git-sync' (in ProvenanceSource)
+  // is accepted for type-compatibility with the in-process git-sync write path.
   actor?: ProvenanceSource;
   // Nullable: an external MCP agent has no internal ai_chats row, so it carries
   // an 'agent' actor with a null aiChatId.

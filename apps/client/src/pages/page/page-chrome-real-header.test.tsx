@@ -38,7 +38,11 @@ vi.mock("@/features/page/queries/page-query", () => {
     isPending: false,
   });
   return {
-    usePageQuery: () => pageQueryState,
+    // A settled response here is the one this view fetched after mounting.
+    usePageQuery: () => ({
+      ...pageQueryState,
+      isFetchedAfterMount: !pageQueryState.isLoading,
+    }),
     usePageMetaQuery: () => pageQueryState,
     usePageBreadcrumbsQuery: () => ({ data: undefined }),
     useCreatePageMutation: noop,
@@ -196,7 +200,6 @@ const header = () => document.querySelector("[data-page-header]");
 
 beforeEach(() => {
   localStorage.clear();
-  process.env.LOCAL_FIRST_ENABLED = "true";
   pageQueryState.data = undefined;
   pageQueryState.isLoading = true;
   pageQueryState.isError = false;
@@ -204,7 +207,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.LOCAL_FIRST_ENABLED;
   vi.restoreAllMocks();
 });
 

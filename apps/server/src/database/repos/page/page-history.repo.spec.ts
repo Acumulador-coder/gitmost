@@ -1,7 +1,7 @@
 import { PageHistoryRepo } from './page-history.repo';
 
 /**
- * Enrichment coverage for the page-history agent avatar stack (#300/#304).
+ * Enrichment coverage for the page-history agent avatar stack.
  *
  * attachPageHistoryAgent maps a DIFFERENT column set than comments —
  * `lastUpdatedSource` / `lastUpdatedAiChatId` / `lastUpdatedBy` instead of
@@ -94,17 +94,14 @@ describe('PageHistoryRepo.findPageHistoryByPageId — agent avatar stack enrichm
     expect(item).not.toHaveProperty('agentRole');
   });
 
-  // #559 — external-MCP (api_key) provenance, FORM 3. The row carries
+  // External-MCP (api_key) provenance, FORM 3. The row carries
   // lastUpdatedSource='agent', lastUpdatedAiChatId null, a non-null
   // lastUpdatedApiKeyId, and the key-name join object (`apiKey`).
   // attachPageHistoryAgent must thread api_key_id + apiKeyName into
   // resolveAgentProvenance so the persona is the NAMED key, launcher null, and
   // the join-only `apiKey` object is stripped.
-  //
-  // NON-VACUITY: if the read-side threading is reverted (attachPageHistoryAgent
-  // no longer passes api_key_id / apiKeyName, or the resolver's external-MCP
-  // branch is removed) this row falls into the degenerate external form and
-  // `agent` becomes lastUpdatedBy ('MCP Bot') instead of the key name.
+  // Without that threading the row falls into the degenerate external form and
+  // `agent` would be lastUpdatedBy ('MCP Bot') instead of the key name.
   it('external MCP with api_key name (form 3): agent = key name, launcher = null, apiKey stripped', async () => {
     const item = await firstItem({
       id: 'ph-5',

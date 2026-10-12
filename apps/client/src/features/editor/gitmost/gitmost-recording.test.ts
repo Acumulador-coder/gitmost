@@ -12,7 +12,7 @@ import { gitmostInsertTranscriptIntoEditor } from "./gitmost-recording.ts";
 const ZWSP = "​"; // U+200B — asserted ABSENT (the block-escape lives in the serializer now)
 
 /**
- * #377 — the web-side bridge must append the native host's transcript below the
+ * The web-side bridge must append the native host's transcript below the
  * recording. These exercise the pure insert helper through a REAL Tiptap editor
  * (Document/Paragraph/Text/Heading + Bold/Italic/Link marks so an HTML-parsing
  * regression would be caught), asserting the resulting document rather than

@@ -53,7 +53,7 @@ export interface IMessagePage {
 }
 
 /**
- * #491 delta-poll merge: upsert the delta poll's `rows` into the messages
+ * Delta-poll merge: upsert the delta poll's `rows` into the messages
  * infinite-query page structure IDEMPOTENTLY by id. The delta endpoint's overlap
  * window GUARANTEES occasional REPEATS, so this MUST converge: a row already
  * present is REPLACED IN PLACE (per-step growth of an in-progress row), a new row

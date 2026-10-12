@@ -11,7 +11,7 @@ import { hasHtmlEmbedNode, stripHtmlEmbedNodes } from './html-embed.util';
  *
  * The block renders inside a sandboxed iframe, so this is not an XSS surface;
  * this exercises the REAL server import conversion path that ImportService uses
- * (`markdownToProseMirror`, the canonical converter — issue #345/#347) and
+ * (`markdownToProseMirror`, the canonical converter) and
  * asserts that such a node is DETECTED and STRIPPABLE — so the share read path's
  * master-toggle strip can remove it when the workspace toggle is OFF.
  */

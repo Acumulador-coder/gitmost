@@ -1,5 +1,5 @@
 // Footnote-canonicalization binding tests for the MCP FULL-document write tools
-// (issue #228, review #4): updatePageJson and copyPageContent must persist a
+// updatePageJson and copyPageContent must persist a
 // footnote-canonical doc. These override the `replacePage` seam (symmetric to the
 // `mutatePage` seam used by the insert-footnote-wrapper test) to capture the
 // persisted doc WITHOUT a live Hocuspocus collab socket. Symmetric to the

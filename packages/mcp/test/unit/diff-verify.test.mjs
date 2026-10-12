@@ -131,11 +131,10 @@ test("summarizeChange surfaces an image-count change (0->1)", () => {
 
 // ---------------------------------------------------------------------------
 // codeBlock canary: a vanished code block must surface structure.codeBlocks.
-// Scope note: this flags codeBlock-count drops on any future MCP WRITE path
-// (a buggy transform, a full markdown rewrite dropping a fence, etc.). It
-// would NOT have flagged the incident's causal write itself — anchoring the
-// mark left the count at 1→1; the deletion happened later during browser
-// materialization, which is not an MCP write.
+// Scope note: this flags codeBlock-count drops on any MCP WRITE path
+// (a buggy transform, a full markdown rewrite dropping a fence, etc.). It does
+// NOT flag a codeBlock deleted later during browser materialization, which is
+// not an MCP write.
 // ---------------------------------------------------------------------------
 test("summarizeChange surfaces a codeBlock-count change (1->0)", () => {
   const before = doc(

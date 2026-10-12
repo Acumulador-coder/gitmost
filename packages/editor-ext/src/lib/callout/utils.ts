@@ -5,7 +5,7 @@ export type CalloutType =
   | 'success'
   | 'warning'
   | 'danger';
-const validCalloutTypes = [
+export const validCalloutTypes = [
   'default',
   'info',
   'note',

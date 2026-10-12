@@ -92,7 +92,7 @@ export interface UpdateAiSettingsInput {
  * Non-secret fields live in `settings.ai.provider`; the API key lives encrypted
  * in `ai_provider_credentials` (per driver). The decrypted key is only ever
  * returned by `resolve` (server-side use) and is NEVER logged or returned to a
- * client (§8).
+ * client.
  */
 @Injectable()
 export class AiSettingsService {
@@ -120,14 +120,13 @@ export class AiSettingsService {
    * pass is kept and no duplicate is started. The .catch only guards against
    * transport/Redis errors.
    *
-   * #599 (review F1) — that dedupe means a CONFIG CHANGE during an active run
-   * enqueues NOTHING, so the new fingerprint gets no job of its own. What builds
-   * it is the running job itself: it finishes its (now stale) target, sees the
-   * drift in EmbeddingGenerationService.completeRun, and FAILS with
-   * StaleReindexTargetError so BullMQ retries it — and the retry re-resolves the
-   * provider and builds the current target. Kept deliberately: adding a second job
-   * would race the departing one for the same jobId (and lose, which is how the
-   * new generation was silently lost before).
+   * That dedupe means a CONFIG CHANGE during an active run enqueues NOTHING, so
+   * the new fingerprint gets no job of its own. The running job builds it: it
+   * finishes its (now stale) target, sees the drift in
+   * EmbeddingGenerationService.completeRun, and FAILS with
+   * StaleReindexTargetError so BullMQ retries it, and the retry re-resolves the
+   * provider and builds the current target. A second job would race the
+   * departing one for the same jobId and lose.
    *
    * Also cancels any pending delayed WORKSPACE_DELETE_EMBEDDINGS job (scheduled
    * when AI Search was disabled) so it cannot wipe the embeddings we are about
@@ -351,21 +350,14 @@ export class AiSettingsService {
     // (non-empty text, content-borne text, or already-stored embeddings), so
     // empty/text-less pages don't keep the "Indexed N of M pages" bar below 100%
     // forever.
-    // #599 (R8a) — the steady-state numerator counts the pages of the ACTIVE
-    // generation, not "any row of any generation". countIndexedPages() is
-    // generation-blind, so during a swap window (a model change being reindexed)
-    // the target generation's fresh rows counted toward it and the panel happily
-    // showed "Indexed 478 of 478" — a green, complete-looking bar — while the search
-    // API was correctly reporting `semantic.state: 'stale'` for the very same
-    // workspace, because the pointer had not flipped and the vector arm was serving
-    // (or refusing to serve) the OLD generation. Two contradictory truths in one UI.
-    // Counting the active fingerprint makes the panel agree with search: the bar
-    // climbs only when the generation that is actually SERVED grows.
+    // The steady-state numerator counts the pages of the ACTIVE generation, not
+    // "any row of any generation": during a swap window the target generation's
+    // rows would otherwise show a complete bar while search reports
+    // `semantic.state: 'stale'`. Counting the active fingerprint keeps the panel
+    // in agreement with search.
     //
-    // A workspace whose pointer was never flipped (legacy rows / a fresh instance
-    // that has not completed a run) has no active fingerprint: there is no generation
-    // to scope to, so we keep the generation-blind count — the pre-#599 behavior and
-    // the only meaningful number available there.
+    // A workspace whose pointer was never flipped has no active fingerprint, so
+    // the generation-blind count is used.
     const progress = await this.reindexProgress.get(workspaceId);
     let indexedPages: number;
     let totalPages: number;

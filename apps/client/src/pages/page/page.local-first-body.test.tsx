@@ -7,18 +7,17 @@ import type { IPage } from "@/features/page/types/page.types";
 import type { ICurrentUser } from "@/features/user/types/user.types";
 
 /**
- * Ф7 (#643) — the body gate is removed: page.tsx now mounts FullEditor on the
- * cached META (not on `page && space`). These tests assert the DATA-LOSS-SAFE
- * props contract at the page.tsx level — the exact resolutions the issue calls
- * out as traps — by capturing what FullEditor receives (it is mocked to a bare
- * div; the body internals live in page-editor.local-first.test.tsx).
+/**
+ * page.tsx mounts FullEditor on the cached META (not on `page && space`). These
+ * tests assert the data-loss-safe props contract at the page.tsx level by
+ * capturing what FullEditor receives (it is mocked to a bare div; the body
+ * internals live in page-editor.local-first.test.tsx).
  *
- *  - trap 2 / crit 5 CROSS-PAGE BODY: `content` comes ONLY from `livePage`,
- *    never the possibly-PREVIOUS `page` (keepPreviousData). Navigating A→B with a
- *    cache-hit for B must show B's content (or nothing yet), NEVER A's body.
- *  - trap 3 ROUTING: `spaceSlug` comes from the ROUTE (useParams), never the
- *    meta cache (which stores none).
- *  - crit 10 flag OFF: the legacy `page && space` gate, byte-for-behavior.
+ *  - CROSS-PAGE BODY: `content` comes ONLY from `livePage`, never the possibly
+ *    PREVIOUS `page` (keepPreviousData). Navigating A→B with a cache-hit for B
+ *    must show B's content (or nothing yet), NEVER A's body.
+ *  - ROUTING: `spaceSlug` comes from the ROUTE (useParams), never the meta cache
+ *    (which stores none).
  */
 
 const fullEditorProps: Record<string, unknown>[] = [];
@@ -49,7 +48,11 @@ const pageQueryState: {
 let spaceData: unknown = undefined;
 
 vi.mock("@/features/page/queries/page-query", () => ({
-  usePageQuery: () => pageQueryState,
+  // A settled response here is the one this view fetched after mounting.
+  usePageQuery: () => ({
+    ...pageQueryState,
+    isFetchedAfterMount: !pageQueryState.isLoading,
+  }),
 }));
 
 vi.mock("@/features/space/queries/space-query.ts", () => ({
@@ -133,7 +136,6 @@ function lastProps() {
 beforeEach(() => {
   localStorage.clear();
   fullEditorProps.length = 0;
-  process.env.LOCAL_FIRST_ENABLED = "true";
   pageQueryState.data = undefined;
   pageQueryState.isLoading = true;
   pageQueryState.isError = false;
@@ -142,7 +144,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.LOCAL_FIRST_ENABLED;
   vi.restoreAllMocks();
 });
 
@@ -208,40 +209,5 @@ describe("Ф7 body mount — routing (trap 3)", () => {
     expect(props.pageId).toBe(B_ID);
     expect(props.spaceSlug).toBe("engineering");
     expect(props.bodyContentPending).toBe(true);
-  });
-});
-
-describe("Ф7 flag OFF — the legacy `page && space` gate (crit 10)", () => {
-  beforeEach(() => {
-    process.env.LOCAL_FIRST_ENABLED = "false";
-  });
-
-  it("mounts the body only when BOTH page and space resolve, keyed by page.id", () => {
-    const store = makeStore(); // cache is unusable with the flag off
-    pageQueryState.data = { ...pageB(), content: "BBB-BODY" } as IPage;
-    pageQueryState.isLoading = false;
-    spaceData = { settings: {} };
-
-    renderPageB(store);
-
-    const props = lastProps();
-    // Legacy path: content from `page`, spaceSlug from `page.space.slug`, and NO
-    // bodyContentPending prop (the skeleton state is a flag-ON concept).
-    expect(props.pageId).toBe(B_ID);
-    expect(props.content).toBe("BBB-BODY");
-    expect(props.spaceSlug).toBe("engineering");
-    expect(props.bodyContentPending).toBeUndefined();
-  });
-
-  it("with the space NOT resolved, the body stays gated (no FullEditor)", () => {
-    const store = makeStore();
-    pageQueryState.data = { ...pageB(), content: "BBB-BODY" } as IPage;
-    pageQueryState.isLoading = false;
-    spaceData = undefined; // space still loading
-
-    renderPageB(store);
-
-    // The legacy gate holds: page without space → skeleton, no body.
-    expect(screen.queryByTestId("full-editor")).toBeNull();
   });
 });

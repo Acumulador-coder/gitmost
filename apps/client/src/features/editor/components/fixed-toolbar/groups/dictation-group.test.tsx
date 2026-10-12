@@ -3,12 +3,10 @@ import { render, act } from "@testing-library/react";
 import { Provider, createStore } from "jotai";
 import { dictationAvailabilityAtom } from "@/features/editor/atoms/editor-atoms.ts";
 
-// Regression test for the byline mic staying stuck disabled (#311 / #309): on a
-// page the user can edit, the mic must un-grey once the body becomes editable.
-// #311 first fixed this by reading `editor.isEditable` via `useEditorState`; #309
-// superseded that with a reactive `dictationAvailabilityAtom` that page-editor
-// publishes (carrying both the editable gate AND the unavailable reason). The mic
-// now gates on `dictationAvailability.isEditable`, so a change to that atom must
+// On a page the user can edit, the byline mic must un-grey once the body
+// becomes editable. The mic gates on `dictationAvailability.isEditable` from the
+// reactive `dictationAvailabilityAtom` that page-editor publishes (carrying both
+// the editable gate AND the unavailable reason), so a change to that atom must
 // re-render the group and flip the disabled state (jotai drives the subscription).
 
 // Detectable stand-in that surfaces the `disabled` prop the component computes.
@@ -21,7 +19,7 @@ vi.mock("@/features/dictation/components/mic-button", () => ({
 import { DictationGroup } from "./dictation-group";
 
 // Minimal editor stand-in matching the surface DictationGroup uses (handleStart /
-// handleText). The disabled gate no longer reads this — it reads the atom.
+// handleText). The disabled gate does not read this — it reads the atom.
 function makeFakeEditor() {
   return {
     isEditable: false,

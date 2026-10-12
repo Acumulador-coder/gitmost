@@ -6,7 +6,7 @@ import { convertProseMirrorToMarkdown } from '../src/lib/markdown-converter.js';
 import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 
 // ---------------------------------------------------------------------------
-// #293 canon #6: math -> `$…$` (inline) and `$$…$$` (block).
+// math -> `$…$` (inline) and `$$…$$` (block).
 //
 // The CENTRAL correctness constraint is that a single/currency `$` is NEVER
 // math (`$5`, `it costs $5 and $10` stay literal), and a would-be-math `$x$`

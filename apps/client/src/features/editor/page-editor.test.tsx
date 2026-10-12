@@ -5,7 +5,7 @@ import { useScrollRestoreOnSwap } from "./hooks/use-scroll-position";
 
 const KEY_PREFIX = "gitmost:scroll-position:";
 
-// NOTE ON SCOPE (F2 — reviewer-approved lighter variant).
+// NOTE ON SCOPE.
 //
 // The real UX wiring lives in the exported `useScrollRestoreOnSwap` hook (two
 // useLayoutEffects around useScrollPosition), which PageEditor calls with the

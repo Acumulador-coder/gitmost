@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * Body-paint latch + forced-sampling tests (#639, structural criteria 2-5).
+ * Body-paint latch + forced-sampling tests.
  *
  * INITIAL_PATHNAME in vitals.ts is captured ONCE at module init, so each case
  * loads the module fresh (vi.resetModules + dynamic import) after setting the

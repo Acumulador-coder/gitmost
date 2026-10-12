@@ -1,4 +1,4 @@
-// Semantic color/line presets for the graph tools (issue #425, stage 3). The
+// Semantic color/line presets for the graph tools. The
 // PALETTE is DATA (packages/mcp/data/drawio-presets.json), not code: a node
 // `kind` maps to a { fillColor, strokeColor, fontColor } slot and an edge `kind`
 // maps to line-style props, per named preset (`default` / `dark` /
@@ -7,10 +7,12 @@
 // never sees a style string — it names a `kind`, the server picks the slot.
 //
 // Loading mirrors drawio-shapes.ts: the JSON is read once via `import.meta.url`
-// relative to the built module. That is why this module (and drawio-graph.ts
-// which imports it) is reached ONLY through client.ts's ESM build and never
-// value-imported into the zod-agnostic tool-specs.ts (which the in-app server
-// type-checks under module:commonjs, where `import.meta` is a TS1343 error).
+// relative to the built module. This module (and drawio-graph.ts which imports
+// it) is reached at runtime ONLY through client.ts's ESM build. It is still
+// TYPE-checked by the in-app server under module:commonjs — tool-specs.ts
+// type-imports DocmostClient from client.ts, which pulls this file into the
+// server's tsc program — where `import.meta` is TS1343; hence the @ts-ignore on
+// each `import.meta.url` line in the drawio-* modules.
 
 import { readFileSync } from "node:fs";
 
@@ -63,6 +65,7 @@ let _presets: Record<string, PresetData> | null = null;
 
 function presetsPath(): URL {
   // build/lib/drawio-presets.js -> ../../data/drawio-presets.json
+  // @ts-ignore TS1343 only under the server's module:commonjs type-check (see header).
   return new URL("../../data/drawio-presets.json", import.meta.url);
 }
 

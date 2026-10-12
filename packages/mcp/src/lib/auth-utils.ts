@@ -44,7 +44,7 @@ export async function getCollabToken(
  * raw `Set-Cookie` header array from the login response, return the `authToken`
  * cookie's value.
  *
- * Behavior (kept identical to the original inline logic):
+ * Behavior:
  *  - throws if there is no Set-Cookie header at all;
  *  - matches the cookie NAME exactly (`authToken`), so a future
  *    `authTokenRefresh=...` cookie is NOT picked up (a `startsWith` would be);

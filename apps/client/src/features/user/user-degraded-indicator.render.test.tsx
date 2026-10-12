@@ -5,8 +5,8 @@ import { MemoryRouter } from "react-router-dom";
 import { Provider, createStore } from "jotai";
 
 /**
- * #641, part 3 — rule #8 render test of the OBSERVABLE property "degraded gate ⇒
- * the UserDegradedIndicator badge is in the document".
+ * Render test of the observable property "degraded gate ⇒ the
+ * UserDegradedIndicator badge is in the document".
  *
  * `resolveUserGate` (the pure decision) is unit-tested in user-provider-gate.test;
  * this mounts the REAL `UserProvider` and asserts the wiring `gate === "degraded"
@@ -30,12 +30,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("@/features/user/hooks/use-current-user", () => ({
   default: () => hoisted.meResult,
 }));
-
-// Local-first ON — the degraded branch only exists with the flag on.
-vi.mock("@/lib/config", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, isLocalFirstEnabled: () => true };
-});
 
 // Side-effects a headless mount cannot run (sockets, version-reload, collab
 // token). None participate in the gate decision.

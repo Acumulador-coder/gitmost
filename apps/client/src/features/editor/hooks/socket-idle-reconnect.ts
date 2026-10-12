@@ -23,9 +23,8 @@ export interface SocketIdleInput {
  * (every render while `visible && disconnected` holds) throws away the
  * library's 1s→30s exponential ladder and reconnects as fast as the browser
  * can fail a WebSocket. WebKit fails/closes a WS much faster than Blink and
- * does not throttle repeated failures per origin, which is how this became a
- * Safari CPU burn. Ordinary connection failures are Hocuspocus's own retryer's
- * job.
+ * does not throttle repeated failures per origin, so a level trigger burns CPU
+ * in Safari. Ordinary connection failures are Hocuspocus's own retryer's job.
  */
 export function decideSocketIdleAction({
   isIdle,

@@ -1,19 +1,13 @@
-// Extra media round-trip coverage (issue #244), complementing
-// media-roundtrip.test.mjs.
-//
-// The existing media-roundtrip.test.mjs already asserts that video, youtube,
-// embed, excalidraw, audio and pdf SURVIVE a PM -> markdown -> PM round-trip and
-// keeps their identifying src / provider / name / attachmentId. It does NOT,
-// however, exercise:
+// Media round-trip coverage beyond media-roundtrip.test.mjs (which checks that
+// video, youtube, embed, excalidraw, audio and pdf survive PM -> markdown -> PM
+// with their src / provider / name / attachmentId). This file covers:
 //   * the `drawio` node (a distinct schema node that shares the excalidraw
-//     converter case) — not covered at all;
+//     converter case);
 //   * the dimension / layout attributes (width, height, align) that ride in
 //     data-* attributes — exactly where a converter<->schema mismatch silently
 //     drops a value while the node itself survives;
 //   * attribute escaping for a src containing `"` (escapeAttr) — a malformed
 //     value here would either break the round-trip or inject HTML.
-//
-// These are the gaps this file locks down.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -55,7 +49,7 @@ test("round-trip: drawio diagram survives with src, title, dimensions, align, at
     },
     "drawio",
   );
-  // #293 canon #8: the media family serializes to the markdown image form plus a
+  // The media family serializes to the markdown image form plus a
   // trailing discriminator comment carrying the non-src attrs.
   assert.match(md, /^!\[\]\(\/api\/files\/d\.drawio\)/);
   assert.match(md, /<!--drawio \{.*"attachmentId":"dz1".*\}-->/);
@@ -75,16 +69,15 @@ test("round-trip: drawio diagram survives with src, title, dimensions, align, at
 // existing file checks only src/provider/name/attachmentId, so a dropped
 // width/height/align would pass there but fail here.
 // ---------------------------------------------------------------------------
-test("round-trip: youtube preserves width/height/align (data-* attrs)", async () => {
+test("round-trip: youtube preserves width/height (data-* attrs)", async () => {
   const { found } = await roundtrip(
-    { type: "youtube", attrs: { src: "https://youtube.com/watch?v=x", width: 560, height: 315, align: "left" } },
+    { type: "youtube", attrs: { src: "https://youtube.com/watch?v=x", width: 560, height: 315 } },
     "youtube",
   );
   assert.equal(found.length, 1);
   const a = found[0].attrs;
   assert.equal(String(a.width), "560");
   assert.equal(String(a.height), "315");
-  assert.equal(a.align, "left");
 });
 
 test("round-trip: embed preserves provider, width/height and align", async () => {

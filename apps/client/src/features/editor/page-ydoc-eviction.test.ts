@@ -15,14 +15,11 @@ const SLUG_ID = "slugid1";
 const SCOPE_STORAGE_KEY = "pageMeta:v1:w1:u1";
 const SCOPE = "w1:u1";
 
-let localFirstEnabled = true;
-
 // Full mock (NOT importOriginal): the real @/lib/config pulls in
 // @/lib/utils -> page-icon -> lucide-react/dynamic, which is unresolved in the
 // test env (one of the repo's ~38 pre-existing lucide load failures). Provide
 // every config function the transitive graph reads.
 vi.mock("@/lib/config", () => ({
-  isLocalFirstEnabled: () => localFirstEnabled,
   isClientTelemetryEnabled: () => false,
   getOfflineGraceMs: () => 30 * 24 * 60 * 60 * 1000,
 }));
@@ -78,7 +75,6 @@ function successReq(): any {
 }
 
 beforeEach(() => {
-  localFirstEnabled = true;
   localStorage.clear();
   deleteDatabase = vi.fn(() => successReq());
   vi.stubGlobal("indexedDB", { deleteDatabase });
@@ -270,22 +266,6 @@ describe("installPageYdocEviction (global page-query error subscriber)", () => {
     unsubscribe();
   });
 
-  // #640, acceptance 10 — deletion is OUT of the flag gate now.
-  it("STILL deletes when the local-first flag is OFF", async () => {
-    seedBootCache(PAGE_ID, SLUG_ID);
-    localFirstEnabled = false;
-    const mod = await freshImport();
-    const queryClient = new QueryClient();
-    const unsubscribe = mod.installPageYdocEviction(queryClient);
-
-    await failPageQuery(queryClient, SLUG_ID, 403);
-
-    await vi.waitFor(() =>
-      expect(deleteDatabase).toHaveBeenCalledWith(`page.${SCOPE}.${PAGE_ID}`),
-    );
-    unsubscribe();
-  });
-
   it("leaves the ydoc alone on other failures (500, offline) and on other queries", async () => {
     const mod = await freshImport();
     const queryClient = new QueryClient();
@@ -427,11 +407,11 @@ describe("migratePageYdocDatabasesOnce (#640 acceptance 9)", () => {
   });
 });
 
-// #641, part 7 — `hasLocalPageBody` is the fail-closed control page.tsx consults
+// `hasLocalPageBody` is the fail-closed control page.tsx consults
 // (synchronously, no IndexedDB open) to pick offline-local (render the cached
 // body) vs offline-empty. It returns TRUE only when ALL of: the scope is resolved
 // (not anon), the session is within OFFLINE_GRACE, the page is NOT tombstoned
-// under EITHER alias (the security-critical revocation branch, #564/#640), AND
+// under EITHER alias (the security-critical revocation branch), AND
 // the ydoc DB name is in the browser registry (the body was actually written on
 // this device). Each `it` proves the OBSERVABLE decision and is NON-VACUOUS: the
 // header of each case names which branch flips the result vs the positive case.
@@ -513,9 +493,8 @@ describe("pageYdocRoomName vs pageYdocDbName (collab room != db name)", () => {
   // Mirrors the SERVER contract in apps/server/src/collaboration/
   // collaboration.util.ts: getPageId(documentName) = documentName.split(".")[1].
   // The collab ROOM name is what the client passes to HocuspocusProvider.name, so
-  // it MUST resolve back to the pageId here. #626 wired the scoped DB name into the
-  // room name, so the server resolved the scope instead of the pageId and rejected
-  // every authenticated collab connection — this locks that regression out.
+  // it MUST resolve back to the pageId here; a scoped DB name in the room name
+  // would make the server reject every authenticated collab connection.
   const serverGetPageId = (documentName: string) => documentName.split(".")[1];
 
   it("room name resolves to the pageId under the server's getPageId contract", async () => {

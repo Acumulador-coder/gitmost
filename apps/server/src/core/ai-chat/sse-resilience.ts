@@ -28,24 +28,20 @@ import type { ServerResponse } from 'node:http';
  * the response finishes or the socket closes. The interval is unref()'d so it
  * never keeps the process alive, and writes are guarded so we never write to an
  * already-ended/destroyed socket.
- *
- * `onBeat` is an OPTIONAL diagnostic hook invoked once after each heartbeat that
- * was actually written (only when the write did not throw). It is purely for
- * telemetry/counters and never affects the heartbeat behavior.
  */
 export function startSseHeartbeat(
   res: ServerResponse,
   intervalMs = 15_000,
-  onBeat?: () => void,
 ): () => void {
+  // A response that is already gone (the client left before the stream
+  // started) never emits 'close'/'finish' again, so a timer started now would
+  // never be cleared — and it would pin the dead response, plus everything the
+  // SDK pipe still buffers for it, in memory for the life of the process (#717).
+  if (res.destroyed || res.writableEnded) return () => undefined;
   const timer = setInterval(() => {
     if (res.writableEnded || res.destroyed) return;
     try {
       res.write(': ping\n\n');
-      // DIAGNOSTIC (Safari stream-drop investigation) — temporary. Notify the
-      // optional hook only after a successful write, so beat counters reflect
-      // pings that actually reached the socket.
-      onBeat?.();
     } catch {
       // Socket vanished between the guard and the write; nothing to do.
     }

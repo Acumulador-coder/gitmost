@@ -49,13 +49,12 @@ export const CustomTable = Table.extend({
   // `this.options.resizable && this.editor.isEditable`. `addProseMirrorPlugins`
   // runs exactly ONCE, at editor construction, and the body editor in
   // page-editor.tsx is deliberately constructed with a constant
-  // `editable: false` (local-first Ф7 — it stops the editor being destroyed and
-  // recreated when /pages/info lands). Editability is flipped afterwards via
-  // `setEditable`, which does NOT rebuild the plugin set, so `isResizable` was
-  // permanently false and columnResizing was never installed: no resize
-  // handles, no draggable column borders, ever.
+  // `editable: false` (it stops the editor being destroyed and recreated when
+  // /pages/info lands). Editability is flipped afterwards via `setEditable`,
+  // which does NOT rebuild the plugin set, so upstream's gate would never
+  // install columnResizing.
   //
-  // The fix is to gate on `this.options.resizable` ALONE. That is safe because
+  // So this gates on `this.options.resizable` ALONE. That is safe because
   // prosemirror-tables guards columnResizing at RUNTIME instead: handleMouseMove,
   // handleMouseLeave and handleMouseDown all early-return on `!view.editable`,
   // and the resize handle is a decoration that is only produced once a handle is
@@ -86,8 +85,8 @@ export const CustomTable = Table.extend({
         // DELIBERATE: `null` tells prosemirror-tables to install NO table node
         // view of its own (`if (View && nodeViews)` in the plugin's state.init
         // — `null` is the documented opt-out). The table node view is owned by
-        // `addNodeView()` below, which is what stops the 150 Hz DOM-repair loop
-        // (af06bab6); leaving the default `View` here would create a second
+        // `addNodeView()` below, which is what stops the 150 Hz DOM-repair loop;
+        // leaving the default `View` here would create a second
         // owner for the same node. Ours would still win — tiptap passes
         // extension node views as a direct `EditorView._props.nodeViews` entry
         // and `someProp` consults `_props` before plugin props — but "wins by
@@ -98,10 +97,10 @@ export const CustomTable = Table.extend({
         // going through any node view, and the committed colwidth attrs are
         // re-rendered by TableView.update().
         //
-        // Consequence worth knowing: upstream's `TableOptions.View` is now
-        // deliberately NOT forwarded, so `CustomTable.configure({ View })` is a
-        // no-op. The table node view is not configurable from the outside any
-        // more — it is `addNodeView()` below, always.
+        // Consequence worth knowing: upstream's `TableOptions.View` is NOT
+        // forwarded, so `CustomTable.configure({ View })` is a no-op. The table
+        // node view is not configurable from the outside — it is `addNodeView()`
+        // below, always.
         View: null,
       }),
       ...inherited,
@@ -174,13 +173,12 @@ export const CustomTable = Table.extend({
   // so ProseMirror uses its DEFAULT ignoreMutation (`!this.contentDOM && type
   // != "selection"`, i.e. false for every mutation on a node that HAS a
   // contentDOM). Every attribute write on `.tableWrapper` — the header-pin
-  // controller's class toggles, for instance — was then seen as a foreign DOM
-  // change, and ProseMirror "repaired" it by re-rendering the whole table.
-  // That destroyed the wrapper, which destroyed the pin controller, whose
-  // freshly-built replacement re-applied the same classes: a self-feeding loop
-  // that ran `view.updateState` ~150x/second at idle and kept header pinning
-  // permanently broken. Installing TableView makes the wrapper owned by a node
-  // view that ignores mutations outside its contentDOM, which breaks the loop.
+  // controller's class toggles, for instance — would be seen as a foreign DOM
+  // change and "repaired" by re-rendering the whole table, destroying the
+  // wrapper and its pin controller, whose replacement re-applies the same
+  // classes: a self-feeding loop running `view.updateState` ~150x/second at
+  // idle. TableView owns the wrapper and ignores mutations outside its
+  // contentDOM, which breaks the loop.
   addNodeView() {
     const options = this.options;
     // Constant for the editor's lifetime, so it is resolved ONCE here rather

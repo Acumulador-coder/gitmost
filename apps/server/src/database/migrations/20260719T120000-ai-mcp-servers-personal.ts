@@ -1,15 +1,15 @@
 import { type Kysely } from 'kysely';
 
 /**
- * Personal external MCP servers (#686), Phase 1 — data model.
+ * Personal external MCP servers — data model.
  *
  * Adds a nullable `user_id` owner column to `ai_mcp_servers`. Semantics:
- *   - user_id IS NULL  => an ADMIN/workspace-managed server (today's rows).
+ *   - user_id IS NULL  => an ADMIN/workspace-managed server.
  *   - user_id = <uuid> => a PERSONAL server owned by that member; only the
  *     agent turn run BY that user sees it, and only that user can manage it.
  *
  * The column is nullable with NO default and NO backfill, so this is an
- * additive metadata-only add — every legacy row keeps `null` (= admin) and no
+ * additive metadata-only add — every existing row keeps `null` (= admin) and no
  * table rewrite / hot-table lock is taken (mirrors 20260713 external-mcp
  * -provenance).
  *

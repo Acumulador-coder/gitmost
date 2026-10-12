@@ -6,7 +6,7 @@ import { Logger } from '@nestjs/common';
  *
  * It defaults to the global `fetch`, but the chat provider passes the streaming
  * fetch (which RAISES undici's 300s stream timeouts to a generous-but-finite
- * silence timeout so a long agent turn is not severed mid-stream — #175). So this
+ * silence timeout so a long agent turn is not severed mid-stream). So this
  * wrapper observes the EXACT transport a turn uses. It NEVER retries, times out,
  * swaps the dispatcher, or reads/clones the response body — the Response is
  * returned untouched (streaming unaffected) and any error is rethrown unchanged.
@@ -14,9 +14,9 @@ import { Logger } from '@nestjs/common';
  * Per provider HTTP call it logs: time-to-response-headers + status + request
  * body size on success; and on a pre-response rejection the failure latency +
  * error code/cause + request body size + the idle gap since the previous call.
- * This telemetry is intentional and kept (it diagnoses provider connection
- * resets / mid-stream cuts), and it is load-bearing: the streaming fetch reaches
- * the chat provider THROUGH this wrapper, so the two are one construct.
+ * This telemetry diagnoses provider connection resets / mid-stream cuts, and
+ * the streaming fetch reaches the chat provider THROUGH this wrapper, so the
+ * two are one construct.
  *
  * How to read the result (a long agentic turn makes one provider call per step):
  *  - a failed turn whose last provider line is "PRE-RESPONSE FAILED ... ECONNRESET"
@@ -48,7 +48,7 @@ export function createInstrumentedFetch(
     const idleSincePrev =
       lastCallStartedAt === undefined ? undefined : startedAt - lastCallStartedAt;
     lastCallStartedAt = startedAt;
-    // Request body size: the chat payload is a JSON string. Used to test whether
+    // Request body size: the chat payload is a JSON string. Shows whether
     // failures correlate with the large accumulated context on later agent steps.
     const body = init?.body as unknown;
     const bodyBytes =

@@ -24,6 +24,12 @@ export interface GitSyncPageNodeLite {
   title?: string;
   parentPageId?: string | null;
   hasChildren?: boolean;
+  /**
+   * The page row's `updated_at` as an ISO string. Part of the pull's export key
+   * (with the node's relPath/title/slugId/parent): a live page whose key is
+   * unchanged since its last successful export is not re-read/re-converted.
+   */
+  updatedAt: string;
   /** `listSpaceTree` nodes carry extra fields (position, icon, …). */
   [key: string]: unknown;
 }
@@ -34,7 +40,7 @@ export interface GitSyncPageNodeLite {
  *   - pull reads:  `getPageJson` (+ the tree walk's `listSpaceTree`),
  *   - push writes: `importPageMarkdown` / `createPage` / `deletePage` /
  *                  `movePage` / `renamePage`,
- *   - continuous (phase B+): `listRecentSince` / `listTrash` / `restorePage`.
+ *   - continuous: `listRecentSince` / `listTrash` / `restorePage`.
  */
 export interface GitSyncClient {
   // --- reads (pull) ---------------------------------------------------------
@@ -52,10 +58,28 @@ export interface GitSyncClient {
   ): Promise<{ pages: GitSyncPageNodeLite[]; complete: boolean }>;
 
   /**
-   * One page WITH its ProseMirror body content. `applyPullActions` reads
-   * `id`, `slugId`, `title`, `parentPageId`, `spaceId` (for the file meta) and
-   * `content` (to stabilize/serialize). `updatedAt` is carried for the
-   * poll-suppression loop-guard.
+   * Existence probe for the pull-side ghost guard. Given a set of
+   * candidate pageIds, return the subset that corresponds to a REAL page ROW —
+   * INCLUDING soft-deleted (trashed) and pages in ANY OTHER space, i.e. any
+   * `id` that has ever been a page (`SELECT id FROM pages WHERE id = ANY(...)`,
+   * workspace-scoped). Malformed (non-UUID) ids are filtered out before the
+   * query and are never returned.
+   *
+   * The pull reconciler only absence-deletes a tracked file whose pageId is
+   * returned here: a deleted/moved/trashed page HAS a row -> its vault file is
+   * cleaned up; a GHOST id (a git file whose id was NEVER a page) has NO row ->
+   * it is preserved rather than silently deleted. Called on
+   * only the small candidate-delete set (tracked ids absent from the live tree),
+   * so the query is bounded and usually empty.
+   */
+  pageIdsExist(pageIds: string[]): Promise<string[]>;
+
+  /**
+   * One page WITH its ProseMirror body content. The export (`buildExportTree`)
+   * reads `id` and `content` (to stabilize/serialize). `updatedAt` is carried
+   * for the poll-suppression loop-guard. `lastUpdatedSource` (`'git-sync'` when
+   * git-sync made the last write) lets the apply's retry-adopt recognize a
+   * create of git-sync's own that a cycle cut off before its export.
    */
   getPageJson(pageId: string): Promise<{
     id: string;
@@ -65,21 +89,20 @@ export interface GitSyncClient {
     spaceId: string;
     updatedAt: string;
     content: unknown;
+    lastUpdatedSource?: string | null;
   }>;
 
   // --- writes (push) --------------------------------------------------------
 
   /**
    * Merge a page's markdown BODY into the live page. `applyPushActions` passes
-   * the file's body with the frontmatter AND any git conflict markers already
-   * stripped — NOT the raw self-contained file — so `fullMarkdown` here is clean
-   * body text (the datasource re-parses defensively). The collab/Yjs write path
-   * (SPEC §2/§15.6) — never a raw jsonb overwrite. `applyPushActions` reads only
-   * an optional `updatedAt` off the result (via `extractUpdatedAt`).
+   * the file's body with the frontmatter stripped — NOT the raw self-contained
+   * file (the datasource re-parses defensively). The collab/Yjs write path
+   * (SPEC §2/§15.6) — never a raw jsonb overwrite. The result is not inspected.
    *
-   * `baseMarkdown` is the last-synced body (from `refs/docmost/last-pushed`,
+   * `baseMarkdown` is the body at the last export (`refs/docmost/last-export`,
    * likewise stripped), the common ancestor for a THREE-WAY merge against the
-   * live doc so concurrent human edits survive (review #5). Optional/null -> 2-way.
+   * live doc so concurrent human edits survive. Optional/null -> 2-way.
    */
   importPageMarkdown(
     pageId: string,
@@ -89,8 +112,9 @@ export interface GitSyncClient {
 
   /**
    * Create a new page and return the assigned id at `data.id`
-   * (`applyPushActions` reads `result.data.id`, then writes it back into the
-   * file's meta). An optional top-level/`data.updatedAt` feeds the loop-guard.
+   * (`applyPushActions` reads `result.data.id`; the export then writes the
+   * page's file with that id). An optional top-level/`data.updatedAt` feeds the
+   * loop-guard.
    */
   createPage(
     title: string,

@@ -1,11 +1,9 @@
 /**
- * Attached-comment convention (#293 canon).
+ * Attached-comment convention.
  *
  * Some block-level attributes have no native markdown syntax (paragraph/heading
- * `textAlign` — #9; image/media attrs — #4/#8). Rather than HTML-wrapping the
- * whole block (the old `<div align>` / `<p style>` forms, which the maintainer
- * had to patch repeatedly and which did not round-trip cleanly), we ATTACH a
- * compact HTML comment at the END of the block's rendered line:
+ * `textAlign`, image/media attrs). Instead of HTML-wrapping the whole block, we
+ * ATTACH a compact HTML comment at the END of the block's rendered line:
  *
  *     Some paragraph text <!--attrs {"textAlign":"center"}-->
  *
@@ -14,9 +12,8 @@
  * The importer intercepts it BEFORE that stage (see markdown-to-prosemirror's
  * applyAttachedComments) and re-applies the encoded attributes to the node.
  *
- * This module holds the two PURE, reusable primitives of the convention so the
- * serializer, the parser, and future decisions (#4 image, #8 media) share ONE
- * implementation:
+ * This module holds the PURE primitives of the convention so the serializer
+ * and the parser share ONE implementation:
  *   - `attachedCommentFor(name, json)` — build the comment string.
  *   - `parseAttachedComment(data)`     — parse a comment node's data back.
  */
@@ -40,15 +37,8 @@ export interface AttachedComment {
 const ATTACHED_COMMENT_RE = /^\s*([A-Za-z][\w-]*)(?:\s+(\{[\s\S]*\}))?\s*$/;
 
 /**
- * Build an attached HTML comment `<!--name {compact-json}-->` for `json`.
- *
- * The JSON is emitted compactly (no spaces) via `JSON.stringify`. A string value
- * may legitimately contain two consecutive hyphens `--`, which would prematurely
- * close the HTML comment (`-->`). We defuse that WITHOUT changing the decoded
- * value: each hyphen of every `--` pair is rewritten as the JSON unicode escape
- * `-`, so `JSON.parse` on the reading side restores the exact original
- * hyphens. `--` can only occur inside a JSON string (structural JSON never
- * produces it), so a blanket replace over the stringified payload is safe.
+ * Build an attached HTML comment `<!--name {compact-json}-->` for `json`, with
+ * `--` defused by `escapeCommentJson`.
  */
 export function attachedCommentFor(name: string, json: object): string {
   return `<!--${name} ${escapeCommentJson(json)}-->`;
@@ -62,7 +52,7 @@ export function attachedCommentFor(name: string, json: object): string {
  * A string value may legitimately contain two consecutive hyphens `--`, which
  * would prematurely close the comment (`-->`). We defuse that WITHOUT changing
  * the decoded value: each hyphen of every `--` pair is rewritten as the JSON
- * unicode escape `-`, so `JSON.parse` on the reading side restores the exact
+ * unicode escape `\u002d`, so `JSON.parse` on the reading side restores the exact
  * original hyphens. `--` can only occur inside a JSON string (structural JSON
  * never produces it), so a blanket replace over the stringified payload is safe.
  * Scanning left-to-right and replacing each `--` handles odd runs too (`---` ->
@@ -73,7 +63,7 @@ function escapeCommentJson(json: object): string {
 }
 
 /**
- * Build a STANDALONE machinery comment (#293 canon #5) for a block node that
+ * Build a STANDALONE machinery comment for a block node that
  * lives on its OWN line, e.g. `<!--pagebreak-->` or `<!--subpages-->`.
  *
  * Grammar is identical to the attached form (`<!--name {JSON?}-->`), but the
@@ -99,7 +89,7 @@ export function standaloneCommentFor(name: string, attrs?: object | null): strin
  * Parse the DATA of a comment node into `{ name, attrs }`, or `null` when it is
  * not a well-formed attached comment.
  *
- * Fail-open by design (maintainer spec): a comment whose name token is missing,
+ * Fail-open by design: a comment whose name token is missing,
  * whose JSON body is malformed, or whose body is not a plain object returns
  * `null` so the caller ignores it and keeps default attributes. Unknown keys in
  * a valid object are preserved here and filtered by the caller.

@@ -1,14 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { tool, type Tool, type ToolCallOptions } from 'ai';
 import { z } from 'zod';
 import { User } from '@docmost/db/types/entity.types';
 import { TokenService } from '../../auth/services/token.service';
 import { AiService } from '../../../integrations/ai/ai.service';
-import { EmbeddingGenerationService } from '../../../integrations/ai/embedding-generation.service';
-import { AiEmbeddingNotConfiguredException } from '../../../integrations/ai/ai-embedding-not-configured.exception';
-import { PageEmbeddingRepo } from '@docmost/db/repos/ai-chat/page-embedding.repo';
-import { SpaceMemberRepo } from '@docmost/db/repos/space/space-member.repo';
-import { PagePermissionRepo } from '@docmost/db/repos/page/page-permission.repo';
+import { SearchService } from '../../search/search.service';
+import { SearchDTO } from '../../search/dto/search.dto';
+import type { SearchResultDto } from '../../search/dto/search-response.dto';
 import {
   loadDocmostMcp,
   type DocmostClientLike,
@@ -30,18 +28,18 @@ import {
 } from './tool-tiers';
 
 /**
- * Compile-time contract (issue #446): the in-app tool `execute` closures below
- * call the loopback `DocmostClient` POSITIONALLY (e.g.
+ * Compile-time contract: the in-app tool `execute` closures below call the
+ * loopback `DocmostClient` POSITIONALLY (e.g.
  * `client.drawioGet(pageId, node, format ?? 'xml')`). Those closures receive an
  * AI-SDK-erased (`any`) input, so a positional call inside them is NOT checked
  * against the real signature — a parameter reorder/type-change in
- * `packages/mcp/src/client.ts` would otherwise reach production as a runtime
- * "wrong argument" tool failure with zero compile signal (the restored #294
- * debt). This never-called function reproduces every positional call with
- * correctly-typed placeholder arguments against the DERIVED `DocmostClientLike`
- * (a `Pick` of the real `DocmostClient`), so any such reorder/rename becomes a
- * SERVER COMPILE ERROR here. It emits nothing (types only) and is never invoked;
- * keep each call in lockstep with the matching `execute` body below.
+ * `packages/mcp/src/client.ts` would reach production as a runtime "wrong
+ * argument" tool failure with zero compile signal. This never-called function
+ * reproduces every positional call with correctly-typed placeholder arguments
+ * against the DERIVED `DocmostClientLike` (a `Pick` of the real `DocmostClient`),
+ * so any such reorder/rename becomes a SERVER COMPILE ERROR here. It emits
+ * nothing (types only) and is never invoked; keep each call in lockstep with the
+ * matching `execute` body below.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function __assertClientCallContract(client: DocmostClientLike): void {
@@ -56,7 +54,6 @@ function __assertClientCallContract(client: DocmostClientLike): void {
   const align = undefined as 'left' | 'center' | 'right' | undefined;
 
   // --- read ---
-  void client.search(s, undefined, n);
   void client.getPage(s);
   void client.getPageRaw(s);
   void client.getWorkspace();
@@ -152,8 +149,8 @@ function __assertClientCallContract(client: DocmostClientLike): void {
 }
 
 /**
- * Per-user, per-request adapter that exposes Docmost READ operations to the
- * agent as AI SDK tools (STAGE A = read only).
+ * Per-user, per-request adapter that exposes Docmost operations to the agent as
+ * AI SDK tools.
  *
  * Each tool call goes loopback over the user's own access JWT, so Docmost CASL
  * enforces access on every request — there is NO extra authorization here
@@ -166,14 +163,14 @@ function __assertClientCallContract(client: DocmostClientLike): void {
  * works for single-workspace self-host.
  */
 /**
- * #487: wall-clock cap for a SINGLE in-app tool call, env-tunable via
+ * Wall-clock cap for a SINGLE in-app tool call, env-tunable via
  * `AI_CHAT_INAPP_TOOL_CALL_CAP_MS`. Bounds a read tool that would otherwise
  * paginate for minutes and a content write whose collab commit hangs, and is the
  * per-call CAP half of the composite abort signal every in-app tool is wrapped
  * with (the other half is the turn's Stop signal). Default 2 minutes: generous
  * for a legitimate long read/write, tight enough that a stuck call cannot pin the
- * turn. The reconcile staleness floor (#487 commit 4) is derived as
- * max(2 x this cap, 15 min), so keep this well under that.
+ * turn. The reconcile staleness floor is derived as max(2 x this cap, 15 min),
+ * so keep this well under that.
  */
 export function inAppToolCallCapMs(): number {
   const raw = Number(process.env.AI_CHAT_INAPP_TOOL_CALL_CAP_MS);
@@ -181,18 +178,18 @@ export function inAppToolCallCapMs(): number {
 }
 
 /**
- * #588: hard byte cap for a RASTER attachment (png/jpeg/webp/gif) delivered to
+ * Hard byte cap for a RASTER attachment (png/jpeg/webp/gif) delivered to
  * the model as vision by the `viewImage` tool. A raster is passed through AS-IS
  * (no resize), so this bounds both the base64 the provider must ingest and the
  * per-turn memory. ~5 MiB is generous for a screenshot/diagram yet blocks a
  * pathological multi-MB upload. SVG has no analogous cap here: it is rasterized
- * by #586's `rasterizeSvgToPng`, whose own RASTER_MAX_SVG_BYTES input cap and
+ * by `rasterizeSvgToPng`, whose own RASTER_MAX_SVG_BYTES input cap and
  * PNG pixel ceiling bound the output.
  */
 export const VIEW_MAX_RASTER_BYTES = 5 * 1024 * 1024;
 
 /**
- * #588 F1: per-run cap on the LIVE viewImage cache (images held for prepareStep
+ * Per-run cap on the LIVE viewImage cache (images held for prepareStep
  * injection). Each live entry is re-injected into the provider request on every
  * step until the model speaks about it, so an unbounded cache — a prompt-injected
  * page telling the agent to view dozens of nodes before commenting — would hold
@@ -225,7 +222,7 @@ function inAppAbortReason(signal: AbortSignal): Error {
 }
 
 /**
- * The client surface {@link wrapInAppToolWithCap} drives (#487). Both methods are
+ * The client surface {@link wrapInAppToolWithCap} drives. Both methods are
  * OPTIONAL: the real loopback DocmostClient implements them (so a Stop/cap reaches
  * its pagination / pre-commit safe-points), but a client that omits them still
  * gets the OUTER guarantee — the race rejects on abort regardless. This keeps the
@@ -238,7 +235,7 @@ export interface ToolAbortSignalSink {
 }
 
 /**
- * #487: wrap an in-app tool so a Stop (the turn's `options.abortSignal`) OR the
+ * Wrap an in-app tool so a Stop (the turn's `options.abortSignal`) OR the
  * per-call wall-clock cap REJECTS the call immediately, and so that SAME
  * composite signal reaches the client's pagination / pre-commit safe-points (via
  * `client.setToolAbortSignal`) — making a Stop stop the NEXT HTTP/WS call from
@@ -247,8 +244,8 @@ export interface ToolAbortSignalSink {
  * Reuses the RACE pattern of `wrapToolWithCallTimeout` (mcp-clients.service.ts):
  * the call is raced against the composite signal, so on abort we reject in the
  * SAME tick and DISCARD the loser promise. Its network / collab teardown latency
- * therefore never blocks the turn — the supersede timeout W=10s (#487 commit 3)
- * relies on this abort->settle latency being milliseconds, not a socket teardown.
+ * therefore never blocks the turn — the supersede timeout (W=10s) relies on
+ * this abort->settle latency being milliseconds, not a socket teardown.
  * Awaiting the client's own signal-into-write path alone would NOT satisfy this
  * (the loser could still be tearing down a collab socket).
  *
@@ -258,10 +255,10 @@ export interface ToolAbortSignalSink {
  * composite there is exactly what makes the loser's NEXT call throw and stop. The
  * next in-app tool call overwrites the field with its own fresh composite before
  * any of its safe-points run, so a stale settled signal never leaks forward.
- * SINGLE-WRITER by phase-1 assumption — see DocmostClientContext.toolAbortSignal
- * for the parallel-call caveat (#487).
+ * SINGLE-WRITER by assumption — see DocmostClientContext.toolAbortSignal
+ * for the parallel-call caveat.
  *
- * KNOWN LIMITATION (#487): a write tool that issues SEVERAL sequential collab
+ * KNOWN LIMITATION: a write tool that issues SEVERAL sequential collab
  * commits can be aborted BETWEEN commits, leaving a partially-applied operation.
  * Cancel guarantees "no NEW call starts", NOT "the write didn't land".
  */
@@ -344,11 +341,11 @@ const VIEW_RASTER_MIMES = new Set([
   'image/gif',
 ]);
 
-// --- embedded draw.io raster (issue #629) ---------------------------------
+// --- embedded draw.io raster ----------------------------------------------
 //
 // SHARED CONTRACT duplicate. draw.io captions live in a browser-only
 // `foreignObject`, so resvg-rasterizing a `.drawio.svg` yields garbage. The
-// browser (Part A) embeds a real PNG of the diagram into the SVG's ROOT
+// browser embeds a real PNG of the diagram into the SVG's ROOT
 // `data-raster="data:image/png;base64,<b64>"` attribute; viewImage PREFERS that
 // PNG. `@docmost/mcp` (which owns the canonical extractor) is ESM-only and is
 // reached from this CommonJS server ONLY via the dynamic loader — a static value
@@ -357,7 +354,7 @@ const VIEW_RASTER_MIMES = new Set([
 // comment-signal mirrors), this small PURE helper is duplicated here with the
 // SAME attribute constant and the SAME 8-byte PNG-signature validation.
 
-/** Root SVG attribute carrying the browser-rendered PNG raster (issue #629). */
+/** Root SVG attribute carrying the browser-rendered PNG raster. */
 export const DRAWIO_RASTER_ATTR = 'data-raster';
 const RASTER_DATA_URI_PREFIX = 'data:image/png;base64,';
 const PNG_SIGNATURE = Buffer.from([
@@ -382,7 +379,7 @@ function readRootRasterAttr(svg: string): string | null {
  * Extract + VALIDATE the browser-embedded PNG raster from a `.drawio.svg`, or
  * null when there is no usable raster (absent, non-png mime, oversized, or bytes
  * that fail the PNG signature — a fake/corrupt raster must never pass as a PNG).
- * Mirror of `@docmost/mcp`'s extractDrawioRaster (issue #629).
+ * Mirror of `@docmost/mcp`'s extractDrawioRaster.
  */
 export function extractDrawioRaster(svg: string): Buffer | null {
   const raw = readRootRasterAttr(svg);
@@ -438,7 +435,7 @@ export interface ViewImageResult {
 }
 
 /**
- * Core of the `viewImage` tool (#588), factored out for unit testing without a
+ * Core of the `viewImage` tool, factored out for unit testing without a
  * live model/provider. Resolves the node, pulls its attachment bytes, classifies
  * by MIME, and — as a SIDE EFFECT — writes the ready-to-inject base64 image into
  * `cache` keyed by `toolCallId`. Returns a SMALL, byte-free result (persisted in
@@ -448,17 +445,17 @@ export interface ViewImageResult {
  * Classification:
  *  - png/jpeg/webp/gif  -> passthrough; oversized (> VIEW_MAX_RASTER_BYTES) throws;
  *  - image/svg+xml (incl. a drawio node's `.drawio.svg`) -> a plain SVG is
- *    rasterized to PNG via #586's rasterizeSvgToPng (drawio node type is treated
+ *    rasterized to PNG via rasterizeSvgToPng (drawio node type is treated
  *    as SVG regardless of the served Content-Type). A `.drawio.svg` PREFERS its
- *    browser-embedded PNG raster (#629) when one is valid and in-budget; without
+ *    browser-embedded PNG raster when one is valid and in-budget; without
  *    a usable raster the behavior depends on `rasterEnabled` (see below);
  *  - anything else -> throws `unsupported type <mime>`.
  *
- * `rasterEnabled` mirrors DRAWIO_RASTER_ENABLED (#629). It ONLY affects a drawio
+ * `rasterEnabled` mirrors DRAWIO_RASTER_ENABLED. It ONLY affects a drawio
  * node that has NO usable embedded raster (missing OR oversized): with generation
  * ON the "open it in the editor and save" remediation is actionable, so we throw
  * that loud text instead of returning a captionless resvg render; with generation
- * OFF that advice is unactionable, so viewImage falls back to the pre-PR resvg
+ * OFF that advice is unactionable, so viewImage falls back to the plain resvg
  * render (INERT). A valid in-budget embedded raster is used directly under BOTH
  * flags — consumption is unconditional. Plain SVGs ignore the flag entirely.
  *
@@ -590,20 +587,14 @@ export async function runViewImage(
 
 @Injectable()
 export class AiChatToolsService {
-  private readonly logger = new Logger(AiChatToolsService.name);
-
   constructor(
     private readonly tokenService: TokenService,
     private readonly aiService: AiService,
-    private readonly pageEmbeddingRepo: PageEmbeddingRepo,
-    private readonly spaceMemberRepo: SpaceMemberRepo,
-    private readonly pagePermissionRepo: PagePermissionRepo,
+    // The shared search engine backing the searchPages tool (same engine as the
+    // web search and the MCP `search`).
+    private readonly searchService: SearchService,
     // Shared singleton in-RAM blob store backing the stash tool.
     private readonly sandboxStore: SandboxStore,
-    // #599: resolves the ACTIVE embedding generation, so the RAG read stays in
-    // lockstep with SearchService's vector arm (both serve the active fingerprint,
-    // never a half-built target one).
-    private readonly embeddingGeneration: EmbeddingGenerationService,
     // #629: mirrors DRAWIO_RASTER_ENABLED. Gates only the loud "no raster yet"
     // remediation in viewImage's drawio branch — with generation ON the advice is
     // actionable, so a captionless resvg fallback is refused; with generation OFF
@@ -617,7 +608,7 @@ export class AiChatToolsService {
    * / collab surface AS the current user. Every call is scoped by the user's own
    * access JWT (CASL-enforced) and carries the signed agent provenance claim
    * ({ actor:'agent', aiChatId }) for both the access and collab tokens. Shared
-   * by `forUser` (the agent toolset) and `exportPageMarkdown` (the #274
+   * by `forUser` (the agent toolset) and `exportPageMarkdown` (the
    * page-change detection path) so they use an identical authenticated route.
    */
   private async buildDocmostClient(
@@ -740,9 +731,9 @@ export class AiChatToolsService {
   ): Promise<Record<string, Tool>> {
     // Build the per-user loopback client (carrying the access + collab
     // provenance tokens) and load the shared tool-spec registry. Client
-    // construction is shared with the page-change detection path (#274) via
+    // construction is shared with the page-change detection path via
     // buildDocmostClient so both go over the exact same authenticated route.
-    // searchShapes / getGuideSection (#424) are the PURE, no-network helpers
+    // searchShapes / getGuideSection are the PURE, no-network helpers
     // backing drawioShapes / drawioGuide. They are `inlineBothHosts` specs (no
     // canonical execute — their catalog loader uses import.meta and can't be
     // value-imported into the zod-agnostic tool-specs.ts under the server's
@@ -784,28 +775,36 @@ export class AiChatToolsService {
       });
 
     // The in-app toolset. It starts with the tools kept INLINE here for a
-    // documented per-layer reason: an intentional behaviour/schema divergence from
-    // the standalone MCP surface (searchPages' hybrid RRF,
-    // transformPage's guardrailed shorter schema), a name clash the shared
+    // documented per-layer reason: an intentional schema divergence from the
+    // standalone MCP surface (searchPages' tuned 1-20 limit and
+    // results/related/total shape, transformPage's guardrailed shorter schema),
+    // a name clash the shared
     // registry forbids (in-app `getTable` verb-first vs the MCP noun-first
     // `tableGet` — the registry requires mcpName === inAppKey), per-request
     // state the registry loop cannot provide
-    // (getCurrentPage reads the resolved openedPage; searchPages closes over the
-    // per-request user/embedding deps), or a tool with no MCP twin
+    // (getCurrentPage reads the resolved openedPage; searchPages calls the
+    // in-process SearchService as the requesting user), or a tool with no MCP twin
     // (listSidebarPages/getComment/getPageHistory). Every SHARED tool is then added
     // by the registry loop below (see it), so there is exactly one arg-mapping per
-    // shared tool and it can never drift from the MCP host again (#445).
+    // shared tool and it cannot drift from the MCP host.
     const tools: Record<string, Tool> = {
-      // INTENTIONAL per-transport divergence (not in the shared registry): this
-      // in-app search runs a semantic + keyword hybrid (RRF) with in-process
-      // access control and a tuned schema (limit 1-20); the standalone MCP
-      // `search` is a plain REST full-text search (limit up to 100). Different
-      // behaviour AND schema, so kept per-layer.
+      // Not in the shared registry: this in-app search runs the SAME engine as
+      // the web search and the MCP `search` (the in-process SearchService,
+      // called as the requesting user, which scopes it to the user's spaces and
+      // applies the page-permission filter), but with a tuned schema (limit
+      // 1-20) and a compact { results, related, total } output; the standalone
+      // MCP `search` exposes the full envelope (limit up to 50, pagination).
+      // Different schema, so kept per-layer.
       searchPages: tool({
         description:
-          'Search the wiki for pages relevant to a query. Combines exact ' +
-          'keyword/identifier matching with semantic meaning and returns the ' +
-          'most relevant pages with a short snippet, best match first. ' +
+          'Search the wiki for pages that match a query. `results` holds ONLY ' +
+          'pages that actually match, best match first, each with a short ' +
+          'snippet; `total` is the number of matching pages. `total: 0` means ' +
+          'nothing matches — no page exists under these terms. `related` lists ' +
+          'semantically similar pages that do NOT match the query: check them ' +
+          'as possible duplicates before creating a page, but never cite them ' +
+          'as matches. Operators: "exact phrase", +required, -excluded (e.g. ' +
+          '`+invoice -archive`). ' +
           "Rephrase the user's question into a focused search query (key terms " +
           'and entities), not a full sentence. If the first results look weak ' +
           'or incomplete, search again with different wording or synonyms ' +
@@ -822,125 +821,31 @@ export class AiChatToolsService {
         }),
         execute: async ({ query, limit }) => {
           const trimmed = (query ?? '').trim();
-          if (!trimmed) return [];
+          if (!trimmed) return { results: [], related: [], total: 0 };
 
           const cap = limit ?? 10;
 
-          // Loopback REST full-text fallback. Used when AI search is not
-          // configured, embedding fails, there are no accessible spaces, or the
-          // hybrid query returns nothing — so keyword search always works.
-          const fallback = async () => {
-            // search(query, spaceId?, limit?) -> { items, success }.
-            // Items are filterSearchResult(): { id, title, highlight, ... }.
-            const result = await client.search(trimmed, undefined, cap);
-            const items = Array.isArray(result?.items) ? result.items : [];
-            // Keep the payload token-efficient: id + title + a short snippet.
-            return items.map((raw) => {
-              const item = raw as {
-                id?: string;
-                slugId?: string;
-                title?: string;
-                highlight?: string;
-              };
-              return {
-                id: item.id ?? item.slugId,
-                title: item.title ?? '',
-                snippet: snippet(item.highlight),
-              };
-            });
-          };
-
-          // HYBRID path: fuse semantic (vector) + lexical (full-text) rankings
-          // via RRF. Over-fetch candidates so the page-permission post-filter
-          // still leaves enough results.
-          const candidates = Math.min(Math.max(cap * 5, 50), 200);
-
-          // 1) Embed the query through the SAME funnel the search subsystem uses
-          //    (#571, #599): it resolves the active provider, applies its QUERY
-          //    prefix (so the query lives in the same prefixed space as the
-          //    indexer's passage-prefixed docs), and returns the fingerprint of the
-          //    ACTIVE generation — which we thread into hybridSearch so the vector
-          //    CTE only fuses against the generation that is actually being served
-          //    (never stale cross-provider vectors, and never the half-built TARGET
-          //    generation of an in-flight reindex: during a swap the active pointer
-          //    still names the OLD generation, so RAG keeps full recall exactly like
-          //    search does). Unconfigured embeddings (or any embedding error) routes
-          //    to the REST full-text fallback instead of erroring.
-          let queryVector: number[];
-          let fingerprint: string;
-          try {
-            const embedded =
-              await this.embeddingGeneration.embedQueryForActiveGeneration(
-                workspaceId,
-                trimmed,
-              );
-            if (!embedded?.vector) return await fallback();
-            // #599 (D2): the served generation was produced by a DIFFERENT model
-            // than the one that just embedded this query. Their vectors live in two
-            // independently trained spaces, so a cosine between them is noise and the
-            // RRF fusion would rank arbitrary pages above genuine lexical hits. Fall
-            // back to the REST full-text search (lexical only) until the reindex of
-            // the new model completes and the pointer flips — exactly what
-            // SearchService does with its vector arm.
-            if (embedded.generation.modelChanged) {
-              this.logger.warn(
-                `searchPages: embedding model changed (active=${
-                  embedded.generation.activeModel ?? 'unknown'
-                } config=${embedded.generation.targetModel}); the served generation is ` +
-                  `not comparable with the new model — falling back to full-text search ` +
-                  `until the reindex completes.`,
-              );
-              return await fallback();
-            }
-            queryVector = embedded.vector;
-            fingerprint = embedded.fingerprint;
-          } catch (err) {
-            if (!(err instanceof AiEmbeddingNotConfiguredException)) {
-              // Never leak provider/key details; log generically and fall back.
-              this.logger.warn(
-                `searchPages embed failed: ${
-                  err instanceof Error ? err.message : 'unknown error'
-                }`,
-              );
-            }
-            return await fallback();
-          }
-
-          // 2) ACCESS CONTROL: the hybrid query runs IN-PROCESS (a direct
-          //    pgvector + full-text query), so unlike the loopback REST tools it
-          //    does NOT get CASL for free. Scope to the spaces the user can read
-          //    (member spaces + groups), mirroring SearchService.searchPage. No
-          //    accessible spaces => fall back to REST (which is CASL-scoped).
-          const accessibleSpaceIds =
-            await this.spaceMemberRepo.getUserSpaceIds(user.id);
-          if (accessibleSpaceIds.length === 0) return await fallback();
-
-          // 3) Hybrid RRF retrieval, scoped to the workspace AND accessible
-          //    spaces.
-          const hits = await this.pageEmbeddingRepo.hybridSearch(
-            workspaceId,
-            queryVector,
-            trimmed,
-            accessibleSpaceIds,
-            candidates,
-            fingerprint,
+          // `userId` is what makes SearchService scope the search to the user's
+          // member spaces and run the page-permission filter (restricted pages
+          // never surface), so the agent can never see more than the user.
+          const response = await this.searchService.searchPage(
+            { query: trimmed, limit: cap } as SearchDTO,
+            { userId: user.id, workspaceId },
           );
-          if (hits.length === 0) return await fallback();
-
-          // 4) Page-level permission post-filter: an accessible space does not
-          //    imply every page in it is accessible (restricted pages). Mirror
-          //    SearchService.searchPage's filterAccessiblePageIds pass.
-          const pageIds = Array.from(new Set(hits.map((h) => h.pageId)));
-          const accessibleIds =
-            await this.pagePermissionRepo.filterAccessiblePageIds({
-              pageIds,
-              userId: user.id,
-            });
-          const accessibleSet = new Set(accessibleIds);
-
-          // Keep the best (first — hits are ordered by fused score desc) chunk
-          // per page, dropping any page the user cannot access, capped to `cap`.
-          return selectAccessibleHits(hits, accessibleSet, cap);
+          // Keep the payload token-efficient: id + title + a short snippet.
+          // `highlight` (ts_headline fragments around the match) shows WHY a
+          // page matched; `snippet` is only the page's leading text, so it is
+          // the fallback for substring-only hits and `related` (no highlight).
+          const toHit = (item: SearchResultDto) => ({
+            id: item.id,
+            title: item.title ?? '',
+            snippet: snippet(item.highlight ?? item.snippet),
+          });
+          return {
+            results: response.items.map(toHit),
+            related: response.related.map(toHit),
+            total: response.total,
+          };
         },
       }),
 
@@ -962,12 +867,9 @@ export class AiChatToolsService {
 
       // --- WRITE tools (all reversible — history/trash; §6.5 / D3) ---
       //
-      // NOTE (issue #411): the plain-Markdown full-body-replace tool is no longer
-      // inline here — it moved to @docmost/mcp's SHARED_TOOL_SPECS as
-      // `updatePageMarkdown` (was inline `updatePageContent`) so it registers on
-      // BOTH the external MCP and the in-app agent. The registry loop below adds
-      // it under its inAppKey. importPageMarkdown stays a shared spec too (now
-      // inAppOnly — dropped from the external MCP surface, kept in-app).
+      // The plain-Markdown full-body-replace tool (`updatePageMarkdown`) and
+      // importPageMarkdown (inAppOnly) are SHARED_TOOL_SPECS entries, added by the
+      // registry loop below under their inAppKey.
 
       listSidebarPages: tool({
         description:
@@ -1060,7 +962,7 @@ export class AiChatToolsService {
       }),
     };
 
-    // Add EVERY shared tool from the zod-agnostic registry in one loop (#445).
+    // Add EVERY shared tool from the zod-agnostic registry in one loop.
     // The spec owns the canonical arg->client mapping; this host only decides
     // WHICH mapping to run and returns its value directly (no envelope). For each
     // spec:
@@ -1073,15 +975,15 @@ export class AiChatToolsService {
     //     the MCP host's before it wraps it as JSON).
     // The execute receives the AI-SDK-validated, type-erased input; the spec reads
     // the same fields its buildShape declares. This is the SINGLE place the in-app
-    // arg mapping lives — it can no longer silently drift from the MCP host.
+    // arg mapping lives, so it cannot drift from the MCP host.
     for (const spec of Object.values(sharedToolSpecs)) {
       if (spec.mcpOnly) continue;
       if (spec.inlineBothHosts) continue;
       const run = spec.inAppExecute ?? spec.execute;
-      // Guaranteed present by assertEverySpecIsRegisterable() (#494), which runs
-      // at tool-specs module load and throws if a non-inline spec the in-app host
-      // registers carries neither inAppExecute nor execute — so this can no longer
-      // silently drop a mis-declared tool. Kept as a type-narrowing guard.
+      // Guaranteed present by assertEverySpecIsRegisterable(), which runs at
+      // tool-specs module load and throws if a non-inline spec the in-app host
+      // registers carries neither inAppExecute nor execute. Kept as a
+      // type-narrowing guard.
       if (!run) continue;
       tools[spec.inAppKey] = sharedTool(
         spec,
@@ -1109,7 +1011,7 @@ export class AiChatToolsService {
       async ({ section }) => getGuideSection(section),
     );
 
-    // viewImage (#588): IN-APP ONLY, env-gated, read-only. Registered inline here
+    // viewImage: IN-APP ONLY, env-gated, read-only. Registered inline here
     // (like drawioShapes/drawioGuide) and ONLY when the caller both enabled the
     // feature AND supplied the per-run cache — fail-closed. It delivers a node's
     // image to the model AS VISION on ANY provider by writing the image bytes into
@@ -1156,34 +1058,30 @@ export class AiChatToolsService {
       });
     }
 
-    // Passive "new comments: N" signal (#417). PER-TURN state (forUser runs once
+    // Passive "new comments: N" signal. PER-TURN state (forUser runs once
     // per turn), so the watermark starts now and only comments a human leaves
-    // WHILE this turn runs are signalled — exactly the mid-turn loop; between-turn
-    // comments stay the job of the <page_changed> snapshot + explicit
-    // checkNewComments. The count SOURCE is the same CASL-scoped loopback client
-    // as the tools (option 2, symmetric with the standalone MCP): a rate-limited
-    // listComments over the working-set pages. Chosen over the DB-count (option 1)
-    // deliberately — a CommentRepo dependency would change this service's
-    // constructor arity and force edits to every existing spec, breaking the
-    // "existing tests stay green unchanged" contract; the REST probe needs no new
-    // dependency and reuses the CASL enforcement already on `client`. When the
-    // loaded package predates #417 (factory undefined) or the loader is mocked in
-    // a unit test, signalling is a pure no-op and results are byte-identical.
-    // #487: wrap every in-app tool with the race-on-abort + per-call cap guard so
+    // WHILE this turn runs are signalled; between-turn comments stay the job of
+    // the <page_changed> snapshot + explicit checkNewComments. The count SOURCE is
+    // the same CASL-scoped loopback client as the tools (symmetric with the
+    // standalone MCP): a rate-limited listComments over the working-set pages. It
+    // needs no extra constructor dependency and reuses the CASL enforcement
+    // already on `client`. When the loaded package lacks the factory or the loader
+    // is mocked in a unit test, signalling is a pure no-op and results are
+    // byte-identical.
+    // Wrap every in-app tool with the race-on-abort + per-call cap guard so
     // a Stop / cap rejects immediately AND reaches the client's write/pagination
     // safe-points. Applied as the OUTERMOST wrapper (over the comment-signal
     // wrapper below) so the race governs the whole call. The client carries the
     // per-call composite signal via setToolAbortSignal.
     const capMs = inAppToolCallCapMs();
     // The signal needs BOTH the tracker factory AND the shared count-source probe
-    // factory (#494). Either being absent (a stale @docmost/mcp build or a mocked
+    // factory. Either being absent (a stale @docmost/mcp build or a mocked
     // loader) => signal disabled, tool results byte-identical.
     if (!createCommentSignalTracker || !createListCommentsProbe) {
       return wrapInAppToolsWithCap(tools, client, capMs);
     }
 
-    // Shared probe (#494): the SAME factory the standalone MCP host uses, so the
-    // in-app probe body is no longer a hand-mirror that could drift (counting the
+    // Shared probe: the SAME factory the standalone MCP host uses (counting the
     // full feed newer than the watermark, labelling a hit with the light page
     // title). `client` supplies the loopback listComments/getPageRaw reads.
     const tracker = createCommentSignalTracker({
@@ -1201,7 +1099,7 @@ export class AiChatToolsService {
 }
 
 /**
- * Wrap each in-app tool so a passive "new comments: N" line (#417) reaches the
+ * Wrap each in-app tool so a passive "new comments: N" line reaches the
  * MODEL without ever reshaping the tool's own output. NON-DESTRUCTIVE by design:
  *  - notes the call's `pageId` (if any) into the working set;
  *  - for a comment tool (listComments/checkNewComments/createComment) the result
@@ -1210,7 +1108,7 @@ export class AiChatToolsService {
  *  - `execute` ALWAYS returns the RAW original result. In AI SDK v6 that raw
  *    value is what streams to the UI and is persisted as the tool part's
  *    `output` (see apps/client `toolCitations`, which reads `output.id/title`
- *    and the searchPages array DIRECTLY), so `output` stays byte-identical to
+ *    and the searchPages `results` DIRECTLY), so `output` stays byte-identical to
  *    the no-signal path and citations are never lost.
  *  - the signal instead rides a SEPARATE channel the model sees but `output`
  *    consumers do not: `toModelOutput`, which the SDK invokes only when building
@@ -1365,44 +1263,6 @@ export function wrapToolsWithCommentSignal(
     } as Tool;
   }
   return wrapped;
-}
-
-/** A single hybrid-search hit: the minimal shape selectAccessibleHits needs. */
-export interface SearchHitLike {
-  pageId: string;
-  title: string | null;
-  content: string;
-}
-
-/**
- * Post-filter hybrid-search hits into the agent-facing result list. This is the
- * CASL leak guard for the in-process hybrid search: the hits come from a direct
- * pgvector + full-text query that does NOT get CASL for free, so an accessible
- * SPACE does not imply every page in it is accessible (restricted pages).
- *
- * Given `hits` (ordered by fused score desc), the `accessibleSet` of page ids
- * the user may read, and `cap`, it keeps the BEST (first) chunk per page, drops
- * any page not in `accessibleSet`, and caps the output at `cap`. Pure — no I/O.
- */
-export function selectAccessibleHits(
-  hits: readonly SearchHitLike[],
-  accessibleSet: Set<string>,
-  cap: number,
-): { id: string; title: string; snippet: string }[] {
-  const seen = new Set<string>();
-  const results: { id: string; title: string; snippet: string }[] = [];
-  for (const hit of hits) {
-    if (!accessibleSet.has(hit.pageId)) continue;
-    if (seen.has(hit.pageId)) continue;
-    seen.add(hit.pageId);
-    results.push({
-      id: hit.pageId,
-      title: hit.title ?? '',
-      snippet: snippet(hit.content),
-    });
-    if (results.length >= cap) break;
-  }
-  return results;
 }
 
 /**

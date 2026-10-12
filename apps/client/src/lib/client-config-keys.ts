@@ -1,27 +1,18 @@
 /**
  * The single source of truth for "which env keys the client can read at runtime".
  *
- * Why this file exists (#638 finding 1). In prod every value here reaches the
- * browser through `window.CONFIG`, filled server-side in `static.module.ts`. In
- * DEV there is no server-rendered `window.CONFIG`, so `getConfigValue` (config.ts)
- * falls back to `process.env[key]` — and vite replaces `process.env` wholesale
- * with a STATIC object built in `vite.config.ts`'s `define`. A key missing from
- * that object is therefore not merely unset in dev, it is *unreachable*: it reads
- * `undefined` forever and silently collapses to `getConfigValue`'s default no
- * matter what `.env` says.
+ * In prod every value here reaches the browser through `window.CONFIG`, filled
+ * server-side in `static.module.ts`. In DEV there is no server-rendered
+ * `window.CONFIG`, so `getConfigValue` (config.ts) falls back to
+ * `process.env[key]` — and vite replaces `process.env` wholesale with a STATIC
+ * object built in `vite.config.ts`'s `define`. A key missing from that object is
+ * unreachable in dev: it reads `undefined` and collapses to `getConfigValue`'s
+ * default no matter what `.env` says.
  *
- * That allowlist used to be hand-maintained, listing each key TWICE (a `loadEnv`
- * destructuring plus the `define` object). It drifted exactly as AGENTS invariant
- * #7 predicts: `LOCAL_FIRST_ENABLED` was absent, so `isLocalFirstEnabled()` was
- * ALWAYS false in dev and every dev verification of the local-first phases
- * measured the old code path (#639); `OFFLINE_GRACE`, `DRAWIO_RASTER_ENABLED` and
- * `EXCALIDRAW_RASTER_ENABLED` were still absent after that.
- *
- * So the `define` object is now GENERATED from this list by `buildDefineEnv`
- * below — there is one copy, not three — and `config-keys.test.ts` derives the
- * required set from the `getConfigValue("…")` call sites in `config.ts` and FAILS
- * when this list drifts from them. Adding a `getConfigValue("NEW_KEY")` without
- * adding NEW_KEY here reds the suite instead of silently shipping a dev-dead flag.
+ * The `define` object is GENERATED from this list by `buildDefineEnv` below, and
+ * `config-keys.test.ts` derives the required set from the
+ * `getConfigValue("…")` call sites in `config.ts` and FAILS when this list
+ * drifts from them.
  *
  * This module is imported by `vite.config.ts`, i.e. it is evaluated in Node
  * during config load. Keep it dependency-free and free of any browser or
@@ -42,7 +33,7 @@ export const CLIENT_CONFIG_KEYS = [
   "EXCALIDRAW_RASTER_ENABLED",
   "FILE_IMPORT_SIZE_LIMIT",
   "FILE_UPLOAD_SIZE_LIMIT",
-  "LOCAL_FIRST_ENABLED",
+  "GIT_SYNC_ENABLED",
   "OFFLINE_GRACE",
   "POSTHOG_HOST",
   "POSTHOG_KEY",

@@ -3,25 +3,23 @@
  *
  * `canonicalizeFootnotes(doc)` is a pure ProseMirror-JSON port of the editor's
  * `footnoteSyncPlugin` end-state, identical in behaviour to
- * `@docmost/editor-ext`'s `canonicalizeFootnotes`. It is mirrored here — rather
- * than imported from editor-ext — for the SAME reason the `docmost-schema.ts`
- * nodes are mirrored: the MCP package is deliberately
- * decoupled from the browser/React-heavy editor barrel and operates on plain
- * JSON. The editor-ext copy owns the golden test against the live plugin; this
- * copy must stay behaviourally identical (a SHARED golden corpus, exercised by
- * both test suites, pins that — see `test/unit/footnote-corpus.mjs`).
+ * `@docmost/editor-ext`'s `canonicalizeFootnotes`, kept here as a separate copy
+ * over plain JSON rather than imported from editor-ext. The editor-ext copy owns
+ * the golden test against the live plugin; this copy must stay behaviourally
+ * identical (a SHARED golden corpus, exercised by both test suites, pins that —
+ * see `test/unit/footnote-corpus.mjs`).
  *
  * This module is the pure MIRROR only. The inline-authoring helpers
  * (`footnoteContentKey`, `makeFootnoteDefinition`, `generateFootnoteId`) used by
  * `insertInlineFootnote` live in `@docmost/prosemirror-markdown` (next to the
- * importer's `assembleFootnotes`, #414), so this file stays a pure mirror.
+ * importer's `assembleFootnotes`), so this file stays a pure mirror.
  *
  * Why it exists: every NON-editor write path (markdown import, updatePageJson,
  * docmostTransform, insertFootnote) builds ProseMirror JSON directly, so the
  * editor's footnote plugins never run and the canonical topology (sequential
  * numbering by first reference, one trailing list, no orphans, no raw `[^id]`)
- * was never enforced. Running this at the end of every write path closes that
- * gap; because it is idempotent, it is a no-op when the footnotes are already
+ * would not be enforced. Running this at the end of every write path enforces
+ * it; because it is idempotent, it is a no-op when the footnotes are already
  * canonical (no spurious mutations / git-sync churn).
  *
  * ENFORCEMENT RULE (#228): any NEW FULL-document persist path MUST call

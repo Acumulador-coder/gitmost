@@ -1,12 +1,11 @@
 /**
- * Shared schema-HTML builders for the media/discriminator family (#293 canon
- * #8).
+ * Shared schema-HTML builders for the media/discriminator family.
  *
- * Canon #8 gives ten node types (youtube/video/audio/drawio/excalidraw —
+ * Ten node types (youtube/video/audio/drawio/excalidraw —
  * image-form; pdf/attachment/embed — link-form; pageEmbed/transclusionReference
  * — standalone) a readable markdown TOP-LEVEL form (`![](src)`/`[text](src)`/a
- * bare comment) plus a discriminator `<!--name {…}-->` comment. But TWO other
- * paths still need the RAW SCHEMA-HTML form of each node:
+ * bare comment) plus a discriminator `<!--name {…}-->` comment. TWO other
+ * paths need the RAW SCHEMA-HTML form of each node:
  *
  *   1. The serializer's raw-HTML/columns path (`blockToHtml`): a comment node is
  *      dropped by the DOM parse stage that reads a raw-HTML block back, so inside
@@ -17,10 +16,8 @@
  *
  * Keeping these builders in ONE module means the serializer's raw-HTML path and
  * the importer's materialization can never drift: both call the same function.
- * Each builder reproduces BYTE-FOR-BYTE the schema HTML the top-level
- * `processNode` cases previously returned (so existing columns/raw-HTML goldens
- * stay green), and each output round-trips through the matching schema parseHTML
- * in docmost-schema.ts.
+ * Each output round-trips through the matching node's parseHTML in the converter
+ * schema (the editor-ext extension, or its `OVERRIDES` entry in docmost-schema.ts).
  */
 
 /**
@@ -82,7 +79,7 @@ export function audioToHtml(attrs: Record<string, any>): string {
 }
 
 /**
- * draw.io / excalidraw diagram (shared diagramAttributes). Emits
+ * draw.io / excalidraw diagram (same attrs in editor-ext). Emits
  * `div[data-type="drawio"|"excalidraw"]` carrying src/title/alt/width/height/
  * size/aspectRatio/align/attachmentId as data-*.
  */

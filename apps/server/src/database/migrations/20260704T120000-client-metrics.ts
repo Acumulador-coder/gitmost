@@ -1,7 +1,7 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * #355 — `client_metrics`: raw sink for client-side perf telemetry (web-vitals
+ * `client_metrics`: raw sink for client-side perf telemetry (web-vitals
  * + custom editor/page metrics) posted to /api/telemetry/vitals.
  *
  * The table/columns/indexes here are a FIXED contract shared with the deployed

@@ -92,15 +92,14 @@ export class GeneralQueueProcessor
   }
 
   /**
-   * #399: apply a comment's inline-mark mirror in the collab Y.Doc, off the HTTP
-   * critical path. Runs the SAME gateway path the synchronous comment.service
-   * code used (byte-identical mark op):
+   * Apply a comment's inline-mark mirror in the collab Y.Doc, off the HTTP
+   * critical path:
    *   - resolve / unresolve → resolveCommentMark (flip the `resolved` attribute),
-   *     OR strip an orphan anchor when the comment row has vanished (#496);
-   *   - delete → deleteCommentMark (strip the ephemeral-suggestion anchor #329).
+   *     OR strip an orphan anchor when the comment row has vanished;
+   *   - delete → deleteCommentMark (strip the ephemeral-suggestion anchor).
    * The op is idempotent, so a BullMQ retry is safe. Throwing propagates to
    * WorkerHost → the job is retried and, on exhaustion, surfaces in failed-job
-   * metrics (the divergence is now visible rather than a silently-swallowed warn).
+   * metrics.
    */
   private async processCommentMarkUpdate(
     data: ICommentMarkUpdateJob,
@@ -134,13 +133,11 @@ export class GeneralQueueProcessor
     // of this resolve), skip it rather than flip the mark to a stale state.
     const comment = await this.commentRepo.findById(commentId);
     if (!comment) {
-      // #496 reconcile: the comment row is GONE (e.g. an ephemeral apply/dismiss
-      // hard-deleted it while this resolve/unresolve mark job sat in the queue),
-      // but its inline anchor may still live in the doc — a silent orphan mark
-      // pointing at a comment that no longer exists. Self-heal by stripping it
-      // instead of just returning: this closes the divergence the fire-and-forget
-      // resolve/unresolve enqueue (comment.service resolveComment) could leave.
-      // Idempotent — deleteCommentMark on an already-absent mark is a no-op.
+      // The comment row is GONE (e.g. an ephemeral apply/dismiss hard-deleted it
+      // while this resolve/unresolve mark job sat in the queue), but its inline
+      // anchor may still live in the doc as an orphan mark. Strip it instead of
+      // just returning. Idempotent — deleteCommentMark on an already-absent mark
+      // is a no-op.
       await this.getCollaborationGateway().handleYjsEvent(
         'deleteCommentMark',
         documentName,

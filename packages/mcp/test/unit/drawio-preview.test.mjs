@@ -1,4 +1,4 @@
-// Unit tests for the pure-TS schematic SVG preview (issue #423). Asserts that
+// Unit tests for the pure-TS schematic SVG preview. Asserts that
 // the preview emits well-formed SVG covering each primitive (rect/ellipse/
 // rhombus/edge), resolves container-relative coordinates to absolute, and that
 // the full `.drawio.svg` wrapper parses.

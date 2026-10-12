@@ -19,7 +19,7 @@ import {
 } from './db';
 
 /**
- * #492 controller hydration (crash-before-finalize RESUME) on a LIVE Postgres.
+ * Controller hydration (crash-before-finalize RESUME) on a LIVE Postgres.
  * `AiChatController.withReconstructedParts` is wired into getMessages/delta/export/
  * run, but `aiChatRunStepRepo` is OPTIONAL and every controller unit spec passes it
  * as `undefined`, so the hydration branch early-returns and NEVER executes in those
@@ -48,7 +48,6 @@ describe('#492 controller hydration read path [integration]', () => {
       {} as any, // aiTranscription
       {} as any, // pageRepo
       undefined, // streamRegistry
-      undefined, // environment
       stepRepo, // #492 aiChatRunStepRepo
     );
   }

@@ -63,13 +63,10 @@ export function getClientTelemetrySampleRate(): string {
   return getConfigValue("CLIENT_TELEMETRY_SAMPLE_RATE", "");
 }
 
-// #563 — operator toggle for the local-first page boot cache. DEFAULT OFF: the
-// server mirrors LOCAL_FIRST_ENABLED into window.CONFIG; when off the page-meta
-// boot cache is neither written nor read and the page behaves exactly as before
-// (skeleton until the network resolves). Rollback is a flag flip, not a deploy —
-// a revert would not clean already-written localStorage.
-export function isLocalFirstEnabled(): boolean {
-  return castToBoolean(getConfigValue("LOCAL_FIRST_ENABLED", "false"));
+// Operator toggle for git-sync. DEFAULT OFF: the server mirrors GIT_SYNC_ENABLED
+// into window.CONFIG; when off the space git-sync controls are not rendered.
+export function isGitSyncEnabled(): boolean {
+  return castToBoolean(getConfigValue("GIT_SYNC_ENABLED", "false"));
 }
 
 // #640 — network-independent session boundary. After OFFLINE_GRACE has elapsed
@@ -107,7 +104,7 @@ export function getOfflineGraceMs(): number {
   return parseDurationMs(getConfigValue("OFFLINE_GRACE", "30d"));
 }
 
-// #641, part 5 — per-request timeout for the OFFLINE-CRITICAL requests (/me,
+// Per-request timeout for the OFFLINE-CRITICAL requests (/me,
 // /pages/info, /spaces/*) ONLY. It is deliberately NOT set on the axios instance
 // (api-client.ts): uploads, imports and long exports share that instance and
 // must stay untimed (they are already special-cased there). A hung connection —
@@ -117,14 +114,10 @@ export function getOfflineGraceMs(): number {
 // transport error the offline path can handle.
 export const OFFLINE_CRITICAL_TIMEOUT_MS = 15_000;
 
-/**
- * Axios per-request config for an offline-critical request. Returns the timeout
- * ONLY when local-first is enabled, so a flag-OFF deploy is byte-for-behavior
- * unchanged (axios default: no timeout, requests can hang indefinitely as today).
- */
-export function offlineCriticalRequestConfig(): { timeout?: number } {
-  return isLocalFirstEnabled() ? { timeout: OFFLINE_CRITICAL_TIMEOUT_MS } : {};
-}
+/** Axios per-request config for an offline-critical request. */
+export const OFFLINE_CRITICAL_REQUEST_CONFIG = {
+  timeout: OFFLINE_CRITICAL_TIMEOUT_MS,
+};
 
 export function getAvatarUrl(
   avatarUrl: string,
