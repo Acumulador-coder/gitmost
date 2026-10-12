@@ -24,11 +24,22 @@ export async function searchSuggestions(
   return req.data;
 }
 
-export async function searchShare(
-  params: IPageSearchParams,
-): Promise<IPageSearch[]> {
-  const req = await api.post<{ items: IPageSearch[] }>("/search/share-search", params);
-  return req.data.items;
+// Like `searchPage`: `items` are the matches, `related` the semantic
+// neighbours. `disabledReason` says why a share has no search at all.
+export async function searchShare(params: IPageSearchParams): Promise<{
+  items: IPageSearch[];
+  related: IPageSearch[];
+  disabledReason?: string;
+}> {
+  const req = await api.post<IPageSearchResponse>(
+    "/search/share-search",
+    params,
+  );
+  return {
+    items: req.data.items,
+    related: req.data.related ?? [],
+    disabledReason: req.data.disabledReason,
+  };
 }
 
 export async function searchAttachments(

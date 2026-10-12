@@ -77,11 +77,13 @@ export class SearchController {
     @AuthWorkspace() workspace: Workspace,
   ) {
     delete searchDto.spaceId;
+    delete searchDto.creatorId;
     if (!searchDto.shareId) {
       throw new BadRequestException('shareId is required');
     }
 
     return this.searchService.searchPage(searchDto, {
+      anonymousShare: true,
       workspaceId: workspace.id,
     });
   }

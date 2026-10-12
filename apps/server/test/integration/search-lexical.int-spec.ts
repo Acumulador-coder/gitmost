@@ -138,6 +138,7 @@ describe('SearchService #529 lexical overhaul [integration]', () => {
       pagePermissionRepo as any,
       pageEmbeddingRepo as any,
       embeddingGeneration as any,
+      {} as any, // shareService — these cases never search a share
     );
   }
 
