@@ -107,11 +107,10 @@ describe('decideGitHttpGate', () => {
     hasCredentials: true,
     credentialsValid: true,
     serviceKind: 'read' as const,
-    gitSyncEnabled: true,
-    gitHttpEnabled: true,
     spaceExists: true,
     spaceGitSyncEnabled: true,
     userIsSpaceMember: true,
+    spaceHasRestrictedPages: false,
     permissionGranted: true,
   };
 
@@ -149,16 +148,30 @@ describe('decideGitHttpGate', () => {
     });
   });
 
-  it('404 when git-sync is globally disabled', () => {
-    expect(decideGitHttpGate({ ...base, gitSyncEnabled: false })).toEqual({
-      kind: 'not-found',
-    });
+  it('403 restricted when a MEMBER hits a space with restricted pages (read and write)', () => {
+    expect(
+      decideGitHttpGate({ ...base, spaceHasRestrictedPages: true }),
+    ).toEqual({ kind: 'restricted' });
+    // Restricted wins over a missing permission: every member gets the reason.
+    expect(
+      decideGitHttpGate({
+        ...base,
+        serviceKind: 'write',
+        spaceHasRestrictedPages: true,
+        permissionGranted: false,
+      }),
+    ).toEqual({ kind: 'restricted' });
   });
 
-  it('404 when the git-http host is disabled', () => {
-    expect(decideGitHttpGate({ ...base, gitHttpEnabled: false })).toEqual({
-      kind: 'not-found',
-    });
+  it('404 (not restricted) for a NON-member of a space with restricted pages', () => {
+    expect(
+      decideGitHttpGate({
+        ...base,
+        userIsSpaceMember: false,
+        spaceHasRestrictedPages: true,
+        permissionGranted: false,
+      }),
+    ).toEqual({ kind: 'not-found' });
   });
 
   it('403 when a MEMBER lacks the required permission (reader on write)', () => {

@@ -6,7 +6,6 @@ import {
   HttpStatus,
   NotFoundException,
   Post,
-  Get,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -41,8 +40,11 @@ class TriggerGitSyncDto {
  * (workspace Manage/Settings, mirroring WorkspaceController) so only workspace
  * admins can force a cycle. Mounted under the global `/api` prefix:
  *   - POST /api/git-sync/trigger { spaceId } — run one cycle now (await result),
- *   - GET  /api/git-sync/status — report whether sync is enabled + config, and
- *     the per-space health of this workspace's spaces.
+ *   - POST /api/git-sync/status — report the sync config and the per-space
+ *     health of this workspace's spaces (POST, like the other JSON reads).
+ *
+ * The controller exists only when GIT_SYNC_ENABLED is on (GitSyncModule is
+ * empty otherwise), so the status needs no `enabled` flag.
  */
 @UseGuards(JwtAuthGuard)
 @Controller('git-sync')
@@ -86,12 +88,11 @@ export class GitSyncController {
   }
 
   @HttpCode(HttpStatus.OK)
-  @Get('status')
+  @Post('status')
   async status(
     @AuthUser() user: User,
     @AuthWorkspace() workspace: Workspace,
   ): Promise<{
-    enabled: boolean;
     dataDir: string;
     pollIntervalMs: number;
     debounceMs: number;
@@ -100,7 +101,6 @@ export class GitSyncController {
   }> {
     this.assertAdmin(user, workspace);
     return {
-      enabled: this.environmentService.isGitSyncEnabled(),
       dataDir: this.environmentService.getGitSyncDataDir(),
       pollIntervalMs: this.environmentService.getGitSyncPollIntervalMs(),
       debounceMs: this.environmentService.getGitSyncDebounceMs(),

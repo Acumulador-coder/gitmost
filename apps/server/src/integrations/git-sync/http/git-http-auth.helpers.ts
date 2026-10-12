@@ -67,18 +67,6 @@ export class FailedLoginLimiter {
     return existing;
   }
 
-  /** True when the key has already reached the failure threshold this window. */
-  isBlocked(key: string, now: number = Date.now()): boolean {
-    const b = this.bucket(key, now);
-    return b.count >= this.threshold;
-  }
-
-  /** Record one failed attempt for the key (within the current window). */
-  recordFailure(key: string, now: number = Date.now()): void {
-    const b = this.bucket(key, now);
-    b.count += 1;
-  }
-
   /**
    * Atomic check-and-reserve: if the key is already at/over the threshold this
    * window, return false (blocked). Otherwise count this in-flight attempt

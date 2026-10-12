@@ -1,9 +1,14 @@
 import {
+  HttpException,
+  Inject,
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleDestroy,
   UnauthorizedException,
 } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AuthService } from '../../../core/auth/services/auth.service';
 import SpaceAbilityFactory from '../../../core/casl/abilities/space-ability.factory';
@@ -20,13 +25,18 @@ import {
   clientIp,
   isCredentialsFailure,
 } from './git-http-auth.helpers';
-import { resolveRequestWorkspace } from '../../../common/helpers/resolve-request-workspace';
+import {
+  cachedWorkspaceLoader,
+  resolveRequestWorkspace,
+  WorkspaceLoader,
+} from '../../../common/helpers/resolve-request-workspace';
 import { EnvironmentService } from '../../environment/environment.service';
 import { VaultRegistryService } from '../services/vault-registry.service';
 import {
   GitSyncLockHeldError,
   GitSyncOrchestrator,
 } from '../services/git-sync.orchestrator';
+import { GitSyncRestrictionsService } from '../services/git-sync-restrictions.service';
 import { GitHttpBackendService } from './git-http-backend.service';
 import {
   decideGitHttpGate,
@@ -36,6 +46,25 @@ import {
 } from './git-http.helpers';
 
 const WWW_AUTHENTICATE = 'Basic realm="gitmost"';
+
+/** The 403 body for a member of a space that contains restricted pages. */
+const RESTRICTED_SPACE_MESSAGE =
+  'Git sync is unavailable for spaces that contain pages with restricted access.';
+
+/** `Name: message` of a thrown value, plus its `cause` when present (for logs). */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: unknown }).cause;
+  const causeText =
+    cause === undefined
+      ? ''
+      : ` (cause: ${
+          cause instanceof Error
+            ? `${cause.name}: ${cause.message}`
+            : String(cause)
+        })`;
+  return `${err.name}: ${err.message}${causeText}`;
+}
 
 /**
  * The /git smart-HTTP host. Wires request parsing, the reused auth primitives
@@ -58,15 +87,18 @@ export class GitHttpService implements OnModuleDestroy {
    * `/git/*` Fastify route bypasses the Nest pipeline (so ThrottlerGuard, which is
    * only on controllers, never runs) and there is no fastify rate-limit plugin, so
    * without this `verifyUserCredentials` (bcrypt) would run unthrottled on every
-   * request once GIT_SYNC_HTTP_ENABLED is on. Mirrors the /mcp Basic path EXACTLY
-   * (FailedLoginLimiter, same 5/60s thresholds, the same per-IP / per-IP+email /
-   * global-per-email keys) so the two auth seams cannot diverge. A speed bump, not
-   * a hard boundary (in-process, per replica).
+   * request. Both keys are scoped to the client IP (GH-3): per IP (one source's
+   * guesses across all emails) and per IP+email. There is deliberately NO global
+   * per-email key — it let anyone, from any IP, lock a victim out of git without
+   * even reaching bcrypt. 5 failures per key per 60 s. A speed bump, not a hard
+   * boundary (in-process, per replica).
    */
   private readonly failedLogins = new FailedLoginLimiter(5, 60_000);
-  /** Periodic sweep to bound limiter memory (mirrors McpService / mcp http.ts). */
+  /** Periodic sweep of expired limiter buckets, to bound the limiter's memory. */
   private readonly sweepIntervalMs = 60_000;
   private readonly sweepTimer: NodeJS.Timeout;
+  /** The cached workspace lookups, shared with DomainMiddleware (#348). */
+  private readonly workspaceLoader: WorkspaceLoader;
 
   constructor(
     private readonly environmentService: EnvironmentService,
@@ -77,7 +109,10 @@ export class GitHttpService implements OnModuleDestroy {
     private readonly vaultRegistry: VaultRegistryService,
     private readonly orchestrator: GitSyncOrchestrator,
     private readonly backend: GitHttpBackendService,
+    private readonly restrictions: GitSyncRestrictionsService,
+    @Inject(CACHE_MANAGER) cacheManager: Cache,
   ) {
+    this.workspaceLoader = cachedWorkspaceLoader(cacheManager, workspaceRepo);
     this.sweepTimer = setInterval(() => {
       try {
         this.failedLogins.sweep();
@@ -94,44 +129,91 @@ export class GitHttpService implements OnModuleDestroy {
   }
 
   /**
-   * Resolve the workspace for a /git request the SAME way DomainMiddleware does,
-   * because Nest middleware does NOT run for this raw root-mounted route (it is
-   * registered under the global '/api' router), so `req.raw.workspaceId` is never
-   * populated here. Delegates to the shared `resolveRequestWorkspace` helper (the
-   * SAME self-hosted/cloud branch DomainMiddleware uses) and returns just the id:
-   *   - self-hosted (single workspace) -> workspaceRepo.findFirst();
+   * Resolve the workspace for a /git request with the SAME helper and cached
+   * loader DomainMiddleware uses, because Nest middleware does NOT run for this
+   * raw root-mounted route (it is registered under the global '/api' router), so
+   * `req.raw.workspaceId` is never populated here. Returns just the id:
+   *   - self-hosted (single workspace) -> the first/default workspace;
    *   - cloud (multi-tenant)           -> resolve by the host-header subdomain.
-   * Returns null when no workspace resolves; the gate then 404s (after the
-   * 401-before-404 credential check encoded in decideGitHttpGate).
+   * Returns null when no workspace resolves (credentials then cannot be
+   * validated, so the gate answers 401). A lookup error is NOT caught here: the
+   * caller answers it with a logged 500.
    */
-  private async resolveWorkspaceId(req: FastifyRequest): Promise<string | null> {
-    try {
-      // Same self-hosted/cloud resolution DomainMiddleware uses — shared so the
-      // branch cannot drift between the two call sites.
-      const workspace = await resolveRequestWorkspace(
-        this.environmentService,
-        this.workspaceRepo,
-        this.headerValue(req.headers['host']),
-      );
-      return workspace?.id ?? null;
-    } catch (err) {
-      // A DB error resolving the workspace must not leak details; treat as
-      // unresolvable (the gate will 404, unless creds are missing -> 401 first).
-      this.logger.warn(
-        `git-http: workspace resolution error: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-    return null;
+  private async resolveWorkspaceId(
+    req: FastifyRequest,
+  ): Promise<string | null> {
+    const workspace = await resolveRequestWorkspace(
+      this.environmentService,
+      this.workspaceLoader,
+      this.headerValue(req.headers['host']),
+    );
+    return workspace?.id ?? null;
   }
 
   /**
-   * Handle one `/git/<spaceId>.git/<subpath>` request. `rest` is the path AFTER
-   * the `/git/` prefix (no query string). The Fastify reply is hijacked before
-   * any streaming so the binary CGI body is written directly to the raw socket.
+   * Handle one `/git/<spaceId>.git/<subpath>` request. This raw root route runs
+   * outside Nest's exception filter (GH-6), so every unexpected throw — a DB
+   * lookup, the vault preparation, the backend bridge — ends here in a logged
+   * 500 instead of an unhandled rejection or, after `reply.hijack()`, a socket
+   * left open.
    */
   async handle(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+    try {
+      await this.serve(req, reply);
+    } catch (err) {
+      this.respondInternalError(
+        reply,
+        'the git request failed unexpectedly',
+        err,
+      );
+    }
+  }
+
+  /**
+   * Log an infrastructure failure in full and answer 500 with what failed,
+   * through the Fastify reply when it is still ours, or on the raw response
+   * after a hijack. Never throws. The 500 matters (GH-2): a 401/404 for an
+   * infrastructure failure would make git clients erase saved credentials or
+   * hide the outage as a missing repository.
+   */
+  private respondInternalError(
+    reply: FastifyReply,
+    what: string,
+    err: unknown,
+  ): void {
+    this.logger.error(
+      `git-http: ${what}: ${describeError(err)}`,
+      err instanceof Error ? err.stack : undefined,
+    );
+    const body = `Internal server error: ${what} (details in the server log)`;
+    try {
+      // `reply.sent` is true once the reply was sent OR hijacked.
+      if (!reply.sent) {
+        reply.status(500).send(body);
+        return;
+      }
+      const rawRes = reply.raw;
+      if (!rawRes.headersSent) {
+        rawRes.statusCode = 500;
+        rawRes.setHeader('Content-Type', 'text/plain');
+        rawRes.end(body);
+      } else if (!rawRes.writableEnded) {
+        rawRes.end();
+      }
+    } catch (sendErr) {
+      this.logger.error(
+        `git-http: failed to send the 500 response: ${describeError(sendErr)}`,
+        sendErr instanceof Error ? sendErr.stack : undefined,
+      );
+    }
+  }
+
+  /**
+   * Serve one request. `rest` is the path AFTER the `/git/` prefix (no query
+   * string). The Fastify reply is hijacked before any streaming so the binary CGI
+   * body is written directly to the raw socket.
+   */
+  private async serve(req: FastifyRequest, reply: FastifyReply): Promise<void> {
     const rawReq = req.raw;
     const rawRes = reply.raw;
 
@@ -140,17 +222,24 @@ export class GitHttpService implements OnModuleDestroy {
     const parsedPath = rest === null ? null : parseGitPath(rest);
 
     // --- resolve the requested git service kind (read vs write) -------------
-    const service =
+    // GH-1: a duplicated `service` query parameter parses here as an array,
+    // while git http-backend reads the raw query string itself — the authz
+    // classification and the service that actually runs could disagree. Such a
+    // request is refused (400 via the gate's bad-request) instead of guessed.
+    const serviceParam: unknown =
       typeof req.query === 'object' && req.query !== null
-        ? (req.query as Record<string, string | undefined>).service
+        ? (req.query as Record<string, unknown>).service
         : undefined;
-    const serviceKind: GitHttpServiceKind | null = parsedPath
-      ? resolveServiceKind({
-          method: req.method,
-          subpath: parsedPath.subpath,
-          service,
-        })
-      : null;
+    const duplicateService = Array.isArray(serviceParam);
+    const service = typeof serviceParam === 'string' ? serviceParam : undefined;
+    const serviceKind: GitHttpServiceKind | null =
+      parsedPath && !duplicateService
+        ? resolveServiceKind({
+            method: req.method,
+            subpath: parsedPath.subpath,
+            service,
+          })
+        : null;
 
     // --- authenticate (HTTP Basic) ------------------------------------------
     const authHeader = req.headers['authorization'];
@@ -159,37 +248,42 @@ export class GitHttpService implements OnModuleDestroy {
     );
     // Resolve the workspace ourselves — DomainMiddleware does NOT run for this
     // raw root route, so `req.raw.workspaceId` is never set (see resolver doc).
-    const workspaceId: string | null = await this.resolveWorkspaceId(req);
+    let workspaceId: string | null;
+    try {
+      workspaceId = await this.resolveWorkspaceId(req);
+    } catch (err) {
+      this.respondInternalError(
+        reply,
+        'could not resolve the workspace for this request',
+        err,
+      );
+      return;
+    }
 
     let user: User | undefined;
     let credentialsValid = false;
     let throttled = false;
     if (basic && workspaceId) {
-      // Brute-force speed bump, mirroring the /mcp Basic path EXACTLY. Reserve
-      // ALL three keys ATOMICALLY and BEFORE bcrypt (tryReserve folds the check
-      // and the increment into one synchronous step), so the (threshold+1)-th
-      // attempt is rejected before verifyUserCredentials/bcrypt ever runs and
-      // concurrent attempts for one email cannot all observe count=0. The
-      // reservation IS the recorded failure: a genuine credential failure leaves
-      // it in place, a SUCCESS clears it (reset), a non-credential error releases
-      // it (so it cannot burn a victim's budget).
+      // Brute-force speed bump (GH-3: both keys scoped to the client IP, see
+      // `failedLogins`). Reserve BOTH keys ATOMICALLY and BEFORE bcrypt
+      // (tryReserve folds the check and the increment into one synchronous
+      // step), so the (threshold+1)-th attempt is rejected before
+      // verifyUserCredentials/bcrypt ever runs and concurrent attempts cannot
+      // all observe count=0. The reservation IS the recorded failure: a genuine
+      // credential failure leaves it in place, a SUCCESS clears it (reset), a
+      // non-credential error releases it (so it cannot burn a victim's budget).
       const emailLc = basic.email.toLowerCase();
       const ip = clientIp(req);
       const ipKey = `ip:${ip}`;
       const ipEmailKey = `ip-email:${ip}:${emailLc}`;
-      // GLOBAL per-email backstop (no IP): the only key that survives IP / XFF
-      // rotation, so it is the real account-brute defense (see mcp-auth.helpers).
-      const emailKey = `email:${emailLc}`;
       const ipOk = this.failedLogins.tryReserve(ipKey);
       const ipEmailOk = this.failedLogins.tryReserve(ipEmailKey);
-      const emailOk = this.failedLogins.tryReserve(emailKey);
-      if (!ipOk || !ipEmailOk || !emailOk) {
-        // Blocked: release only the keys we actually reserved this call so an
-        // already-throttled request does not over-charge keys still under budget
-        // (matches the /mcp reserve model). Do NOT run bcrypt.
+      if (!ipOk || !ipEmailOk) {
+        // Blocked: release only the key we actually reserved this call so an
+        // already-throttled request does not over-charge a key still under
+        // budget. Do NOT run bcrypt.
         if (ipOk) this.failedLogins.release(ipKey);
         if (ipEmailOk) this.failedLogins.release(ipEmailKey);
-        if (emailOk) this.failedLogins.release(emailKey);
         throttled = true;
       } else {
         try {
@@ -198,32 +292,43 @@ export class GitHttpService implements OnModuleDestroy {
             workspaceId,
           );
           credentialsValid = true;
-          // Success: clear the per-IP and per-IP+email budgets fully; for the
-          // GLOBAL per-email key only release the one increment THIS request took
-          // (do not reset() it, or a victim's own success would wipe a parallel
-          // attacker's accumulated failures for that email — same rule as /mcp).
+          // Success: clear this client's per-IP and per-IP+email budgets.
           this.failedLogins.reset(ipKey);
           this.failedLogins.reset(ipEmailKey);
-          this.failedLogins.release(emailKey);
         } catch (err) {
           // Only a genuine credentials failure (wrong email/password) keeps the
-          // reservation (it IS the recorded failure). Any other error — DB error,
-          // etc. — is NOT a password-guess signal, so release the reservation so
-          // it cannot burn a victim's limiter budget. credentialsValid stays
-          // false either way (the gate then 401s).
+          // reservation (it IS the recorded failure). Any other error is NOT a
+          // password-guess signal, so release the reservation so it cannot burn
+          // a victim's limiter budget.
           if (!isCredentialsFailure(err)) {
             this.failedLogins.release(ipKey);
             this.failedLogins.release(ipEmailKey);
-            this.failedLogins.release(emailKey);
+          }
+          if (
+            err instanceof HttpException &&
+            !(err instanceof UnauthorizedException) &&
+            err.getStatus() < 500
+          ) {
+            // A client error the credential check raised on purpose (e.g. the
+            // cloud email-not-verified 400): answer it with its own status and
+            // message. Not a 401 — that is reserved for a credentials mismatch.
+            this.logger.warn(
+              `git-http: the credential check refused the request with ` +
+                `${err.getStatus()}: ${err.message}`,
+            );
+            reply.status(err.getStatus()).send(err.message);
+            return;
           }
           if (!(err instanceof UnauthorizedException)) {
-            // A non-credential failure (e.g. DB error): treat as invalid creds
-            // for the gate (a 401), and log without leaking the password/header.
-            this.logger.warn(
-              `git-http: credential check error: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
+            // Not a credentials rejection (e.g. a DB error): answer a logged
+            // 500 — a 401 here would make git's credential helper erase the
+            // user's saved password (GH-2). The password/header is never logged.
+            this.respondInternalError(
+              reply,
+              'could not verify the credentials',
+              err,
             );
+            return;
           }
           credentialsValid = false;
         }
@@ -251,10 +356,13 @@ export class GitHttpService implements OnModuleDestroy {
     // SAME 404 a missing/disabled space gets — never a 403 — or the 403↔404 split
     // would let any authenticated user brute-force slugs to learn which spaces
     // exist / have sync enabled (the leak this gate's contract forbids). 403 is
-    // reserved for a MEMBER who lacks the required role (existence already known).
+    // reserved for a MEMBER (existence already known): a space with restricted
+    // pages, or a member who lacks the required role.
     let userIsSpaceMember = false;
+    let spaceHasRestrictedPages = false;
     let permissionGranted = false;
     if (credentialsValid && user && workspaceId && parsedPath && serviceKind) {
+      // A lookup failure here reaches handle()'s logged 500 (GH-6).
       const space = await this.spaceRepo.findById(
         parsedPath.spaceId,
         workspaceId,
@@ -268,30 +376,48 @@ export class GitHttpService implements OnModuleDestroy {
         // Only evaluate CASL when the space is actually a sync candidate — an
         // unrelated space stays a 404 (existence is never revealed).
         if (spaceGitSyncEnabled) {
+          let ability: Awaited<
+            ReturnType<SpaceAbilityFactory['createForUser']>
+          > | null = null;
           try {
-            const ability = await this.spaceAbilityFactory.createForUser(
+            ability = await this.spaceAbilityFactory.createForUser(
               user,
               space.id,
             );
-            // createForUser RESOLVED -> the user holds a role in this space (it
-            // throws NotFound for a non-member). Record membership BEFORE the
-            // permission check: a member lacking the role -> 403; a non-member ->
-            // 404 (handled by the gate via userIsSpaceMember=false below).
+          } catch (err) {
+            if (!(err instanceof NotFoundException)) {
+              // An infrastructure failure is NOT "non-member": answering the
+              // non-member 404 would hide the outage. Logged 500.
+              this.respondInternalError(
+                reply,
+                'could not check the space membership',
+                err,
+              );
+              return;
+            }
+            // createForUser throws NotFoundException when the user has no role in
+            // the space (a non-member). Leave userIsSpaceMember=false so the gate
+            // returns 404, NOT 403 — a non-member must not be able to tell this
+            // space apart from a non-existent one.
+          }
+          if (ability) {
+            // createForUser RESOLVED -> the user holds a role in this space.
+            // Record membership BEFORE the permission check: a member lacking the
+            // role -> 403; a non-member -> 404 (userIsSpaceMember=false).
             userIsSpaceMember = true;
+            // Git-sync refuses spaces with page-level restrictions. Only a member
+            // gets this far, so the 403 it leads to reveals nothing new; a
+            // lookup failure reaches handle()'s logged 500.
+            spaceHasRestrictedPages =
+              await this.restrictions.spaceHasRestrictedPages(
+                space.id,
+                workspaceId,
+              );
             const action =
               serviceKind === 'write'
                 ? SpaceCaslAction.Manage
                 : SpaceCaslAction.Read;
             permissionGranted = ability.can(action, SpaceCaslSubject.Page);
-          } catch {
-            // createForUser throws NotFoundException when the user has no role in
-            // the space (a non-member). Leave userIsSpaceMember=false so the gate
-            // returns 404, NOT 403 — a non-member must not be able to tell this
-            // space apart from a non-existent one. (Any other error also falls
-            // here and is treated as non-member -> 404, the safe default that
-            // never reveals existence.)
-            userIsSpaceMember = false;
-            permissionGranted = false;
           }
         }
       }
@@ -302,11 +428,10 @@ export class GitHttpService implements OnModuleDestroy {
       hasCredentials: Boolean(basic),
       credentialsValid,
       serviceKind,
-      gitSyncEnabled: this.environmentService.isGitSyncEnabled(),
-      gitHttpEnabled: this.environmentService.isGitSyncHttpEnabled(),
       spaceExists,
       spaceGitSyncEnabled,
       userIsSpaceMember,
+      spaceHasRestrictedPages,
       permissionGranted,
     });
 
@@ -318,11 +443,21 @@ export class GitHttpService implements OnModuleDestroy {
       return;
     }
     if (decision.kind === 'bad-request') {
-      reply.status(400).send('Bad request');
+      reply
+        .status(400)
+        .send(
+          duplicateService
+            ? "Bad request: the 'service' query parameter must appear once"
+            : 'Bad request',
+        );
       return;
     }
     if (decision.kind === 'not-found') {
       reply.status(404).send('Not found');
+      return;
+    }
+    if (decision.kind === 'restricted') {
+      reply.status(403).send(RESTRICTED_SPACE_MESSAGE);
       return;
     }
     if (decision.kind === 'forbidden') {
@@ -355,12 +490,11 @@ export class GitHttpService implements OnModuleDestroy {
       // Idempotently make the vault servable (repo + receive/upload config).
       await this.vaultRegistry.ensureServable(spaceId);
     } catch (err) {
-      this.logger.error(
-        `git-http: failed to prepare vault for space ${spaceId}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+      this.respondInternalError(
+        reply,
+        `could not prepare the git repository of space ${spaceId}`,
+        err,
       );
-      if (!reply.sent) reply.status(500).send('Internal server error');
       return;
     }
 
@@ -405,18 +539,11 @@ export class GitHttpService implements OnModuleDestroy {
             () => this.backend.run(backendRequest, rawReq, rawRes),
           );
         } catch (err) {
-          this.logger.error(
-            `git-sync: read advertisement failed for space ${spaceId}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
+          this.respondInternalError(
+            reply,
+            `the ref advertisement of space ${spaceId} failed`,
+            err,
           );
-          if (!rawRes.headersSent) {
-            rawRes.statusCode = 500;
-            rawRes.setHeader('Content-Type', 'text/plain');
-            rawRes.end('Internal server error');
-          } else if (!rawRes.writableEnded) {
-            rawRes.end();
-          }
         }
       } else {
         await this.backend.run(backendRequest, rawReq, rawRes);
@@ -452,20 +579,11 @@ export class GitHttpService implements OnModuleDestroy {
       // Any other error: the receive-pack closure handles its own response, so
       // we only log here and make sure the socket is closed. An error before the
       // receive-pack (the vault recovery) has written nothing yet: answer 500.
-      this.logger.error(
-        `git-http: push ingestion error for space ${spaceId}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+      this.respondInternalError(
+        reply,
+        `the push ingestion of space ${spaceId} failed`,
+        err,
       );
-      try {
-        if (!rawRes.headersSent) {
-          rawRes.statusCode = 500;
-          rawRes.setHeader('Content-Type', 'text/plain');
-        }
-        if (!rawRes.writableEnded) rawRes.end();
-      } catch {
-        /* ignore */
-      }
     }
   }
 

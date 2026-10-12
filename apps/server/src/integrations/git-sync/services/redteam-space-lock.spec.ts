@@ -1,13 +1,18 @@
-// Red-team finding #10: single-writer guarantee across replicas must survive a
-// TTL lapse with a swallowed heartbeat refresh. Two SpaceLockService instances
-// (A, B) share ONE redis store. A holds 'X' and stays in-flight; the lock key
-// then disappears (TTL expiry while refreshLock silently failed). B must NOT be
-// able to acquire 'X' and run its fn concurrently with A — that would be two
-// writers racing the same working tree. This test asserts the DESIRED
-// single-writer behavior, so it FAILS today if the lapse lets B in.
+// Red-team finding #10 / TP-2: the KNOWN multi-replica gap of the per-space
+// lock, stated as it is. Two SpaceLockService instances stand for two replicas
+// sharing ONE redis store. If A's lock key lapses while A is still running (TTL
+// expiry after its heartbeat refresh failed), nothing stops replica B from
+// acquiring it and running concurrently: there are no fencing tokens. The only
+// mitigation is that A's next heartbeat refresh CAS-misses and aborts A's
+// signal. This spec pins both halves so a change to either is deliberate.
+// (Within ONE process the in-process `running` set is the single-writer guard;
+// that is covered by space-lock.service.spec.ts.)
 import { Logger } from '@nestjs/common';
 import { SpaceLockService } from './space-lock.service';
-import { GIT_SYNC_LOCK_PREFIX } from '../git-sync.constants';
+import {
+  GIT_SYNC_LOCK_PREFIX,
+  GIT_SYNC_LOCK_TTL_MS,
+} from '../git-sync.constants';
 
 /**
  * Minimal shared fake redis honoring exactly the two primitives the lock uses:
@@ -25,7 +30,12 @@ function makeSharedRedis() {
       store.set(key, val);
       return 'OK';
     },
-    async eval(lua: string, _numKeys: number, key: string, argInstanceId: string) {
+    async eval(
+      lua: string,
+      _numKeys: number,
+      key: string,
+      argInstanceId: string,
+    ) {
       // Only act when WE still own the key (CAS), mirroring the Lua scripts.
       if (store.get(key) !== argInstanceId) return 0;
       if (lua.includes('del')) {
@@ -53,49 +63,59 @@ beforeAll(() => {
   jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 });
 
-describe('SpaceLockService — finding #10 single-writer across TTL lapse', () => {
-  it('B must not run its fn concurrently with an in-flight A after the lock key vanishes', async () => {
-    const redis = makeSharedRedis();
-    const A = buildInstance(redis);
-    const B = buildInstance(redis);
+describe('SpaceLockService — known multi-replica gap (no fencing tokens)', () => {
+  it("after A's key lapses, replica B CAN run concurrently with A; A's next heartbeat refresh then aborts A", async () => {
+    jest.useFakeTimers();
+    try {
+      const redis = makeSharedRedis();
+      const A = buildInstance(redis);
+      const B = buildInstance(redis);
 
-    let aRunning = false;
-    let releaseA!: () => void;
-    const gateA = new Promise<void>((resolve) => {
-      releaseA = resolve;
-    });
+      let aRunning = false;
+      let aSignal!: AbortSignal;
+      let releaseA!: () => void;
+      const gateA = new Promise<void>((resolve) => {
+        releaseA = resolve;
+      });
 
-    // A acquires 'X' and stays in-flight awaiting the gate.
-    const aResult = A.withSpaceLock('X', async () => {
-      aRunning = true;
-      await gateA;
-      aRunning = false;
-      return 'A-done';
-    });
-    await flushMicrotasks();
+      // A acquires 'X' and stays in-flight awaiting the gate.
+      const aResult = A.withSpaceLock('X', async (signal) => {
+        aSignal = signal;
+        aRunning = true;
+        await gateA;
+        aRunning = false;
+        return 'A-done';
+      });
+      await flushMicrotasks();
+      expect(aRunning).toBe(true);
+      expect(redis.store.has(GIT_SYNC_LOCK_PREFIX + 'X')).toBe(true);
 
-    // Sanity: A is in-flight and owns the redis key.
-    expect(aRunning).toBe(true);
-    expect(redis.store.has(GIT_SYNC_LOCK_PREFIX + 'X')).toBe(true);
+      // TTL lapse with a failed heartbeat: the key vanishes while A runs.
+      redis.store.delete(GIT_SYNC_LOCK_PREFIX + 'X');
 
-    // Simulate TTL lapse with a swallowed heartbeat refresh: the lock key
-    // disappears from the shared store while A is still running.
-    redis.store.delete(GIT_SYNC_LOCK_PREFIX + 'X');
+      // THE GAP: B acquires the lapsed key and runs while A is still in flight.
+      let bRanWhileARunning = false;
+      const bResult = await B.withSpaceLock('X', async () => {
+        bRanWhileARunning = aRunning;
+        return 'B-done';
+      });
+      expect(bResult).toBe('B-done');
+      expect(bRanWhileARunning).toBe(true);
 
-    // Now B tries to take 'X'. Desired: rejected as 'lock-held' (single writer);
-    // and under no circumstance may fn2 run while A is still in flight.
-    let bRanWhileARunning = false;
-    const bResult = await B.withSpaceLock('X', async () => {
-      bRanWhileARunning = aRunning; // captures whether A was still in-flight
-      return 'B-done';
-    });
+      // B is done; a third holder now owns the key (as after any takeover).
+      redis.store.set(GIT_SYNC_LOCK_PREFIX + 'X', 'replica-C');
 
-    // Single-writer assertions: B did NOT execute concurrently with A.
-    expect(bRanWhileARunning).toBe(false);
-    expect(bResult).toEqual({ skipped: 'lock-held' });
+      // THE MITIGATION: A's next heartbeat refresh CAS-misses and aborts A.
+      expect(aSignal.aborted).toBe(false);
+      await jest.advanceTimersByTimeAsync(Math.floor(GIT_SYNC_LOCK_TTL_MS / 3));
+      expect(aSignal.aborted).toBe(true);
 
-    // Cleanup: let A finish.
-    releaseA();
-    await expect(aResult).resolves.toBe('A-done');
+      // A's release never deletes the key it no longer owns.
+      releaseA();
+      await expect(aResult).resolves.toBe('A-done');
+      expect(redis.store.get(GIT_SYNC_LOCK_PREFIX + 'X')).toBe('replica-C');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

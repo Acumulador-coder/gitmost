@@ -9,7 +9,7 @@ interface GitSyncBadgeProps {
 /**
  * Badge marking a version produced by git-sync (provenance §8.1). The history
  * version is created on the PUSH path — when an incoming git body is written back
- * into the Docmost doc — not by the pull itself. Like {@link AiAgentBadge} it is
+ * into the Docmost doc — not by the pull itself. Like {@link AgentAvatarStack} it is
  * ADDITIVE — shown next to the human author, never replacing them — but a git-sync
  * edit is NOT an agent edit and has no chat to deep-link into, so it is a small,
  * neutral, non-clickable label.

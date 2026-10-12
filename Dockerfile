@@ -25,8 +25,11 @@ RUN pnpm build
 FROM base AS installer
 
 # git: required by the git-sync VaultGit (shells out to git)
+# tini: PID 1 that reaps orphaned processes — a killed `git http-backend`
+# leaves its receive-pack/index-pack children to PID 1, and the /git host waits
+# for that whole process group to be gone before it releases the space lock.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl bash git \
+  && apt-get install -y --no-install-recommends curl bash git tini \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -111,4 +114,5 @@ EXPOSE 3000
 # sessions / consistent hashing on page id). There is deliberately no
 # cross-process lock yet — a conscious constraint. See .env.example (the "MCP
 # collaboration write path" block) and packages/mcp/README.md for details.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["pnpm", "start"]

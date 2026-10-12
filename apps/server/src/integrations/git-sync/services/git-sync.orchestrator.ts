@@ -16,7 +16,7 @@ import {
 import { InjectKysely } from 'nestjs-kysely';
 import { KyselyDB } from '@docmost/db/types/kysely.types';
 import { sql } from 'kysely';
-import type { PushFailure, Settings } from '@docmost/git-sync';
+import type { PullFailure, PushFailure, Settings } from '@docmost/git-sync';
 import { loadGitSync } from '../git-sync.loader';
 import { EnvironmentService } from '../../environment/environment.service';
 import {
@@ -26,7 +26,11 @@ import {
 } from '../../metrics/metrics.registry';
 import { GitmostDataSourceService } from './gitmost-datasource.service';
 import { VaultRegistryService } from './vault-registry.service';
-import { SpaceLockService } from './space-lock.service';
+import { GitSyncDeadlineError, SpaceLockService } from './space-lock.service';
+import {
+  GIT_SYNC_RESTRICTED_SPACE_REASON,
+  GitSyncRestrictionsService,
+} from './git-sync-restrictions.service';
 import {
   GIT_SYNC_PUSH_LOCK_RETRY_BASE_MS,
   GIT_SYNC_PUSH_LOCK_RETRY_MAX_MS,
@@ -38,6 +42,21 @@ interface EnabledSpace {
   spaceId: string;
   workspaceId: string;
 }
+
+/**
+ * Wall-clock deadline of one locked space operation: a cycle, or a push's
+ * receive-pack plus its cycle (GL-7). Generous on purpose — the first full
+ * export or import of a large space must fit — because its job is to make every
+ * cycle end, not to pace it. On expiry the cycle is aborted, logged at ERROR and
+ * recorded as a failed cycle in the space's status.
+ */
+export const GIT_SYNC_CYCLE_DEADLINE_MS = 30 * 60_000;
+
+/**
+ * How many poll-launched cycles may run at once. A hung space holds one slot
+ * (until its deadline) while the others keep being reconciled.
+ */
+const GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES = 2;
 
 /**
  * Thrown by `ingestExternalPush` when the per-space lock cannot be acquired (a
@@ -56,15 +75,19 @@ export class GitSyncLockHeldError extends Error {
 export interface GitSyncRunStatus {
   spaceId: string;
   ran: boolean;
-  /** Why the cycle did not run (lock held elsewhere, busy, disabled, error). */
+  /** Why the cycle did not run (lock held elsewhere, busy, space not enabled). */
   skipped?:
     | 'lock-held'
     | 'in-progress'
-    | 'disabled'
-    | 'no-service-user'
     | 'space-not-enabled'
     | 'merge-in-progress';
-  pull?: { written: number; deleted: number; conflict: boolean };
+  pull?: {
+    written: number;
+    deleted: number;
+    conflict: boolean;
+    failures: number;
+    firstFailure?: PullFailure;
+  };
   push?: { mode: string; failures: number; firstFailure?: PushFailure };
   /**
    * True when the push REFUSED to fast-forward a divergent `docmost` mirror
@@ -77,7 +100,7 @@ export interface GitSyncRunStatus {
 }
 
 /**
- * Health of one space's git-sync, as reported by GET /api/git-sync/status. Kept
+ * Health of one space's git-sync, as reported by POST /api/git-sync/status. Kept
  * in memory by the orchestrator (one entry per space that ran a cycle, or was
  * skipped because its lock was held, since the process started; a restart just
  * starts empty).
@@ -92,6 +115,16 @@ export interface GitSyncSpaceStatus {
   /** ISO time of the last successful cycle (null: none since process start). */
   lastSuccessAt: string | null;
   consecutiveFailures: number;
+  /**
+   * Live pages the last cycle's pull could not write into the vault — they did
+   * not reach git (0 when the cycle itself failed).
+   */
+  pullFailures: number;
+  /** The first of those: its page id and reason. */
+  firstPullFailure: {
+    pageId: string;
+    reason: string;
+  } | null;
   /** Per-page push failures of the last cycle (0 when the cycle itself failed). */
   pushFailures: number;
   /** The first of those per-page failures: its page path (or id) and reason. */
@@ -126,6 +159,26 @@ function clip(text: string): string {
     : text;
 }
 
+/** The status of a space nothing has been recorded for yet. */
+function emptyStatus(spaceId: string): GitSyncSpaceStatus {
+  return {
+    spaceId,
+    lastRunAt: null,
+    lastResult: null,
+    lastError: null,
+    lastSuccessAt: null,
+    consecutiveFailures: 0,
+    pullFailures: 0,
+    firstPullFailure: null,
+    pushFailures: 0,
+    firstPushFailure: null,
+    lastSkippedAt: null,
+    lastSkipReason: null,
+    lockHeldSince: null,
+    runningSince: null,
+  };
+}
+
 /**
  * The git-sync control plane. Drives the `@docmost/git-sync` engine in
  * process: under a Redis leader lock (single-writer across replicas) plus an
@@ -157,6 +210,12 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     string,
     { workspaceId: string; status: GitSyncSpaceStatus }
   >();
+  /**
+   * In-flight HEAD pins per space: concurrent read advertisements share one
+   * (two parallel `git checkout main` in one vault would collide on its index
+   * lock). At most one entry per space, removed when the pin settles.
+   */
+  private readonly headPins = new Map<string, Promise<boolean>>();
 
   constructor(
     private readonly environmentService: EnvironmentService,
@@ -165,6 +224,7 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly spaceLock: SpaceLockService,
     @InjectKysely() private readonly db: KyselyDB,
+    private readonly restrictions: GitSyncRestrictionsService,
   ) {}
 
   // --- enabled-space enumeration --------------------------------
@@ -207,9 +267,9 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
   // --- one sync cycle for a space -------------------------------
 
   /**
-   * Build the engine `Settings` for a space. The datasource writes in-process,
-   * so only `vaultPath`, `docmostSpaceId` and the tunables are load-bearing; the
-   * dead REST-era fields (docmostApiUrl/email/password) were removed (review).
+   * Build the engine `Settings` for a space. The engine reads exactly three
+   * fields: `vaultPath`, `docmostSpaceId` and `autoMergeConflicts` (the poll
+   * interval and debounce are the orchestrator's and the listener's own).
    */
   private async buildSettings(spaceId: string): Promise<Settings> {
     // Per-space PUSH policy for still-conflicted page bodies (SPEC §9): read the
@@ -228,32 +288,25 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     return {
       docmostSpaceId: spaceId,
       vaultPath: this.vaultRegistry.vaultPath(spaceId),
-      pollIntervalMs: this.environmentService.getGitSyncPollIntervalMs(),
-      debounceMs: this.environmentService.getGitSyncDebounceMs(),
-      logLevel: 'info',
       autoMergeConflicts: row?.autoMergeConflicts ?? false,
     };
   }
 
   /**
    * Run one full PULL + PUSH cycle for a space, under the Redis leader lock and
-   * the in-process mutex. Never throws — per-space errors are caught, logged, and
-   * returned in the status so a poll interval is never broken by one bad space.
+   * the in-process mutex, bounded by GIT_SYNC_CYCLE_DEADLINE_MS. Per-space
+   * cycle errors (the deadline included) are caught, logged, and returned in the
+   * status so a poll interval is never broken by one bad space.
+   *
+   * GIT_SYNC_ENABLED and GIT_SYNC_SERVICE_USER_ID need no check here: the module
+   * is empty when the flag is off, and env validation requires the service user
+   * when it is on.
    */
   async runOnce(
     spaceId: string,
     workspaceId: string,
   ): Promise<GitSyncRunStatus> {
-    if (!this.environmentService.isGitSyncEnabled()) {
-      return { spaceId, ran: false, skipped: 'disabled' };
-    }
     const serviceUserId = this.environmentService.getGitSyncServiceUserId();
-    if (!serviceUserId) {
-      this.logger.error(
-        'git-sync: GIT_SYNC_SERVICE_USER_ID is required when GIT_SYNC_ENABLED — skipping',
-      );
-      return { spaceId, ran: false, skipped: 'no-service-user' };
-    }
     // Per-space opt-in gate (review #3). The global GIT_SYNC_ENABLED env switch is
     // NOT sufficient — sync must also be turned on for THIS space
     // (`space.settings.gitSync.enabled === true`). The poll path filters via
@@ -273,8 +326,11 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     // when it could not enter — surfaced here as the existing skipped:'in-progress'
     // / 'lock-held' status so runOnce's observable behavior is unchanged.
     try {
-      const result = await this.spaceLock.withSpaceLock(spaceId, (signal) =>
-        this.driveCycle(spaceId, workspaceId, serviceUserId, signal),
+      const result = await this.spaceLock.withSpaceLock(
+        spaceId,
+        (signal) =>
+          this.driveCycle(spaceId, workspaceId, serviceUserId, signal),
+        { deadlineMs: GIT_SYNC_CYCLE_DEADLINE_MS },
       );
       if ('skipped' in result && !('spaceId' in result)) {
         if (result.skipped === 'lock-held') {
@@ -294,7 +350,7 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Per-space health snapshot for GET /api/git-sync/status, limited to the
+   * Per-space health snapshot for POST /api/git-sync/status, limited to the
    * spaces of `workspaceId` (an admin never sees another workspace's spaces).
    */
   getSpaceStatuses(workspaceId: string): GitSyncSpaceStatus[] {
@@ -305,37 +361,52 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     return out;
   }
 
+  /**
+   * Merge `patch` into the space's status (fields it omits keep their previous
+   * value, or the empty default) and return the previous status, if any.
+   */
+  private patchStatus(
+    spaceId: string,
+    workspaceId: string,
+    patch: Partial<GitSyncSpaceStatus>,
+  ): GitSyncSpaceStatus | undefined {
+    const prev = this.spaceHealth.get(spaceId)?.status;
+    this.spaceHealth.set(spaceId, {
+      workspaceId,
+      status: { ...emptyStatus(spaceId), ...prev, ...patch },
+    });
+    return prev;
+  }
+
   /** Record a completed cycle; logs (INFO) the failing -> healthy transition. */
   private recordCycleSuccess(
     spaceId: string,
     workspaceId: string,
     result: GitSyncRunStatus,
   ): void {
-    const prev = this.spaceHealth.get(spaceId)?.status;
     const now = new Date().toISOString();
+    const firstPull = result.pull?.firstFailure;
     const first = result.push?.firstFailure;
-    this.spaceHealth.set(spaceId, {
-      workspaceId,
-      status: {
-        spaceId,
-        lastRunAt: now,
-        lastResult: 'ok',
-        lastError: null,
-        lastSuccessAt: now,
-        consecutiveFailures: 0,
-        pushFailures: result.push?.failures ?? 0,
-        firstPushFailure: first
-          ? {
-              path: first.path ?? null,
-              pageId: first.pageId ?? null,
-              reason: clip(first.error),
-            }
-          : null,
-        lastSkippedAt: prev?.lastSkippedAt ?? null,
-        lastSkipReason: prev?.lastSkipReason ?? null,
-        lockHeldSince: null,
-        runningSince: null,
-      },
+    const prev = this.patchStatus(spaceId, workspaceId, {
+      lastRunAt: now,
+      lastResult: 'ok',
+      lastError: null,
+      lastSuccessAt: now,
+      consecutiveFailures: 0,
+      pullFailures: result.pull?.failures ?? 0,
+      firstPullFailure: firstPull
+        ? { pageId: firstPull.pageId, reason: clip(firstPull.error) }
+        : null,
+      pushFailures: result.push?.failures ?? 0,
+      firstPushFailure: first
+        ? {
+            path: first.path ?? null,
+            pageId: first.pageId ?? null,
+            reason: clip(first.error),
+          }
+        : null,
+      lockHeldSince: null,
+      runningSince: null,
     });
     if (prev && prev.consecutiveFailures > 0) {
       this.logger.log(
@@ -358,26 +429,21 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     workspaceId: string,
     err: unknown,
   ): void {
-    const prev = this.spaceHealth.get(spaceId)?.status;
     const message = err instanceof Error ? err.message : String(err);
-    const consecutiveFailures = (prev?.consecutiveFailures ?? 0) + 1;
+    const consecutiveFailures =
+      (this.spaceHealth.get(spaceId)?.status.consecutiveFailures ?? 0) + 1;
     this.exportKeysBySpace.get(spaceId)?.clear();
-    this.spaceHealth.set(spaceId, {
-      workspaceId,
-      status: {
-        spaceId,
-        lastRunAt: new Date().toISOString(),
-        lastResult: 'failed',
-        lastError: clip(message),
-        lastSuccessAt: prev?.lastSuccessAt ?? null,
-        consecutiveFailures,
-        pushFailures: 0,
-        firstPushFailure: null,
-        lastSkippedAt: prev?.lastSkippedAt ?? null,
-        lastSkipReason: prev?.lastSkipReason ?? null,
-        lockHeldSince: null,
-        runningSince: null,
-      },
+    this.patchStatus(spaceId, workspaceId, {
+      lastRunAt: new Date().toISOString(),
+      lastResult: 'failed',
+      lastError: clip(message),
+      consecutiveFailures,
+      pullFailures: 0,
+      firstPullFailure: null,
+      pushFailures: 0,
+      firstPushFailure: null,
+      lockHeldSince: null,
+      runningSince: null,
     });
     if (consecutiveFailures === 1) {
       this.logger.error(
@@ -400,24 +466,11 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * shows in /status even before it ever ran in this process.
    */
   private recordLockHeldSkip(spaceId: string, workspaceId: string): void {
-    const prev = this.spaceHealth.get(spaceId)?.status;
     const now = new Date().toISOString();
-    this.spaceHealth.set(spaceId, {
-      workspaceId,
-      status: {
-        spaceId,
-        lastRunAt: prev?.lastRunAt ?? null,
-        lastResult: prev?.lastResult ?? null,
-        lastError: prev?.lastError ?? null,
-        lastSuccessAt: prev?.lastSuccessAt ?? null,
-        consecutiveFailures: prev?.consecutiveFailures ?? 0,
-        pushFailures: prev?.pushFailures ?? 0,
-        firstPushFailure: prev?.firstPushFailure ?? null,
-        lastSkippedAt: now,
-        lastSkipReason: 'lock-held',
-        lockHeldSince: prev?.lockHeldSince ?? now,
-        runningSince: prev?.runningSince ?? null,
-      },
+    this.patchStatus(spaceId, workspaceId, {
+      lastSkippedAt: now,
+      lastSkipReason: 'lock-held',
+      lockHeldSince: this.spaceHealth.get(spaceId)?.status.lockHeldSince ?? now,
     });
   }
 
@@ -427,23 +480,9 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * cycle's success/failure record clears it.
    */
   private recordCycleStart(spaceId: string, workspaceId: string): void {
-    const prev = this.spaceHealth.get(spaceId)?.status;
-    this.spaceHealth.set(spaceId, {
-      workspaceId,
-      status: {
-        spaceId,
-        lastRunAt: prev?.lastRunAt ?? null,
-        lastResult: prev?.lastResult ?? null,
-        lastError: prev?.lastError ?? null,
-        lastSuccessAt: prev?.lastSuccessAt ?? null,
-        consecutiveFailures: prev?.consecutiveFailures ?? 0,
-        pushFailures: prev?.pushFailures ?? 0,
-        firstPushFailure: prev?.firstPushFailure ?? null,
-        lastSkippedAt: prev?.lastSkippedAt ?? null,
-        lastSkipReason: prev?.lastSkipReason ?? null,
-        lockHeldSince: null,
-        runningSince: new Date().toISOString(),
-      },
+    this.patchStatus(spaceId, workspaceId, {
+      lockHeldSince: null,
+      runningSince: new Date().toISOString(),
     });
   }
 
@@ -503,83 +542,114 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * heartbeat CAS) the signal fires and the receive-pack's `git http-backend`
    * child is killed — closing the window where another replica could grab the lock
    * and start a cycle while this child is still writing the working tree.
+   *
+   * The receive-pack runs under the `RECEIVE_REF` marker (DESIGN.md §8). It is
+   * deleted afterwards only when `main`'s working tree is clean; a receive-pack
+   * that was cut off (killed, or the process died) leaves it set over a dirty
+   * tree, and the next recovery discards that tree instead of committing a push
+   * the client never saw accepted.
+   *
+   * The whole locked operation (receive-pack + cycle) is bounded by
+   * GIT_SYNC_CYCLE_DEADLINE_MS: past it the signal is aborted, the failure is
+   * recorded in the space's status and the `GitSyncDeadlineError` is rethrown.
    */
   async ingestExternalPush(
     spaceId: string,
     workspaceId: string,
     runReceivePack: (signal: AbortSignal) => Promise<void>,
   ): Promise<void> {
-    if (!this.environmentService.isGitSyncEnabled()) {
-      // The HTTP gate already checks this, but be defensive: never run a cycle
-      // when sync is globally off.
-      throw new GitSyncLockHeldError(spaceId);
-    }
     const serviceUserId = this.environmentService.getGitSyncServiceUserId();
 
-    const result = await this.spaceLock.withSpaceLock(
-      spaceId,
-      async (signal) => {
-      // 0) Repair what an interrupted cycle left in the vault first: receive-pack
-      // (receive.denyCurrentBranch=updateInstead) rejects a push into a dirty
-      // `main` ("Working directory has unstaged changes").
-      const { recoverVault } = await loadGitSync();
-      const vault = await this.vaultRegistry.getVault(spaceId);
-      if (await recoverVault({ spaceId, vault, ...this.engineLog(spaceId) })) {
-        this.exportKeysFor(spaceId).clear();
-      }
+    let result: void | { skipped: 'lock-held' | 'in-progress' };
+    try {
+      result = await this.spaceLock.withSpaceLock(
+        spaceId,
+        async (signal) => {
+          // 0) Repair what an interrupted cycle left in the vault first:
+          // receive-pack (receive.denyCurrentBranch=updateInstead) rejects a
+          // push into a dirty `main` ("Working directory has unstaged changes").
+          const { recoverVault, DEFAULT_BRANCH, RECEIVE_REF } =
+            await loadGitSync();
+          const vault = await this.vaultRegistry.getVault(spaceId);
+          if (
+            await recoverVault({ spaceId, vault, ...this.engineLog(spaceId) })
+          ) {
+            this.exportKeysFor(spaceId).clear();
+          }
 
-      // 1) Stream the receive-pack to the client (durable commits land on main).
-      // Pass the lost-lock signal so the receive-pack child is killed if the lock
-      // lapses mid-write (no concurrent working-tree writer across replicas).
-      await runReceivePack(signal);
+          // 1) Stream the receive-pack to the client (durable commits land on
+          // main). Pass the lost-lock signal so the receive-pack child is killed
+          // if the lock lapses mid-write (no concurrent working-tree writer
+          // across replicas). RECEIVE_REF marks it while it runs (DESIGN.md
+          // §8): a receive-pack cut off after updating `main`'s working tree but
+          // before moving `main` leaves a dirty `main` the client never saw
+          // accepted, which recovery discards instead of committing as user
+          // work. runReceivePack resolves even when the child was killed, so
+          // the marker is deleted only when the tree is clean afterwards (a
+          // completed or refused receive-pack leaves it clean, and recovery
+          // made it clean before). A dirty tree, or a rejection, keeps it: the
+          // recovery of the cycle below, or of the next poll, discards it.
+          await vault.updateRef(RECEIVE_REF, DEFAULT_BRANCH);
+          await runReceivePack(signal);
+          if (await vault.isWorkingTreeDirty()) {
+            this.logger.warn(
+              `git-sync: space ${spaceId}: the receive-pack was cut off with ` +
+                `main's working tree half-written; recovery discards it`,
+            );
+          } else {
+            await vault.deleteRef(RECEIVE_REF);
+          }
 
-      // 2) Reconcile the new commits into Docmost. A service user is required to
-      // attribute the writes; without one we cannot run the cycle — the commits
-      // are still durable and the poll backstop will pick them up once configured.
-      if (!serviceUserId) {
-        this.logger.error(
-          'git-sync: GIT_SYNC_SERVICE_USER_ID is required to ingest an external ' +
-            'push — the push is durable on main; skipping the immediate cycle.',
-        );
-        return;
-      }
-      try {
-        const status = await this.driveCycle(
-          spaceId,
-          workspaceId,
-          serviceUserId,
-          signal,
-        );
-        this.recordCycleSuccess(spaceId, workspaceId, status);
-      } catch (err) {
-        this.recordCycleFailure(spaceId, workspaceId, err);
-        // Do NOT rethrow: the push succeeded and the commits are durable on main;
-        // the poll-interval backstop retries the cycle. Log for visibility.
-        this.logger.error(
-          `git-sync: post-push cycle failed for space ${spaceId} (push is ` +
-            `durable; poll will retry): ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-        );
-      }
-      return;
-      },
-      // BOUNDED retry-acquire (push path only): a push that briefly overlaps a
-      // poll cycle waits a moment (capped backoff up to the budget) instead of
-      // immediately 503-ing — the cycle releases the lock in well under a second
-      // for most spaces, so this turns a transient overlap into a SUCCESS rather
-      // than a spurious failure. A genuinely long/stuck cycle still skips after
-      // the bound -> GitSyncLockHeldError -> 503, and git retries the whole push
-      // (the receive-pack only runs once the lock is held, so there is never a
-      // half-applied ref on a 503).
-      {
-        acquireRetry: {
-          timeoutMs: GIT_SYNC_PUSH_LOCK_RETRY_TOTAL_MS,
-          baseMs: GIT_SYNC_PUSH_LOCK_RETRY_BASE_MS,
-          maxMs: GIT_SYNC_PUSH_LOCK_RETRY_MAX_MS,
+          // 2) Reconcile the new commits into Docmost.
+          try {
+            const status = await this.driveCycle(
+              spaceId,
+              workspaceId,
+              serviceUserId,
+              signal,
+            );
+            this.recordCycleSuccess(spaceId, workspaceId, status);
+          } catch (err) {
+            // A cycle cut off by the deadline is recorded once, below, when
+            // withSpaceLock rejects with the deadline error.
+            if (!(signal.reason instanceof GitSyncDeadlineError)) {
+              this.recordCycleFailure(spaceId, workspaceId, err);
+            }
+            // Do NOT rethrow: the push succeeded and the commits are durable on
+            // main; the poll-interval backstop retries the cycle. Log for
+            // visibility.
+            this.logger.error(
+              `git-sync: post-push cycle failed for space ${spaceId} (push is ` +
+                `durable; poll will retry): ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+            );
+          }
         },
-      },
-    );
+        {
+          // BOUNDED retry-acquire (push path only): a push that briefly overlaps
+          // a poll cycle waits a moment (capped backoff up to the budget)
+          // instead of immediately 503-ing — the cycle releases the lock in well
+          // under a second for most spaces, so this turns a transient overlap
+          // into a SUCCESS rather than a spurious failure. A genuinely
+          // long/stuck cycle still skips after the bound -> GitSyncLockHeldError
+          // -> 503, and git retries the whole push (the receive-pack only runs
+          // once the lock is held, so there is never a half-applied ref on a
+          // 503).
+          acquireRetry: {
+            timeoutMs: GIT_SYNC_PUSH_LOCK_RETRY_TOTAL_MS,
+            baseMs: GIT_SYNC_PUSH_LOCK_RETRY_BASE_MS,
+            maxMs: GIT_SYNC_PUSH_LOCK_RETRY_MAX_MS,
+          },
+          deadlineMs: GIT_SYNC_CYCLE_DEADLINE_MS,
+        },
+      );
+    } catch (err) {
+      if (err instanceof GitSyncDeadlineError) {
+        this.recordCycleFailure(spaceId, workspaceId, err);
+      }
+      throw err;
+    }
 
     // The lock was held (in-progress or another replica) — surface to the caller
     // so the HTTP handler can answer 503 and let git retry.
@@ -599,12 +669,13 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * a cycle, so an unsynchronized advertisement could route a clone to `docmost`
    * (~1/4 of clones under continuous syncing).
    *
-   * Running the pin + the advertisement under the SAME per-space lock the cycle
-   * uses guarantees no cycle is mid-flight while we pin (HEAD cannot flap) and that
-   * the pin never corrupts a cycle's checkout. The advertisement is cheap (a ref
-   * listing, no pack stream), so holding the lock for it is fine. A bounded
-   * retry-acquire absorbs a brief overlap with a cycle; if the lock still cannot be
-   * taken (a long cycle), we fall back to serving WITHOUT the pin — the cycle's
+   * The pin + the advertisement run under the space's READ lock: no cycle or push
+   * runs while we pin (HEAD cannot flap, and the pin never corrupts a cycle's
+   * checkout), but read advertisements do not exclude each other and a cycle
+   * waiting for the space goes first, so a stream of `ls-remote`s cannot stall
+   * the space's sync (OR-1). Concurrent advertisements share one pin. A bounded
+   * wait absorbs a brief overlap with a cycle; if the space is still busy (a long
+   * cycle), we fall back to serving WITHOUT the pin — the cycle's
    * finally-restore leaves HEAD on `main` between cycles, so the advertisement is
    * still almost always correct (degrades only under sustained contention).
    */
@@ -613,15 +684,11 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     workspaceId: string,
     serve: () => Promise<void>,
   ): Promise<void> {
-    if (!this.environmentService.isGitSyncEnabled()) {
-      await serve();
-      return;
-    }
-    const result = await this.spaceLock.withSpaceLock(
+    const result = await this.spaceLock.withSpaceReadLock(
       spaceId,
       async () => {
         const vault = await this.vaultRegistry.getVault(spaceId);
-        if (!(await vault.pinHeadToMain())) {
+        if (!(await this.pinHeadToMain(spaceId, vault))) {
           this.logger.warn(
             `git-sync: space ${spaceId}: HEAD is off 'main' with uncommitted ` +
               `changes left by an interrupted cycle — not pinned; a clone may ` +
@@ -638,8 +705,8 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
         },
       },
     );
-    // Lock contended for the whole budget (in-progress / another replica): serve
-    // anyway. `serve` (backend.run) never ran inside the lock in this case.
+    // Space busy for the whole budget (a cycle here / the lock held elsewhere):
+    // serve anyway. `serve` (backend.run) never ran inside the lock in this case.
     if (typeof result === 'object' && result !== null && 'skipped' in result) {
       if (result.skipped === 'lock-held') {
         this.recordLockHeldSkip(spaceId, workspaceId);
@@ -648,12 +715,29 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Pin the vault's HEAD to `main`, sharing a pin already in flight. */
+  private pinHeadToMain(
+    spaceId: string,
+    vault: { pinHeadToMain(): Promise<boolean> },
+  ): Promise<boolean> {
+    let pin = this.headPins.get(spaceId);
+    if (!pin) {
+      pin = vault.pinHeadToMain().finally(() => this.headPins.delete(spaceId));
+      this.headPins.set(spaceId, pin);
+    }
+    return pin;
+  }
+
   /**
    * Drive ONE reconcile cycle for a space. The PULL->PUSH branch choreography
    * lives in the engine's `runCycle` (so it can never drift from the engine it
    * ships with); the orchestrator owns only the lock (its caller) and the
    * service binding. There is no delete cap — deletes apply unconditionally (they
    * are soft/reversible) and every cycle logs what it deleted via `log`.
+   *
+   * A space with page-level restricted pages is refused before anything is
+   * exported or written (GA-2/GA-3/GA-4): the throw is recorded as a failed
+   * cycle, so the reason shows in the space's status and is logged at ERROR.
    */
   private async driveCycle(
     spaceId: string,
@@ -661,6 +745,14 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     serviceUserId: string,
     signal?: AbortSignal,
   ): Promise<GitSyncRunStatus> {
+    signal?.throwIfAborted();
+    if (await this.restrictions.spaceHasRestrictedPages(spaceId, workspaceId)) {
+      throw new Error(
+        `git-sync refuses space ${spaceId}: ${GIT_SYNC_RESTRICTED_SPACE_REASON}. ` +
+          `Nothing was exported or written; remove the page-level ` +
+          `restrictions or switch git sync off for this space.`,
+      );
+    }
     this.recordCycleStart(spaceId, workspaceId);
     const { runCycle } = await loadGitSync();
     const settings = await this.buildSettings(spaceId);
@@ -669,12 +761,14 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
       workspaceId,
       userId: serviceUserId,
       spaceId,
+      // Datasource calls stop as soon as the lock is lost or the deadline hits.
+      signal,
     });
 
     const result = await runCycle({
       // Cooperative-abort signal from the per-space lock: if a heartbeat refresh
-      // cannot confirm the lock, the cycle bails before its next destructive
-      // write phase instead of writing blind after a possible lock loss.
+      // cannot confirm the lock, or the cycle deadline passes, the cycle bails
+      // before its next destructive write phase instead of writing blind.
       signal,
       spaceId,
       client,
@@ -768,7 +862,8 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * Register the poll-safety interval DYNAMICALLY so it honors the configured
    * GIT_SYNC_POLL_INTERVAL_MS (a static `@Interval` decorator could only hardcode
    * a value at class-eval time, before config is readable — diverging from what
-   * `/status` reports). When git-sync is disabled we register nothing.
+   * `/status` reports). When git-sync is disabled this provider does not exist
+   * (GitSyncModule registers nothing), so nothing is registered.
    *
    * ScheduleModule: forRoot() is registered ONCE globally by TelemetryModule;
    * GitSyncModule imports the plain ScheduleModule so SchedulerRegistry is
@@ -784,11 +879,10 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * (one durable, deduplicated job per space instead of N independent interval
    * timers) and add FENCING TOKENS so a stale writer's writes are rejected by the
    * store. The author deferred fencing tokens; this comment is the breadcrumb so
-   * the gap is tracked rather than forgotten. See SpaceLockService.liveLocks.
+   * the gap is tracked rather than forgotten. See the KNOWN MULTI-REPLICA GAP note
+   * on SpaceLockService.
    */
   onModuleInit(): void {
-    if (!this.environmentService.isGitSyncEnabled()) return;
-
     const ms = this.environmentService.getGitSyncPollIntervalMs();
     const handle = setInterval(() => {
       void this.pollTick();
@@ -820,27 +914,38 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** True while a pollTick pass is in flight (re-entrancy guard). */
+  /** True while a pollTick enumerates and launches cycles (re-entrancy guard). */
   private polling = false;
+  /**
+   * Spaces whose poll-launched cycle has not settled yet; each holds one of the
+   * GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES slots. Bounded by that cap.
+   */
+  private readonly pollInFlight = new Set<string>();
+  /**
+   * When each enabled space last got a poll slot, so the longest-waiting spaces
+   * go first. One entry per enabled space; pruned with the disabled ones.
+   */
+  private readonly pollLaunchedAt = new Map<string, number>();
 
   /**
    * One poll tick: catches events missed by the listener and reconciles after
-   * downtime. Gated on GIT_SYNC_ENABLED (defensive — the interval is only
-   * registered when enabled). Each enabled space runs under its own lock
-   * (overlaps skipped). Never throws (runOnce swallows per-space errors).
+   * downtime. Each enabled space runs under its own lock (overlaps skipped).
+   * Never throws.
    *
-   * Re-entrancy guard: a batch of cycles can take LONGER than the poll interval
-   * (many spaces, slow pushes), so the next interval tick could fire while this
-   * pass is still running. The per-space lock already prevents overlapping cycles
-   * for one space, but an overlapping tick still re-runs enabledSpaces() and
-   * redundant per-space lock attempts for every space. The `polling` flag skips a
-   * tick while one is already in flight; it is in-process only (each replica
-   * guards its own ticks — cross-replica overlap is handled by the Redis lock).
+   * GL-7: the tick does not wait for one space before starting the next. It
+   * hands free slots (GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES) to the spaces that
+   * have waited longest and are not still running from an earlier tick; a hung
+   * cycle holds one slot until its deadline while the other spaces keep being
+   * reconciled. The returned promise settles when this tick's cycles have.
+   *
+   * Re-entrancy guard: the `polling` flag skips a tick while another is still
+   * enumerating; it is in-process only (each replica guards its own ticks —
+   * cross-replica overlap is handled by the Redis lock).
    */
   private async pollTick(): Promise<void> {
-    if (!this.environmentService.isGitSyncEnabled()) return;
     if (this.polling) return;
     this.polling = true;
+    const launched: Promise<void>[] = [];
     try {
       let spaces: EnabledSpace[];
       try {
@@ -860,14 +965,43 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
           (spaceId) => !enabled.has(spaceId),
         ),
       );
-      for (const { spaceId, workspaceId } of spaces) {
-        // runOnce never throws; it records each cycle's outcome in the space's
-        // health (served by /status, counted in the metrics) and logs the
-        // healthy <-> failing transitions.
-        await this.runOnce(spaceId, workspaceId);
+      for (const spaceId of [...this.pollLaunchedAt.keys()]) {
+        if (!enabled.has(spaceId)) this.pollLaunchedAt.delete(spaceId);
+      }
+      const waiting = spaces
+        .filter((s) => !this.pollInFlight.has(s.spaceId))
+        .sort(
+          (a, b) =>
+            (this.pollLaunchedAt.get(a.spaceId) ?? 0) -
+            (this.pollLaunchedAt.get(b.spaceId) ?? 0),
+        );
+      for (const { spaceId, workspaceId } of waiting) {
+        if (this.pollInFlight.size >= GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES)
+          break;
+        this.pollInFlight.add(spaceId);
+        this.pollLaunchedAt.set(spaceId, Date.now());
+        // runOnce records each cycle's outcome in the space's health (served by
+        // /status, counted in the metrics) and logs the healthy <-> failing
+        // transitions; only its opt-in read can still throw.
+        launched.push(
+          this.runOnce(spaceId, workspaceId)
+            .then(
+              () => undefined,
+              (err) => {
+                this.logger.error(
+                  `git-sync: poll cycle for space ${spaceId} failed: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                  err instanceof Error ? err.stack : undefined,
+                );
+              },
+            )
+            .finally(() => this.pollInFlight.delete(spaceId)),
+        );
       }
     } finally {
       this.polling = false;
     }
+    await Promise.all(launched);
   }
 }

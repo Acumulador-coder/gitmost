@@ -96,7 +96,8 @@ export function resolveServiceKind(input: {
 /** The outcome of the gating/auth decision the request handler must enforce. */
 export type GitHttpGateDecision =
   | { kind: 'unauthorized' } // 401 + WWW-Authenticate (missing/invalid creds)
-  | { kind: 'not-found' } // 404 (space hidden / sync or http disabled)
+  | { kind: 'not-found' } // 404 (space hidden / not sync-enabled / non-member)
+  | { kind: 'restricted' } // 403 (member, but the space has restricted pages)
   | { kind: 'forbidden' } // 403 (authenticated but lacks the permission)
   | { kind: 'bad-request' } // 400 (unparseable git request shape)
   | { kind: 'proceed' }; // run http-backend
@@ -104,18 +105,23 @@ export type GitHttpGateDecision =
 /**
  * Pure gating decision, mirroring the handler precedence so it can be unit
  * tested without the DB / CASL graph. Inputs are the already-resolved booleans
- * the handler computes from EnvironmentService / SpaceRepo / SpaceAbilityFactory.
+ * the handler computes from SpaceRepo / SpaceAbilityFactory /
+ * GitSyncRestrictionsService. The global GIT_SYNC_ENABLED / GIT_SYNC_HTTP_ENABLED
+ * flags are not inputs: the /git route is only registered when both are on.
  *
  * Precedence (matches the spec):
  *   1. no/invalid Basic credentials               -> 401 (regardless of space).
  *   2. credentials present but invalid             -> 401.
  *   3. unparseable git request shape               -> 400.
- *   4. git-sync globally disabled, or git-http disabled, or the space is missing
- *      / not git-sync-enabled, OR the authenticated user is NOT a member of the
- *      space (has no role at all)                   -> 404 (never reveal existence).
- *   5. a MEMBER of the space who lacks the required perm (e.g. a reader trying to
+ *   4. the space is missing / not git-sync-enabled, OR the authenticated user is
+ *      NOT a member of the space (has no role at all)
+ *                                                  -> 404 (never reveal existence).
+ *   5. a MEMBER of a space that contains pages with page-level restrictions
+ *                                                  -> 403 'restricted' (git sync
+ *      is unavailable for such spaces; existence is already known to a member).
+ *   6. a MEMBER of the space who lacks the required perm (e.g. a reader trying to
  *      push)                                        -> 403.
- *   6. otherwise                                    -> proceed.
+ *   7. otherwise                                    -> proceed.
  *
  * Note (4) is checked AFTER (1)/(2): an anonymous probe always gets 401 first;
  * an authenticated user hitting a hidden/disabled space — OR a space they are not
@@ -124,8 +130,9 @@ export type GitHttpGateDecision =
  * while a non-existent / sync-disabled space got 404, the 403↔404 difference would
  * let any authenticated workspace user brute-force slugs to discover which spaces
  * exist and which have git-sync enabled — including spaces they cannot see. 403 is
- * therefore reserved for the one case where existence is ALREADY known to the
- * caller because they ARE a member (so it leaks nothing new): a member without the
+ * therefore reserved for the cases where existence is ALREADY known to the
+ * caller because they ARE a member (so it leaks nothing new): a space with
+ * restricted pages, or a member without the
  * required role. `userIsSpaceMember` is the resolved "the user has SOME role in
  * this space" boolean (false when SpaceAbilityFactory.createForUser throws
  * NotFound / the user has no role).
@@ -134,12 +141,12 @@ export function decideGitHttpGate(input: {
   hasCredentials: boolean;
   credentialsValid: boolean;
   serviceKind: GitHttpServiceKind | null;
-  gitSyncEnabled: boolean;
-  gitHttpEnabled: boolean;
   spaceExists: boolean;
   spaceGitSyncEnabled: boolean;
   /** The user has SOME role in the space (false = non-member -> 404, not 403). */
   userIsSpaceMember: boolean;
+  /** The space contains pages with page-level access restrictions. */
+  spaceHasRestrictedPages: boolean;
   permissionGranted: boolean;
 }): GitHttpGateDecision {
   if (!input.hasCredentials) return { kind: 'unauthorized' };
@@ -147,8 +154,6 @@ export function decideGitHttpGate(input: {
   if (input.serviceKind === null) return { kind: 'bad-request' };
 
   if (
-    !input.gitSyncEnabled ||
-    !input.gitHttpEnabled ||
     !input.spaceExists ||
     !input.spaceGitSyncEnabled ||
     // A non-member must be indistinguishable from a missing/disabled space: 404,
@@ -157,6 +162,10 @@ export function decideGitHttpGate(input: {
   ) {
     return { kind: 'not-found' };
   }
+
+  // Git-sync refuses any space with page-level restrictions (the vault would
+  // expose restricted bodies to every reader and let a push overwrite them).
+  if (input.spaceHasRestrictedPages) return { kind: 'restricted' };
 
   if (!input.permissionGranted) return { kind: 'forbidden' };
 

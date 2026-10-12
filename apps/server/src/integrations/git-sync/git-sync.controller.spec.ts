@@ -3,7 +3,12 @@
 // guard (non-admin -> ForbiddenException, no orchestrator call), that trigger
 // uses the workspace from request context (never the body), and that status
 // returns the env-derived object.
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  NotFoundException,
+  RequestMethod,
+} from '@nestjs/common';
+import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import {
   WorkspaceCaslAction,
   WorkspaceCaslSubject,
@@ -42,7 +47,6 @@ function build(opts: { cannot?: boolean; spaceFound?: boolean } = {}): Built {
     ]),
   };
   const env: Record<string, AnyMock> = {
-    isGitSyncEnabled: jest.fn(() => true),
     getGitSyncDataDir: jest.fn(() => '/vaults'),
     getGitSyncPollIntervalMs: jest.fn(() => 15000),
     getGitSyncDebounceMs: jest.fn(() => 2000),
@@ -118,6 +122,15 @@ describe('GitSyncController', () => {
   });
 
   describe('status', () => {
+    // POST like the codebase's other JSON reads (route contract for 1.0).
+    it('is served as POST /git-sync/status', () => {
+      const handler = GitSyncController.prototype.status;
+      expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(
+        RequestMethod.POST,
+      );
+      expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe('status');
+    });
+
     it('blocks a non-admin: throws ForbiddenException and never reads env', async () => {
       const { controller, env, ability } = build({ cannot: true });
 
@@ -130,7 +143,7 @@ describe('GitSyncController', () => {
         WorkspaceCaslSubject.Settings,
       );
       // The admin guard short-circuits before the env-derived status is built.
-      expect(env.isGitSyncEnabled).not.toHaveBeenCalled();
+      expect(env.getGitSyncDataDir).not.toHaveBeenCalled();
     });
 
     it('admin: returns the env-derived status object + the per-space health of the context workspace', async () => {
@@ -141,7 +154,6 @@ describe('GitSyncController', () => {
       // Per-space health is scoped to the workspace from the request context.
       expect(orchestrator.getSpaceStatuses).toHaveBeenCalledWith('ctx-ws');
       expect(res).toEqual({
-        enabled: true,
         dataDir: '/vaults',
         pollIntervalMs: 15000,
         debounceMs: 2000,

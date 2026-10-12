@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 
-import { mergeXmlFragments3Way } from '../../../collaboration/merge/yjs-body-merge';
+import { mergeXmlFragments3WayWithStats } from '../../../collaboration/merge/yjs-body-merge';
 
 /**
  * Convergence repro for the git-ingest "silent revert" data-loss bug.
@@ -107,7 +107,7 @@ describe('git-ingest convergence with an open editor', () => {
     };
     server.on('update', onUpdate);
     server.transact(() =>
-      mergeXmlFragments3Way(
+      mergeXmlFragments3WayWithStats(
         server.getXmlFragment('default'),
         targetFrag,
         baseFrag,

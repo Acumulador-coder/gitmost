@@ -8,7 +8,9 @@ import type {
   parseDocmostMarkdown as parseDocmostMarkdownFn,
   markdownToProseMirror as markdownToProseMirrorFn,
   sanitizeTitle as sanitizeTitleFn,
-  docsCanonicallyEqual as docsCanonicallyEqualFn,
+  PUSH_BUDGET as PUSH_BUDGET_VALUE,
+  DEFAULT_BRANCH as DEFAULT_BRANCH_VALUE,
+  RECEIVE_REF as RECEIVE_REF_VALUE,
 } from '@docmost/git-sync';
 
 /**
@@ -25,7 +27,9 @@ interface GitSyncModule {
   parseDocmostMarkdown: typeof parseDocmostMarkdownFn;
   markdownToProseMirror: typeof markdownToProseMirrorFn;
   sanitizeTitle: typeof sanitizeTitleFn;
-  docsCanonicallyEqual: typeof docsCanonicallyEqualFn;
+  PUSH_BUDGET: typeof PUSH_BUDGET_VALUE;
+  DEFAULT_BRANCH: typeof DEFAULT_BRANCH_VALUE;
+  RECEIVE_REF: typeof RECEIVE_REF_VALUE;
 }
 
 // The CJS->ESM dynamic-import bridge lives in one shared helper
