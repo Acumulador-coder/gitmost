@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { WorkspaceService } from './workspace.service';
 import { UserRole } from '../../../common/helpers/types/permission';
+import { EventName } from '../../../common/events/event.contants';
 
 // Direct-instantiation unit tests for the privilege/last-owner guards in
 // WorkspaceService.updateWorkspaceUserRole / deactivateUser / deleteUser.
@@ -80,6 +81,10 @@ function buildService(opts?: {
   // dropped when they are deleted.
   const mcpClients = { invalidateUser: jest.fn() };
 
+  // CO-2: the committed deactivation/deletion re-checks the user's open
+  // collaboration documents.
+  const eventEmitter = { emit: jest.fn() };
+
   const service = new WorkspaceService(
     {} as any, // workspaceRepo
     {} as any, // spaceService
@@ -100,6 +105,7 @@ function buildService(opts?: {
     auditService as any, // auditService
     userSessionRepo as any, // userSessionRepo
     mcpClients as any, // mcpClients
+    eventEmitter as any, // eventEmitter
   );
 
   return {
@@ -110,6 +116,7 @@ function buildService(opts?: {
     userSessionRepo,
     trxChain,
     mcpClients,
+    eventEmitter,
   };
 }
 
@@ -313,6 +320,27 @@ describe('WorkspaceService.deactivateUser guards', () => {
     expect(userRepo.updateUser.mock.calls[0][2]).toBe(WORKSPACE_ID);
     expect(userSessionRepo.revokeByUserId).toHaveBeenCalled();
   });
+
+  it('emits COLLAB_ACCESS_CHANGED for the deactivated user after the transaction (CO-2)', async () => {
+    const { service, eventEmitter, userSessionRepo } = buildService({
+      target: { id: 'u-member', role: UserRole.MEMBER },
+    });
+
+    await service.deactivateUser(
+      authUser(UserRole.OWNER),
+      'u-member',
+      WORKSPACE_ID,
+    );
+
+    expect(eventEmitter.emit).toHaveBeenCalledTimes(1);
+    expect(eventEmitter.emit).toHaveBeenCalledWith(
+      EventName.COLLAB_ACCESS_CHANGED,
+      { workspaceId: WORKSPACE_ID, userIds: ['u-member'] },
+    );
+    expect(eventEmitter.emit.mock.invocationCallOrder[0]).toBeGreaterThan(
+      userSessionRepo.revokeByUserId.mock.invocationCallOrder[0],
+    );
+  });
 });
 
 describe('WorkspaceService.deleteUser guards', () => {
@@ -383,6 +411,21 @@ describe('WorkspaceService.deleteUser guards', () => {
     expect(mcpClients.invalidateUser).toHaveBeenCalledWith(
       WORKSPACE_ID,
       'u-member',
+    );
+  });
+
+  it('emits COLLAB_ACCESS_CHANGED for the deleted user (CO-2)', async () => {
+    const { service, eventEmitter } = buildService({
+      target: { id: 'u-member', role: UserRole.MEMBER },
+      ownerCount: 2,
+    });
+
+    await service.deleteUser(authUser(UserRole.OWNER), 'u-member', WORKSPACE_ID);
+
+    expect(eventEmitter.emit).toHaveBeenCalledTimes(1);
+    expect(eventEmitter.emit).toHaveBeenCalledWith(
+      EventName.COLLAB_ACCESS_CHANGED,
+      { workspaceId: WORKSPACE_ID, userIds: ['u-member'] },
     );
   });
 });

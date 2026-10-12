@@ -7,7 +7,7 @@ import PageHeader from "@/features/page/components/header/page-header.tsx";
 import { extractPageSlugId } from "@/lib";
 import { useGetSpaceBySlugQuery } from "@/features/space/queries/space-query.ts";
 import { useTranslation } from "react-i18next";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { EmptyState } from "@/components/ui/empty-state.tsx";
 import { IconAlertTriangle, IconFileOff } from "@tabler/icons-react";
 import { Button, Skeleton } from "@mantine/core";
@@ -65,6 +65,8 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
     isLoading,
     isError,
     error,
+    isFetching,
+    isFetchedAfterMount,
   } = usePageQuery({ pageId: pageSlugId });
   const { data: space } = useGetSpaceBySlugQuery(page?.space?.slug);
 
@@ -94,7 +96,32 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   // Move / Delete / the edit toggle to a user the server has already demoted,
   // until `/pages/info` lands. The chrome (title, icon, breadcrumbs) still paints
   // instantly from the cache; only the edit affordances wait for the network.
-  const canEdit = derivePageChromeCanEdit(livePage);
+  //
+  // CL-4 — the same rule covers the QUERY cache: a page opened again within its
+  // cache time renders at once from data fetched on the previous visit, and on
+  // a warm collab return the body is live at once too, so those cached rights
+  // would make it editable before anything re-checked them. Edit rights
+  // therefore wait for THIS view's own fetch of the page (usePageQuery
+  // refetches on a mount and on a switch to the page's key) to succeed; from
+  // then on they follow the live data, so a later background refetch does not
+  // flip the page read-only. Every switch to a page starts unchecked, also
+  // when the fetch of the page in between never landed.
+  const [editRights, setEditRights] = useState({ pageSlugId, checked: false });
+  if (editRights.pageSlugId !== pageSlugId) {
+    setEditRights({ pageSlugId, checked: false });
+  } else if (
+    !editRights.checked &&
+    livePage &&
+    isFetchedAfterMount &&
+    !isFetching &&
+    !isError
+  ) {
+    setEditRights({ pageSlugId, checked: true });
+  }
+  const canEdit =
+    editRights.pageSlugId === pageSlugId &&
+    editRights.checked &&
+    derivePageChromeCanEdit(livePage);
   // Comment rights are derived from whatever page the query holds (the previous
   // page included, under keepPreviousData).
   const canComment =

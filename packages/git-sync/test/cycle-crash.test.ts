@@ -87,6 +87,60 @@ describe("runCycle — a cycle cut off", () => {
     expect(h.pages[0].text).toBe("alpha GIT\n\nmiddle\n\nomega DOC");
   });
 
+  it("an abort between the apply's page operations stops the cycle with a CycleAbortedError; the next cycle converges", async () => {
+    if (!available) return;
+    const h = await setup();
+    await h.human(async (w) => {
+      await writeFile(join(w, "One.md"), "one\n", "utf8");
+      await writeFile(join(w, "Two.md"), "two\n", "utf8");
+    });
+    const heads = await h.heads();
+    const controller = new AbortController();
+    const create = h.client.createPage.getMockImplementation()!;
+    h.client.createPage.mockImplementationOnce(async (...args: Parameters<typeof create>) => {
+      const res = await create(...args);
+      controller.abort(new Error("the space lock was lost"));
+      return res;
+    });
+
+    await expect(h.cycle(h.vault, controller.signal)).rejects.toMatchObject({
+      name: "CycleAbortedError",
+      message: expect.stringMatching(/^git-sync stopped .*: the space lock was lost$/),
+    });
+    // Stopped after the first create: the second page was never sent, no ref moved.
+    expect(h.pages.map((p) => p.title).sort()).toEqual(["One", "Page"]);
+    expect(await h.heads()).toBe(heads);
+
+    await h.cycle();
+
+    // The first create is adopted, not made twice.
+    expect(h.pages.map((p) => p.title).sort()).toEqual(["One", "Page", "Two"]);
+    expect(Object.keys(await h.mainFiles()).sort()).toEqual(["One.md", "Page.md", "Two.md"]);
+  });
+
+  it("an abort during the export's conversions stops the cycle with a CycleAbortedError before any ref moves", async () => {
+    if (!available) return;
+    const h = await setup();
+    const heads = await h.heads();
+    h.pages[0].text = "alpha DOC\n\nmiddle\n\nomega";
+    h.pages[0].updatedAt = T1;
+    const controller = new AbortController();
+    const get = h.client.getPageJson.getMockImplementation()!;
+    h.client.getPageJson.mockImplementationOnce(async (id: string) => {
+      controller.abort(new Error("the cycle deadline passed"));
+      return get(id);
+    });
+
+    await expect(h.cycle(h.vault, controller.signal)).rejects.toMatchObject({
+      name: "CycleAbortedError",
+    });
+    expect(await h.heads()).toBe(heads);
+
+    await h.cycle();
+
+    expect((await h.mainFiles())["Page.md"]).toContain("alpha DOC");
+  });
+
   it("both sides rename the page and git edits it: git's title and one file", async () => {
     if (!available) return;
     const h = await setup();

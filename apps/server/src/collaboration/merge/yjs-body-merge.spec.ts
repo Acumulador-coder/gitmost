@@ -2,7 +2,6 @@ import * as Y from 'yjs';
 
 import {
   mergeXmlFragments,
-  mergeXmlFragments3Way,
   mergeXmlFragments3WayWithStats,
   cloneXmlNode,
   diffBlocks,
@@ -144,7 +143,7 @@ describe('yjs-body-merge', () => {
     });
   });
 
-  describe('mergeXmlFragments3Way', () => {
+  describe('mergeXmlFragments3WayWithStats', () => {
     it('keeps a human edit to one block while applying a git change to another (3-way)', () => {
       // base (last synced): [a, b, c]. Human edited block 0 in the live doc; git
       // changed block 2 in the incoming file. 3-way must keep BOTH — the 2-way
@@ -158,7 +157,7 @@ describe('yjs-body-merge', () => {
 
       const humanBlock = liveFrag.get(0); // the human's live instance
       live.transact(() =>
-        mergeXmlFragments3Way(liveFrag, targetFrag, baseFrag),
+        mergeXmlFragments3WayWithStats(liveFrag, targetFrag, baseFrag).applied,
       );
 
       // Human's block preserved as the SAME instance; git's change applied.
@@ -175,7 +174,7 @@ describe('yjs-body-merge', () => {
       const targetFrag = buildFragment(target, ['a', 'GIT', 'c']);
 
       live.transact(() =>
-        mergeXmlFragments3Way(liveFrag, targetFrag, baseFrag),
+        mergeXmlFragments3WayWithStats(liveFrag, targetFrag, baseFrag).applied,
       );
       expect(texts(liveFrag)).toEqual(['a', 'GIT', 'c']);
     });
@@ -223,9 +222,33 @@ describe('yjs-body-merge', () => {
       const targetFrag = buildFragment(target, ['a', 'B2']);
 
       live.transact(() =>
-        mergeXmlFragments3Way(liveFrag, targetFrag, baseFrag),
+        mergeXmlFragments3WayWithStats(liveFrag, targetFrag, baseFrag).applied,
       );
       expect(texts(liveFrag)).toEqual(['a', 'B2']);
+    });
+
+    it('one changed block on a 10k-block page: one in-place op, a small update (GL-2)', () => {
+      const paras = Array.from({ length: 10_000 }, (_, i) => `paragraph ${i}`);
+      const edited = paras.slice();
+      edited[5_000] = 'paragraph 5000, edited in git';
+      const live = new Y.Doc();
+      const liveFrag = buildFragment(live, paras);
+      const baseFrag = buildFragment(new Y.Doc(), paras);
+      const targetFrag = buildFragment(new Y.Doc(), edited);
+      const updates: Uint8Array[] = [];
+      live.on('update', (u: Uint8Array) => updates.push(u));
+
+      const result = mergeXmlFragments3WayWithStats(
+        liveFrag,
+        targetFrag,
+        baseFrag,
+      );
+
+      expect(result).toEqual({ applied: 1, conflicts: 0 });
+      expect(texts(liveFrag)[5_000]).toBe('paragraph 5000, edited in git');
+      // One transaction carrying only the changed text range.
+      expect(updates).toHaveLength(1);
+      expect(updates[0].byteLength).toBeLessThan(200);
     });
   });
 
@@ -234,7 +257,8 @@ describe('yjs-body-merge', () => {
   // carries no block ids. With `id` in the comparison key an unchanged live block
   // would never match its git twin, and an unanchored incoming block (content at
   // the TOP of the page) would be re-added every cycle. These tests model that
-  // id-asymmetry and assert the reconciliation is idempotent.
+  // id-asymmetry and assert the reconciliation is idempotent; the markdown
+  // projection `blockKey` carries no `id`.
   describe('idempotent reconciliation with live block ids (start-of-doc dup)', () => {
     // Build a fragment from block specs. `id` is set only when provided, mirroring
     // the live doc (ids present) vs a git-parsed body (ids absent).
@@ -287,7 +311,7 @@ describe('yjs-body-merge', () => {
 
       // First sync: the top block is added once.
       live.transact(() =>
-        mergeXmlFragments3Way(liveFrag, buildTarget(), baseFrag),
+        mergeXmlFragments3WayWithStats(liveFrag, buildTarget(), baseFrag).applied,
       );
       expect(textsOf(liveFrag)).toEqual([
         'TOPDUP',
@@ -300,7 +324,7 @@ describe('yjs-body-merge', () => {
       // NO-OP — not a second copy of the top block. Before the fix this re-adds
       // 'TOPDUP', growing the doc on every cycle.
       live.transact(() =>
-        mergeXmlFragments3Way(liveFrag, buildTarget(), baseFrag),
+        mergeXmlFragments3WayWithStats(liveFrag, buildTarget(), baseFrag).applied,
       );
       expect(textsOf(liveFrag)).toEqual([
         'TOPDUP',
@@ -328,14 +352,14 @@ describe('yjs-body-merge', () => {
       const before = liveFrag.toArray();
       let applied = -1;
       live.transact(() => {
-        applied = mergeXmlFragments3Way(
+        applied = mergeXmlFragments3WayWithStats(
           liveFrag,
           buildDoc(new Y.Doc(), [
             { tag: 'heading', text: 'Title' },
             { tag: 'paragraph', text: 'Body.' },
           ]),
           baseFrag,
-        );
+        ).applied;
       });
       expect(applied).toBe(0);
       // Same live block instances (ids preserved) — nothing recreated.

@@ -45,7 +45,6 @@ describe('AiChatService beginRun failure (#486)', () => {
       // call; chatId present -> the existing-chat path.
       body: { chatId: 'chat1', messages: [] } as never,
       res: res as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       write,

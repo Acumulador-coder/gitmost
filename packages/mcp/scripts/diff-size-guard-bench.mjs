@@ -44,9 +44,7 @@
 
 import { Node } from "@tiptap/pm/model";
 import { ChangeSet, simplifyChanges } from "@tiptap/pm/changeset";
-// Subpath, NOT the "@docmost/editor-ext" barrel: the barrel drags @tiptap/react ->
-// prosemirror-view -> React into this package (see the note in src/lib/diff.ts).
-import { recreateTransform as recreateNew } from "@docmost/editor-ext/dist/lib/recreate-transform/index.js";
+import { recreateTransform as recreateNew } from "@docmost/editor-ext";
 import { docmostSchema } from "../build/lib/docmost-schema.js";
 
 // The caps this script calibrates (keep in sync with src/lib/diff.ts).

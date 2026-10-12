@@ -259,6 +259,7 @@ export default function PageEditor({
       pageId,
       slugId,
       scopeKey: ydocScopeKey,
+      userId: currentUser?.user?.id,
       collaborationURL,
     });
     if (s !== boundSession) setBoundSession(s);

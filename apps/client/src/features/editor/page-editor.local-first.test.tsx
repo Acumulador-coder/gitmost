@@ -191,6 +191,16 @@ vi.mock("@hocuspocus/provider", async () => {
       this.isSynced = false;
       this.opts.onClose?.({ event });
     }
+    /**
+     * test driver: the server answered the document's authentication with
+     * permission-denied and this reason. Like the real provider's
+     * permissionDeniedHandler, it calls `onAuthenticationFailed`, then resets
+     * `isAuthenticated`.
+     */
+    emitAuthenticationFailed(reason: string) {
+      this.opts.onAuthenticationFailed?.({ reason });
+      this.isAuthenticated = false;
+    }
   }
 
   return {
@@ -290,7 +300,8 @@ vi.mock("@/main.tsx", async () => {
   return { queryClient: new QueryClient() };
 });
 
-vi.mock("@/features/auth/queries/auth-query.tsx", () => ({
+vi.mock("@/features/auth/queries/auth-query.tsx", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   useCollabToken: () => ({
     data: { token: "test-token" },
     refetch: vi.fn(async () => ({ data: { token: "test-token" } })),
@@ -331,6 +342,7 @@ import { scopeKeyAtom } from "@/features/page/tree/atoms/open-tree-nodes-atom";
 import {
   resetTombstonesForTests,
   addTombstones,
+  canOpenLocalYdoc,
 } from "./page-ydoc-tombstones";
 import {
   markReconciled,
@@ -352,8 +364,22 @@ import {
   releasePageSession,
 } from "./page-session-cache";
 import { getCollabToken } from "@/features/auth/services/auth-service";
+import { collabTokenQueryKey } from "@/features/auth/queries/auth-query.tsx";
 import { FIVE_MINUTES } from "@/lib/constants.ts";
 import type { Editor } from "@tiptap/react";
+
+/**
+ * A collab JWT the client can decode (the signature is never checked). `sub`
+ * is the user it was issued for: the session refuses a token of another user.
+ */
+function jwt(exp: number, sub = "u-1"): string {
+  const part = (o: object) =>
+    btoa(JSON.stringify(o))
+      .replace(/=+$/, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+  return `${part({ alg: "none" })}.${part({ exp, sub })}.sig`;
+}
 
 const PAGE_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const PAGE_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -1035,6 +1061,8 @@ describe("Ф7 body states: skeleton vs static vs live (parts 3 + 7)", () => {
   });
 
   it("part 4 — the collab provider is built with a LAZY token CALLBACK (never an empty token at t0)", async () => {
+    const token = jwt(Math.floor(Date.now() / 1000) + 3600);
+    vi.mocked(getCollabToken).mockResolvedValueOnce({ token } as never);
     const store = makeStore();
     render(wrap(store, PAGE_A));
     const provider = lastProvider();
@@ -1044,7 +1072,7 @@ describe("Ф7 body states: skeleton vs static vs live (parts 3 + 7)", () => {
     expect(typeof provider.configuration.token).toBe("function");
     await expect(
       (provider.configuration.token as () => Promise<string>)(),
-    ).resolves.toBe("test-token");
+    ).resolves.toBe(token);
   });
 });
 
@@ -1164,6 +1192,7 @@ describe("#709 warm collab sessions", () => {
       pageId,
       slugId: pageId,
       scopeKey,
+      userId: scopeKey.split(":")[1],
       collaborationURL: COLLAB_URL,
     });
   }
@@ -1184,16 +1213,6 @@ describe("#709 warm collab sessions", () => {
     releasePageSession(s);
     expect(peekWarmSession(s.dbName)).toBe(s);
     return s;
-  }
-
-  /** A JWT the client can decode (the signature is never checked). */
-  function jwt(exp: number): string {
-    const part = (o: object) =>
-      btoa(JSON.stringify(o))
-        .replace(/=+$/, "")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_");
-    return `${part({ alg: "none" })}.${part({ exp })}.sig`;
   }
 
   it("a — 20 mount/unmount cycles of the editor on ONE session restore the awareness / synced / ydoc-destroy listener counts", () => {
@@ -1546,7 +1565,12 @@ describe("#709 warm collab sessions", () => {
       expect(s.remote.sendToken).toHaveBeenCalledTimes(1);
     });
 
-    it("a server CLOSE 'Unauthorized' (code 1000) invalidates the page queries; destroys a parked session, not the active one", () => {
+    it("a server CLOSE 'Unauthorized' (code 1000) destroys a parked session and evicts its local copy; the active one stays and its page queries are invalidated", () => {
+      // evictPageYdoc resolves the scope from the default store.
+      getDefaultStore().set(currentUserAtom, {
+        user: { id: "u-1", name: "Tester", settings: {} },
+        workspace: { id: "w-1" },
+      } as never);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const invalidate = vi.spyOn(queryClient, "invalidateQueries");
       const open = (pageId: string) =>
@@ -1555,6 +1579,7 @@ describe("#709 warm collab sessions", () => {
           pageId,
           slugId: `slug-${pageId}`,
           scopeKey: SCOPE,
+          userId: "u-1",
           collaborationURL: COLLAB_URL,
         });
       const parked = open(PAGE_A);
@@ -1564,11 +1589,11 @@ describe("#709 warm collab sessions", () => {
       syncSession(active, "read-write");
 
       (parked.remote as any).emitClose({ code: 1000, reason: "Unauthorized" });
-      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["pages", PAGE_A] });
-      expect(invalidate).toHaveBeenCalledWith({
-        queryKey: ["pages", `slug-${PAGE_A}`],
-      });
       expect(parked.alive).toBe(false);
+      // Evicted: tombstoned, so no later visit reopens the local copy until a
+      // successful page fetch proves access again.
+      expect(canOpenLocalYdoc(parked.dbName)).toBe(false);
+      expect(invalidate).not.toHaveBeenCalled();
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Unauthorized"),
         { pageId: PAGE_A },
@@ -1580,6 +1605,74 @@ describe("#709 warm collab sessions", () => {
         queryKey: ["pages", `slug-${PAGE_B}`],
       });
       expect(active.alive).toBe(true);
+    });
+
+    describe("authentication refused with a valid token", () => {
+      function openWithValidToken(pageId: string): PageSession {
+        queryClient.setQueryData(collabTokenQueryKey("u-1"), {
+          token: jwt(Math.floor(Date.now() / 1000) + 3600),
+        });
+        return acquirePageSession({
+          dbName: pageYdocDbName(SCOPE, pageId),
+          pageId,
+          slugId: `slug-${pageId}`,
+          scopeKey: SCOPE,
+          userId: "u-1",
+          collaborationURL: COLLAB_URL,
+        });
+      }
+
+      beforeEach(() => {
+        // evictPageYdoc resolves the scope from the default store.
+        getDefaultStore().set(currentUserAtom, {
+          user: { id: "u-1", name: "Tester", settings: {} },
+          workspace: { id: "w-1" },
+        } as never);
+      });
+
+      it("reason 'access-denied' (a genuine denial) destroys a parked session and evicts its local copy; the active one's page queries are invalidated", () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+        const parked = openWithValidToken(PAGE_A);
+        syncSession(parked, "read-write");
+        releasePageSession(parked);
+        const active = openWithValidToken(PAGE_B);
+        syncSession(active, "read-write");
+
+        (parked.remote as any).emitAuthenticationFailed("access-denied");
+        expect(parked.alive).toBe(false);
+        expect(canOpenLocalYdoc(parked.dbName)).toBe(false);
+        expect(invalidate).not.toHaveBeenCalled();
+
+        (active.remote as any).emitAuthenticationFailed("access-denied");
+        expect(invalidate).toHaveBeenCalledWith({
+          queryKey: ["pages", PAGE_B],
+        });
+        expect(active.alive).toBe(true);
+      });
+
+      it("any other reason (a server failure, e.g. the DB down during a reconnect) leaves the parked session and its local copy alone, ERROR logged", () => {
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+        const parked = openWithValidToken(PAGE_A);
+        syncSession(parked, "read-write");
+        releasePageSession(parked);
+        const active = openWithValidToken(PAGE_B);
+        syncSession(active, "read-write");
+
+        (parked.remote as any).emitAuthenticationFailed("permission-denied");
+        (active.remote as any).emitAuthenticationFailed("permission-denied");
+
+        expect(parked.alive).toBe(true);
+        expect(parked.socket.destroy).not.toHaveBeenCalled();
+        expect(canOpenLocalYdoc(parked.dbName)).toBe(true);
+        expect(active.alive).toBe(true);
+        expect(invalidate).not.toHaveBeenCalled();
+        expect(error).toHaveBeenCalledWith(expect.any(String), {
+          pageId: PAGE_A,
+          reason: "permission-denied",
+        });
+      });
     });
 
     it("a socket closed with { code: 4401, reason: 'Unauthorized' } does not take that path", () => {
@@ -1598,7 +1691,9 @@ describe("#709 warm collab sessions", () => {
       const fresh = jwt(now + 3600);
       vi.mocked(getCollabToken).mockClear();
       vi.mocked(getCollabToken).mockResolvedValueOnce({ token: fresh } as never);
-      queryClient.setQueryData(["collab-token"], { token: jwt(now - 60) });
+      queryClient.setQueryData(collabTokenQueryKey("u-1"), {
+        token: jwt(now - 60),
+      });
       const s = acquire(PAGE_A);
       const token = s.remote.configuration.token as () => Promise<string>;
 

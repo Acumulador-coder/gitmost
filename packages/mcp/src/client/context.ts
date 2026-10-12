@@ -1024,7 +1024,9 @@ export abstract class DocmostClientContext {
     // applied by cast (no runtime guard): the guarantee is that this seam is the
     // only place a `PageId` is produced, so every branded value went through the
     // UUID/resolve check above.
-    if (isUuid(pageId)) return pageId as PageId;
+    // Lower-cased: the collab server accepts only the canonical lower-case
+    // `page.<uuid>` document name, and isUuid also matches upper case.
+    if (isUuid(pageId)) return pageId.toLowerCase() as PageId;
     const cached = this.pageIdCache.get(pageId);
     if (cached) return cached as PageId;
     const data = await this.getPageRaw(pageId);

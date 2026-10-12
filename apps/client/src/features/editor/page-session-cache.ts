@@ -3,6 +3,7 @@ import { IndexeddbPersistence } from "y-indexeddb";
 import {
   HocuspocusProvider,
   HocuspocusProviderWebsocket,
+  onAuthenticationFailedParameters,
   onCloseParameters,
   onStatelessParameters,
   onSyncedParameters,
@@ -11,7 +12,10 @@ import { notifications } from "@mantine/notifications";
 import i18n from "i18next";
 import { jwtDecode } from "jwt-decode";
 import { queryClient } from "@/main.tsx";
-import { getCollabToken } from "@/features/auth/services/auth-service";
+import {
+  collabTokenQueryKey,
+  getCollabTokenForUser,
+} from "@/features/auth/queries/auth-query.tsx";
 import { ICollabToken } from "@/features/auth/types/auth.types";
 import { IPage } from "@/features/page/types/page.types.ts";
 import {
@@ -21,6 +25,7 @@ import {
 } from "@/features/page-history/version-messages";
 import { isYdocBodyNonEmpty } from "@/features/editor/local-first-body";
 import {
+  evictPageYdoc,
   pageYdocDbName,
   pageYdocRoomName,
   registerPageSessionDestroyHooks,
@@ -113,11 +118,19 @@ function collabTokenExpired(token: string | undefined): boolean {
   }
 }
 
-// Parallel calls share one request.
-function fetchCollabToken(): Promise<ICollabToken> {
+// The reason of the server's permission-denied auth message for a GENUINE
+// denial of the page (ACCESS_DENIED_REASON in the server's
+// authentication.extension.ts; authentication.token-sync.spec pins it on the
+// wire). Hocuspocus answers any other server failure while authenticating or
+// loading the document with permission-denied too, under its default reason
+// "permission-denied": that one is not a denial.
+const ACCESS_DENIED_REASON = "access-denied";
+
+// Parallel calls share one request. Keyed by the session's user (CL-3).
+function fetchCollabToken(userId: string | undefined): Promise<ICollabToken> {
   return queryClient.fetchQuery({
-    queryKey: ["collab-token"],
-    queryFn: getCollabToken,
+    queryKey: collabTokenQueryKey(userId),
+    queryFn: () => getCollabTokenForUser(userId),
     staleTime: 0,
   });
 }
@@ -133,6 +146,8 @@ export function acquirePageSession(opts: {
   pageId: string;
   slugId: string | undefined;
   scopeKey: string;
+  // The signed-in user the session authenticates as (the user of `scopeKey`).
+  userId: string | undefined;
   collaborationURL: string;
 }): PageSession {
   const existing = sessions.get(opts.dbName);
@@ -190,6 +205,12 @@ export function destroyPageSession(dbName: string): void {
 
 export function destroyAllPageSessions(): void {
   for (const s of [...sessions.values()]) destroySession(s);
+}
+
+export function destroyParkedPageSessions(): void {
+  for (const s of [...sessions.values()]) {
+    if (s.holder === "parked") destroySession(s);
+  }
 }
 
 // Evict the longest-parked sessions until both limits hold. Active sessions
@@ -257,12 +278,14 @@ function createSession({
   pageId,
   slugId,
   scopeKey,
+  userId,
   collaborationURL,
 }: {
   dbName: string;
   pageId: string;
   slugId: string | undefined;
   scopeKey: string;
+  userId: string | undefined;
   collaborationURL: string;
 }): PageSession {
   // #640, invariant 1 — the DB name is SCOPE-NAMESPACED, the collab ROOM name
@@ -400,17 +423,58 @@ function createSession({
     }
   };
 
-  const onAuthenticationFailedHandler = () => {
+  // The server refused this page on this session: a permission re-check closed
+  // the document, or it denied the document to a valid token. A PARKED session
+  // goes at once, together with its local ydoc (the eviction tombstones it; a
+  // later successful page fetch lifts the tombstone): it must not keep syncing,
+  // and writing to disk, a page the user may no longer open. The ACTIVE one
+  // stays with the mounted page, whose refetch decides — a 403/404 evicts it
+  // (and destroys this session), a 200 with canEdit=false makes the body
+  // read-only; the active socket, receiving no messages, reconnects by itself
+  // (~30 s) and the server authorizes the document with the new rights.
+  const onAccessRefused = (cause: string) => {
+    console.warn(`[page-session-cache] ${cause}`, { pageId });
+    if (session.holder === "parked") {
+      destroySession(session);
+      evictPageYdoc(pageId).catch((err) => {
+        console.error(
+          "[page-session-cache] evicting the local copy of a refused page failed",
+          { pageId, err },
+        );
+      });
+      return;
+    }
+    queryClient.invalidateQueries({ queryKey: ["pages", pageId] });
+    queryClient.invalidateQueries({ queryKey: ["pages", slugId] });
+  };
+
+  const onAuthenticationFailedHandler = (
+    data: onAuthenticationFailedParameters,
+  ) => {
     // Late auth failure after teardown: the socket is already destroyed, so
     // reconnecting it would resurrect a dead provider.
     if (!session.alive) return;
     // A missing, unparseable or expired token triggers a refresh, so the
     // editor reconnects even when the initial token fetch failed.
-    const token = queryClient.getQueryData<ICollabToken>([
-      "collab-token",
-    ])?.token;
-    if (!collabTokenExpired(token)) return;
-    fetchCollabToken()
+    const token = queryClient.getQueryData<ICollabToken>(
+      collabTokenQueryKey(userId),
+    )?.token;
+    if (!collabTokenExpired(token)) {
+      if (data?.reason === ACCESS_DENIED_REASON) {
+        onAccessRefused("the server denied the page's collab document");
+        return;
+      }
+      // Not a denial: the server failed to authenticate the token or to load
+      // the document (an outage looks like this). The session and its local
+      // copy stay; the socket, receiving no messages, reconnects by itself
+      // (~30 s) and the server authenticates the document afresh.
+      console.error(
+        "[page-session-cache] the server failed to open the page's collab document; keeping the session and its local copy",
+        { pageId, reason: data?.reason },
+      );
+      return;
+    }
+    fetchCollabToken(userId)
       .then((result) => {
         if (!session.alive || !result?.token) return;
         socket.disconnect();
@@ -434,21 +498,13 @@ function createSession({
     notify();
     // A server CLOSE message carries only the reason string — the provider
     // fills in code 1000 — while a socket closed by the server arrives with
-    // its real code. So this is the server refusing the document on THIS
-    // connection: the re-check of permissions on a warm return (onTokenSync)
-    // found access revoked or downgraded.
+    // its real code. "Unauthorized" is the server refusing the document on
+    // THIS connection: the re-check of permissions on a warm return
+    // (onTokenSync) found access revoked or downgraded.
     if (event?.code !== 1000 || event?.reason !== "Unauthorized") return;
-    console.warn(
-      "[page-session-cache] the server closed the page's collab document as Unauthorized",
-      { pageId },
+    onAccessRefused(
+      "the server closed the page's collab document as Unauthorized",
     );
-    // Refetch the page: a 403/404 evicts it (and destroys this session), a
-    // 200 with canEdit=false makes the body read-only. The active session is
-    // not recreated — its socket, receiving no messages, reconnects by itself
-    // (~30 s) and the server authorizes the document with the new rights.
-    queryClient.invalidateQueries({ queryKey: ["pages", pageId] });
-    queryClient.invalidateQueries({ queryKey: ["pages", slugId] });
-    if (session.holder === "parked") destroySession(session);
   };
 
   const remote = createStep(
@@ -471,11 +527,11 @@ function createSession({
         // first warm return after the token expired (24 h) would otherwise
         // turn the permission re-check into a false "revoked".
         token: async () => {
-          const token = queryClient.getQueryData<ICollabToken>([
-            "collab-token",
-          ])?.token;
+          const token = queryClient.getQueryData<ICollabToken>(
+            collabTokenQueryKey(userId),
+          )?.token;
           if (!collabTokenExpired(token)) return token;
-          return (await fetchCollabToken())?.token;
+          return (await fetchCollabToken(userId))?.token;
         },
         onAuthenticationFailed: onAuthenticationFailedHandler,
         onSynced: onSyncedHandler,
@@ -506,6 +562,17 @@ function createSession({
       };
     },
   };
+
+  // CL-5 — while parked, every update applied to the doc (remote edits
+  // arriving in the background, a late local load) grows it: add the update's
+  // size — an upper bound of the encoded state's growth, without re-encoding
+  // the doc — and re-apply the budget, so the parked set cannot grow past
+  // MAX_PARKED_ENCODED_BYTES after it was measured at park time.
+  ydoc.on("update", (update: Uint8Array) => {
+    if (!session.alive || session.holder !== "parked") return;
+    session.encodedBytes += update.byteLength;
+    queueMicrotask(enforceParkedBudget);
+  });
 
   if (local) {
     local.on("synced", onLocalSyncedHandler);
@@ -547,4 +614,5 @@ function createSession({
 registerPageSessionDestroyHooks({
   destroyPageSession,
   destroyAllPageSessions,
+  destroyParkedPageSessions,
 });

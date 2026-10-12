@@ -55,6 +55,7 @@ describe('WorkspaceService.update — htmlEmbed toggle persistence (real code)',
       auditService as any, // auditService
       {} as any, // userSessionRepo
       {} as any, // mcpClients
+      {} as any, // eventEmitter
     );
 
     return { service, workspaceRepo, updateSetting, auditService };

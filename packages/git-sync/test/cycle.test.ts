@@ -196,4 +196,75 @@ describe("runCycle (composition)", () => {
     expect(removed).toEqual(["Deleted.md"]);
     expect(res.pull?.deleted).toBe(1);
   });
+
+  // A page whose export fails never reaches git while the cycle succeeds: the
+  // cycle result carries the count and the first failure, and the cycle WARNs
+  // them (AGENTS invariant 10).
+  it("reports a page whose conversion failed in the cycle result and through warn", async () => {
+    const goodId = "019f2500-0000-7000-8000-0000000000a1";
+    const badId = "019f2500-0000-7000-8000-0000000000b1";
+    const vault = fakeVault();
+    const warn = vi.fn();
+    const deps = baseDeps(vault, {
+      warn,
+      client: {
+        ...baseDeps(vault).client,
+        listSpaceTree: vi.fn(async () => ({
+          pages: [
+            { id: goodId, slugId: "good", title: "Good", parentPageId: null, hasChildren: false },
+            { id: badId, slugId: "bad", title: "Bad", parentPageId: null, hasChildren: false },
+          ],
+          complete: true,
+        })),
+        getPageJson: vi.fn(async (pageId: string) => ({
+          id: pageId,
+          slugId: pageId === badId ? "bad" : "good",
+          title: pageId === badId ? "Bad" : "Good",
+          parentPageId: null,
+          spaceId: "space-1",
+          updatedAt: "2026-06-20T00:00:00.000Z",
+          // A node the converter has no markdown for: the export throws.
+          content:
+            pageId === badId
+              ? { type: "doc", content: [{ type: "noSuchNode" }] }
+              : {
+                  type: "doc",
+                  content: [{ type: "paragraph", content: [{ type: "text", text: "ok" }] }],
+                },
+        })),
+      } as any,
+    });
+
+    const res = await runCycle(deps);
+
+    expect(res.ran).toBe(true);
+    expect(res.pull).toMatchObject({
+      written: 1,
+      failures: 1,
+      firstFailure: {
+        pageId: badId,
+        error: expect.stringContaining('unknown node type "noSuchNode"'),
+      },
+    });
+    // Only the good page was stored for the export tree.
+    expect(vault.hashObject).toHaveBeenCalledTimes(1);
+    expect(vault.hashObject.mock.calls[0][0]).toContain(goodId);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        new RegExp(
+          `^space space-1: the export could not place 1 page\\(s\\) in the vault ` +
+            `\\(retried next cycle\\); first: page ${badId}: .*noSuchNode`,
+        ),
+      ),
+    );
+  });
+
+  it("reports no export failure when every page was placed", async () => {
+    const vault = fakeVault();
+    const warn = vi.fn();
+    const res = await runCycle(baseDeps(vault, { warn }));
+
+    expect(res.pull).toEqual({ written: 0, deleted: 0, failures: 0 });
+    expect(warn).not.toHaveBeenCalled();
+  });
 });

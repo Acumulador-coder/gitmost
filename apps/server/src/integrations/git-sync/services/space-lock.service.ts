@@ -8,9 +8,32 @@ import {
 } from '../git-sync.constants';
 
 /**
+ * Thrown (and used as the abort reason) when a locked space operation outlives
+ * its wall-clock deadline (`withSpaceLock`'s `deadlineMs`).
+ */
+export class GitSyncDeadlineError extends Error {
+  constructor(
+    public readonly spaceId: string,
+    public readonly deadlineMs: number,
+  ) {
+    super(
+      `git-sync: space ${spaceId}: the locked operation exceeded its ` +
+        `${deadlineMs} ms deadline and was aborted`,
+    );
+    this.name = 'GitSyncDeadlineError';
+  }
+}
+
+/**
  * The per-space lock used by the git-sync control plane: an in-process per-space
  * mutex (no overlapping cycles on one instance) PLUS a Redis leader lock
  * (single writer across replicas).
+ *
+ * KNOWN MULTI-REPLICA GAP: there are no fencing tokens. If a holder's Redis key
+ * lapses (TTL expiry while a heartbeat refresh failed), another replica can
+ * acquire it while the first holder is still running; the first holder's next
+ * refresh CAS-misses and aborts its signal, but writes already in flight are not
+ * rejected by the store. Deployments are single-instance until that is built.
  */
 @Injectable()
 export class SpaceLockService {
@@ -18,18 +41,8 @@ export class SpaceLockService {
   private readonly redis: Redis;
   /** Unique per process instance — the leader-lock value (CAS on release). */
   private readonly instanceId = randomUUID();
-  /** In-process per-space mutex: spaceIds with a cycle currently running. */
+  /** In-process per-space mutex: spaceIds held (or being entered) on this process. */
   private readonly running = new Set<string>();
-  /**
-   * Process-wide single-writer guard: spaceId -> instanceId of the live holder.
-   * Unlike `running` (scoped to ONE service instance), this is shared by every
-   * SpaceLockService in the process, so even if the Redis lock key lapses
-   * (swallowed heartbeat / TTL expiry) a SECOND holder in the same process
-   * cannot start a concurrent cycle for the same space — it is rejected
-   * 'lock-held'. The cross-PROCESS race is handled by the Redis lock plus
-   * abort-on-refresh-failure (and, as a follow-up, fencing tokens).
-   */
-  private static readonly liveLocks = new Map<string, string>();
 
   constructor(redisService: RedisService) {
     this.redis = redisService.getOrThrow();
@@ -126,12 +139,20 @@ export class SpaceLockService {
    * a cycle should WAIT a moment rather than immediately 503 (under continuous
    * polling most pushes would). The poll cycle passes NO retry (it
    * just skips and the next tick reconciles).
+   *
+   * `deadlineMs` bounds `fn` in wall-clock time. When it passes, the
+   * signal handed to `fn` is aborted with a `GitSyncDeadlineError`, the lease
+   * stops being renewed (so the Redis lock lapses within its TTL even if `fn`
+   * ignores the abort) and this call rejects with that error at once, so the
+   * caller is never blocked by a hung `fn`. The space stays reserved on this
+   * process until `fn` really settles: two writers never share the vault.
    */
   async withSpaceLock<T>(
     spaceId: string,
     fn: (signal: AbortSignal) => Promise<T>,
     options?: {
       acquireRetry?: { timeoutMs: number; baseMs: number; maxMs: number };
+      deadlineMs?: number;
     },
   ): Promise<T | { skipped: 'lock-held' | 'in-progress' }> {
     const retry = options?.acquireRetry;
@@ -145,8 +166,8 @@ export class SpaceLockService {
       // and race acquire(). On any failure this is released before we retry/skip.
       const reservation = this.tryReserveInProcess(spaceId);
       if (reservation) {
-        // Could not even reserve in-process (this instance mid-cycle, or another
-        // live holder in the process). Retry within the bound, else skip.
+        // Could not even reserve in-process (this instance mid-cycle). Retry
+        // within the bound, else skip.
         if (retry && Date.now() < deadline) {
           await this.sleep(this.nextBackoff(attempt++, retry, deadline));
           continue;
@@ -168,19 +189,32 @@ export class SpaceLockService {
         }
         return { skipped: 'lock-held' };
       }
-      // Both locks held — run `fn` under the heartbeat, releasing in `finally`.
-      // Lost-lock signal: a failed/CAS-missed heartbeat refresh aborts this so the
-      // protected fn can stop instead of writing blind after our lock lapsed.
-      const controller = new AbortController();
-      // Heartbeat: periodically (≈ TTL/3) extend the lock's TTL while `fn` runs so
-      // a long push (client-controlled receive-pack + the Docmost cycle) cannot
-      // outlive the fixed TTL and let a concurrent cycle race the vault. The
-      // refresh is CAS-guarded (only extends while WE own it). `.unref()` keeps the
-      // timer from holding the event loop open; it is ALWAYS cleared in `finally`.
-      const heartbeat = setInterval(() => {
-        void this.refreshLock(spaceId, controller);
-      }, Math.max(1, Math.floor(GIT_SYNC_LOCK_TTL_MS / 3)));
-      heartbeat.unref?.();
+      return this.runHeld(spaceId, fn, options?.deadlineMs);
+    }
+  }
+
+  /**
+   * Run `fn` with both locks held, under the lease heartbeat, releasing both in
+   * `finally`. With `deadlineMs`, see `withSpaceLock`.
+   */
+  private runHeld<T>(
+    spaceId: string,
+    fn: (signal: AbortSignal) => Promise<T>,
+    deadlineMs?: number,
+  ): Promise<T> {
+    // Lost-lock signal: a failed/CAS-missed heartbeat refresh (or the deadline)
+    // aborts this so the protected fn can stop instead of writing blind.
+    const controller = new AbortController();
+    // Heartbeat: periodically (≈ TTL/3) extend the lock's TTL while `fn` runs so
+    // a long push (client-controlled receive-pack + the Docmost cycle) cannot
+    // outlive the fixed TTL and let a concurrent cycle race the vault. The
+    // refresh is CAS-guarded (only extends while WE own it). `.unref()` keeps the
+    // timer from holding the event loop open; it is ALWAYS cleared in `finally`.
+    const heartbeat = setInterval(() => {
+      void this.refreshLock(spaceId, controller);
+    }, Math.max(1, Math.floor(GIT_SYNC_LOCK_TTL_MS / 3)));
+    heartbeat.unref?.();
+    const run = (async () => {
       try {
         return await fn(controller.signal);
       } finally {
@@ -188,39 +222,76 @@ export class SpaceLockService {
         await this.release(spaceId);
         this.releaseInProcess(spaceId);
       }
-    }
+    })();
+    if (!deadlineMs) return run;
+
+    return new Promise<T>((resolve, reject) => {
+      const startedAt = Date.now();
+      let expired = false;
+      const timer = setTimeout(() => {
+        expired = true;
+        // Stop renewing the lease: the lock now ends within its TTL however
+        // long `fn` takes to notice the abort.
+        clearInterval(heartbeat);
+        const err = new GitSyncDeadlineError(spaceId, deadlineMs);
+        this.logger.error(
+          `${err.message}; its lock is no longer renewed, and the space stays ` +
+            `busy on this process until the aborted work settles`,
+        );
+        controller.abort(err);
+        reject(err);
+      }, deadlineMs);
+      timer.unref?.();
+      run.then(
+        (value) => {
+          clearTimeout(timer);
+          if (!expired) {
+            resolve(value);
+            return;
+          }
+          this.logger.warn(
+            `git-sync: space ${spaceId}: the operation aborted at its deadline ` +
+              `settled after ${Date.now() - startedAt} ms; the space is free again`,
+          );
+        },
+        (err) => {
+          clearTimeout(timer);
+          if (!expired) {
+            reject(err);
+            return;
+          }
+          this.logger.error(
+            `git-sync: space ${spaceId}: the operation aborted at its deadline ` +
+              `settled after ${Date.now() - startedAt} ms with: ${
+                err instanceof Error ? err.message : String(err)
+              }; the space is free again`,
+            err instanceof Error ? err.stack : undefined,
+          );
+        },
+      );
+    });
   }
 
   /**
    * Synchronously try to reserve the in-process single-writer slot for a space.
-   * Returns a skip sentinel when another holder is live (this instance mid-cycle
-   * -> 'in-progress'; another SpaceLockService in this process -> 'lock-held'),
-   * or `null` when the slot was reserved (caller MUST `releaseInProcess` later).
-   * Both checks + the reservation happen with NO await between them so two
-   * concurrent same-space calls cannot both pass.
+   * Returns a skip sentinel when a writer on this process holds it, or `null`
+   * when the slot was reserved (caller MUST `releaseInProcess` later). The check
+   * and the reservation happen with NO await between them so two concurrent
+   * same-space calls cannot both pass.
    */
   private tryReserveInProcess(
     spaceId: string,
-  ): { skipped: 'lock-held' | 'in-progress' } | null {
+  ): { skipped: 'in-progress' } | null {
     if (this.running.has(spaceId)) {
       return { skipped: 'in-progress' };
     }
-    // Cross-instance, same-process single-writer guard: another live holder (a
-    // different SpaceLockService in this process) is mid-cycle for this space.
-    // This survives a swallowed heartbeat / Redis TTL lapse, so a second writer
-    // in the process cannot race the vault — it is rejected 'lock-held'.
-    if (SpaceLockService.liveLocks.has(spaceId)) {
-      return { skipped: 'lock-held' };
-    }
     this.running.add(spaceId);
-    SpaceLockService.liveLocks.set(spaceId, this.instanceId);
     return null;
   }
 
   /** Release the in-process single-writer slot reserved by tryReserveInProcess. */
   private releaseInProcess(spaceId: string): void {
     this.running.delete(spaceId);
-    SpaceLockService.liveLocks.delete(spaceId);
   }
 
   /**

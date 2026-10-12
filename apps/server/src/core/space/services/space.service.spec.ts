@@ -18,6 +18,7 @@ describe('SpaceService', () => {
       {} as any, // attachmentQueue
       {} as any, // auditService
       {} as any, // environmentService
+      {} as any, // gitSyncRestrictions
     );
   });
 
@@ -35,6 +36,7 @@ describe('SpaceService', () => {
     const buildService = (
       settingsBefore: Record<string, any>,
       gitSyncFlag = true,
+      hasRestrictedPages = false,
     ) => {
       const spaceRepo = {
         findById: jest.fn().mockResolvedValue({
@@ -53,6 +55,9 @@ describe('SpaceService', () => {
         slugExists: jest.fn().mockResolvedValue(false),
       };
       const auditService = { log: jest.fn() };
+      const gitSyncRestrictions = {
+        spaceHasRestrictedPages: jest.fn(async () => hasRestrictedPages),
+      };
 
       const svc = new SpaceService(
         spaceRepo as any,
@@ -64,15 +69,63 @@ describe('SpaceService', () => {
         {} as any, // attachmentQueue
         auditService as any,
         { isGitSyncEnabled: () => gitSyncFlag } as any, // environmentService
+        gitSyncRestrictions as any,
       );
 
       // executeTx is invoked via the imported helper; patch it on the module.
       jest
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         .spyOn(require('@docmost/db/utils'), 'executeTx')
         .mockImplementation(async (_db: any, cb: any) => cb({} as any));
 
-      return { svc, spaceRepo, auditService };
+      return { svc, spaceRepo, auditService, gitSyncRestrictions };
     };
+
+    // git-sync cannot enforce page-level restrictions, so a space holding a
+    // restricted page cannot have sync switched on.
+    it('rejects enabling git sync on a space with restricted pages with a 400 naming the reason, and writes nothing', async () => {
+      const { svc, spaceRepo, auditService, gitSyncRestrictions } =
+        buildService({}, true, true);
+
+      const attempt = svc.updateSpace(
+        { spaceId, gitSyncEnabled: true } as any,
+        workspaceId,
+      );
+      await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+      await expect(attempt).rejects.toThrow(/page-level access restrictions/);
+
+      expect(gitSyncRestrictions.spaceHasRestrictedPages).toHaveBeenCalledWith(
+        spaceId,
+        workspaceId,
+      );
+      expect(spaceRepo.updateGitSyncSettings).not.toHaveBeenCalled();
+      expect(spaceRepo.updateSpace).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalled();
+    });
+
+    it('still lets git sync be switched OFF on a space with restricted pages', async () => {
+      const { svc, spaceRepo, gitSyncRestrictions } = buildService(
+        { gitSync: { enabled: true } },
+        true,
+        true,
+      );
+
+      await svc.updateSpace(
+        { spaceId, gitSyncEnabled: false } as any,
+        workspaceId,
+      );
+
+      expect(
+        gitSyncRestrictions.spaceHasRestrictedPages,
+      ).not.toHaveBeenCalled();
+      expect(spaceRepo.updateGitSyncSettings).toHaveBeenCalledWith(
+        spaceId,
+        workspaceId,
+        'enabled',
+        false,
+        expect.anything(),
+      );
+    });
 
     // GIT_SYNC_ENABLED off: a request carrying the git-sync field is rejected
     // loudly before ANY write (no settings persist, no space update, no audit).

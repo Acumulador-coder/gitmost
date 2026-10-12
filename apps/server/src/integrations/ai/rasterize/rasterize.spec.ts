@@ -20,7 +20,7 @@ import {
 
 // pngjs is present transitively; required (not imported) to avoid needing its
 // type declarations under the strict tsconfig.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { PNG } = require('pngjs');
 
 const CYRILLIC_SVG = [

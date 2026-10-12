@@ -47,8 +47,8 @@ pnpm --filter @docmost/mcp test
 
 - Code comments are written in English.
 - Errors are never swallowed: log the full error and show the user the specific reason.
-- Migrations only add tables and columns; they never drop or rewrite Docmost data. A new migration
-  must sort after the newest one on `develop`.
+- Migrations never drop or rewrite Docmost tables, columns or data; Gitmost's own tables and columns
+  may be dropped once unused. A new migration must sort after the newest one on `develop`.
 - Internal identifiers stay `docmost` (package names, database name, `@docmost/*` aliases) — they keep
   existing Docmost installations compatible. Only the product name is Gitmost.
 

@@ -170,6 +170,19 @@ jobs:
       - name: Build git-sync and mcp
         run: pnpm --filter @docmost/git-sync build && pnpm --filter @docmost/mcp build
 
+      # Same reason as the client typecheck above: ts-jest only checks the files
+      # a spec imports (main.ts is imported by none), so a type error elsewhere
+      # in the server reaches the image build green. tsconfig.json has no
+      # `include`, so src/** AND test/** (the integration specs) are checked.
+      # Below the build steps: tsc reads the workspace packages' .d.ts.
+      - name: Typecheck server
+        run: pnpm --filter server exec tsc --noEmit
+
+      # The server `lint` script runs `eslint --fix`; the gate must report, not
+      # rewrite, so call eslint directly on the same glob.
+      - name: Lint server
+        run: pnpm --filter server exec eslint "{src,apps,libs,test}/**/*.ts"
+
       - name: Run unit tests
         run: pnpm -r test
 
@@ -225,3 +238,144 @@ jobs:
       # and assert the in-app AI-chat wiring matches it.
       - name: Run server tool-spec guard specs
         run: pnpm --filter server exec jest shared-tool-specs.contract tool-tiers ai-chat-tools.service --runInBand
+
+  # The production git-sync path (TP-1): the root-mounted /git smart-HTTP host,
+  # the ESM loader of the built @docmost/git-sync, and a real `git http-backend`
+  # run in no other job — the unit and integration suites mock all three. Boot
+  # the BUILT server with git-sync on and drive it with the live-stand suites in
+  # apps/server/test (clone/push/pull/delete/3-way merge, the auth/authz gate,
+  # the held-lock 503, rename/reparent/delete-cap).
+  git-sync-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: postgresql://docmost:docmost@localhost:5432/docmost
+      REDIS_URL: redis://localhost:6379
+      APP_SECRET: ci-e2e-secret-change-me-min-32-characters
+      APP_URL: http://localhost:3000
+      NODE_ENV: production
+      # The suites' fixtures: the admin they log in as, and the vault root they
+      # assert on (must equal the server's GIT_SYNC_DATA_DIR below).
+      EMAIL: admin@test.local
+      PASSWORD: Test12345!
+      SERVER: http://localhost:3000
+      VAULT_DIR: /tmp/gitmost-vaults
+    services:
+      postgres:
+        # via mirror.gcr.io (see the `test` job).
+        image: mirror.gcr.io/pgvector/pgvector:pg18
+        env:
+          POSTGRES_DB: docmost
+          POSTGRES_USER: docmost
+          POSTGRES_PASSWORD: docmost
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U docmost"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: mirror.gcr.io/library/redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build editor-ext
+        run: pnpm --filter @docmost/editor-ext build
+
+      - name: Build server
+        run: pnpm server:build
+
+      # The server loads the BUILT git-sync engine over the ESM bridge (and mcp
+      # for the embedded /mcp); build/ is gitignored, so build both explicitly.
+      - name: Build git-sync and mcp
+        run: pnpm --filter @docmost/git-sync build && pnpm --filter @docmost/mcp build
+
+      - name: Run migrations
+        run: pnpm --filter ./apps/server migration:latest
+
+      # GIT_SYNC_SERVICE_USER_ID is required at boot once git-sync is on, and
+      # the user only exists after setup: boot once with git-sync off, create
+      # the admin, take its id as the service user, stop.
+      - name: Seed the admin (first boot, git-sync off)
+        working-directory: apps/server
+        env:
+          DB_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          node dist/main > /tmp/server-seed.log 2>&1 &
+          SERVER_PID=$!
+          for i in $(seq 1 60); do
+            curl -fsS "$SERVER/api/health" > /dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -fsS "$SERVER/api/health" > /dev/null
+          curl -fsS -X POST "$SERVER/api/auth/setup" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\":\"E2E Admin\",\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"workspaceName\":\"E2E\"}" \
+            > /dev/null
+          ADMIN_ID=$(docker exec "$DB_CONTAINER" psql -U docmost -d docmost -tAc \
+            "select id from users where email = '$EMAIL'" | tr -d '[:space:]')
+          test -n "$ADMIN_ID"
+          echo "GIT_SYNC_SERVICE_USER_ID=$ADMIN_ID" >> "$GITHUB_ENV"
+          kill "$SERVER_PID"
+          wait "$SERVER_PID" || true
+
+      - name: Start the server with git-sync on
+        working-directory: apps/server
+        env:
+          GIT_SYNC_ENABLED: 'true'
+          GIT_SYNC_HTTP_ENABLED: 'true'
+          GIT_SYNC_DATA_DIR: /tmp/gitmost-vaults
+        run: |
+          node dist/main > /tmp/server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS "$SERVER/api/health" > /dev/null 2>&1; then
+              echo "Server is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Server did not become healthy in time"
+          exit 1
+
+      - name: Run git-sync e2e
+        env:
+          DB_CONTAINER: ${{ job.services.postgres.id }}
+          DB_USER: docmost
+          DB_NAME: docmost
+        run: bash apps/server/test/git-sync-e2e.sh
+
+      - name: Run git-sync advanced e2e
+        env:
+          DB_CONTAINER: ${{ job.services.postgres.id }}
+          REDIS_CONTAINER: ${{ job.services.redis.id }}
+          DB_USER: docmost
+          DB_NAME: docmost
+        run: bash apps/server/test/git-sync-e2e-advanced.sh
+
+      - name: Dump server logs on failure
+        if: failure()
+        run: |
+          echo "--- first boot (seed) ---"; tail -200 /tmp/server-seed.log || true
+          echo "--- git-sync boot ---"; tail -300 /tmp/server.log || true

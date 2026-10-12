@@ -39,10 +39,14 @@ function nodes(doc: any): { type: string; attrs?: any }[] {
   return out;
 }
 
+/** The page's canonical document name (gitSyncWriteBody refuses any other). */
+const DOC = 'page.5b0c4e0a-3f7d-4c1e-9a2b-6d8e1f0a2c3b';
+
 /** A Hocuspocus whose direct connection writes into `shared` (an empty shell). */
 function fakeHocuspocus(shared: Y.Doc) {
   return {
     openDirectConnection: jest.fn(async () => ({
+      document: shared,
       transact: async (fn: (doc: Y.Doc) => void) => fn(shared),
       disconnect: jest.fn(async () => undefined),
     })),
@@ -75,6 +79,10 @@ const MARKDOWN = [
   '',
 ].join('\n');
 
+// markdownToProseMirror runs on a converter worker thread; its cold start
+// (jsdom + the converter) is paid here, not inside the first case's timeout.
+beforeAll(() => markdownToProseMirror(''), 120_000);
+
 describe('gitSyncWriteBody — block ids (opening a git-written page is not an edit)', () => {
   it('a git-sync-written doc carries an id on every block type the editor would give one', async () => {
     const shared = new Y.Doc();
@@ -82,7 +90,7 @@ describe('gitSyncWriteBody — block ids (opening a git-written page is not an e
       fakeHocuspocus(shared),
     );
 
-    await handlers.gitSyncWriteBody('page.p1', {
+    await handlers.gitSyncWriteBody(DOC, {
       prosemirrorJson: await markdownToProseMirror(MARKDOWN),
       userId: 'svc-user',
     });
@@ -134,7 +142,7 @@ async function writeFresh(markdown: string): Promise<any> {
   const shared = new Y.Doc();
   await new CollaborationHandler()
     .getHandlers(fakeHocuspocus(shared))
-    .gitSyncWriteBody('page.p1', {
+    .gitSyncWriteBody(DOC, {
       prosemirrorJson: await markdownToProseMirror(markdown),
       userId: 'svc-user',
     });
@@ -208,7 +216,7 @@ describe('gitSyncWriteBody — trailing paragraph (opening a git-written page is
     );
     const warn = jest.spyOn(Logger.prototype, 'warn');
     const write = async (markdown: string, base?: string) =>
-      handlers.gitSyncWriteBody('page.p1', {
+      handlers.gitSyncWriteBody(DOC, {
         prosemirrorJson: await markdownToProseMirror(markdown),
         baseProsemirrorJson:
           base === undefined ? undefined : await markdownToProseMirror(base),

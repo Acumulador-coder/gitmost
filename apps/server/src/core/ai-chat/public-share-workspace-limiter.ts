@@ -151,14 +151,15 @@ export class PublicShareWorkspaceLimiter {
  * This contour caps the SPEND directly: the actual tokens consumed (input +
  * output, summed across all steps of every accepted turn) over the trailing
  * `windowMs` (one rolling day) must stay under `budget`. It is checked BEFORE a
- * turn streams (read-only) and the turn's real usage is recorded AFTER it
- * finishes (`streamText` onFinish). Like the request cap it is cluster-wide
- * (shared Redis) and uses a sliding-window LOG so the day boundary cannot be
- * gamed for a 2x burst.
+ * turn streams (read-only) and the real usage is recorded as each step of the
+ * turn completes (`streamText` onStepFinish) — so a turn the visitor abandons
+ * mid-way is still charged for its completed steps. Like the request cap it is
+ * cluster-wide (shared Redis) and uses a sliding-window LOG so the day boundary
+ * cannot be gamed for a 2x burst.
  *
  * Pre-check is read-only, so a turn already over budget is rejected, but the
- * tokens of an in-flight turn are not yet known and are accounted only once it
- * finishes. The worst-case overshoot past the budget is therefore one turn
+ * tokens of an in-flight turn are not yet known and are accounted only as its
+ * steps complete. The worst-case overshoot past the budget is therefore one turn
  * (bounded by steps x (maxOutputTokens + transcript size)) — acceptable for a
  * cost backstop on an optional anonymous assistant.
  */

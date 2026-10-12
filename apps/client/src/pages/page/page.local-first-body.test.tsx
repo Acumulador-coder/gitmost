@@ -48,7 +48,11 @@ const pageQueryState: {
 let spaceData: unknown = undefined;
 
 vi.mock("@/features/page/queries/page-query", () => ({
-  usePageQuery: () => pageQueryState,
+  // A settled response here is the one this view fetched after mounting.
+  usePageQuery: () => ({
+    ...pageQueryState,
+    isFetchedAfterMount: !pageQueryState.isLoading,
+  }),
 }));
 
 vi.mock("@/features/space/queries/space-query.ts", () => ({

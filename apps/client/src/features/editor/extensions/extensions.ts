@@ -125,6 +125,7 @@ import mentionRenderItems from "@/features/editor/components/mention/mention-sug
 import { ReactNodeViewRenderer, ReactMarkViewRenderer } from "@tiptap/react";
 import MentionView from "@/features/editor/components/mention/mention-view.tsx";
 import { createLinkClickPlugin } from "@/features/editor/components/link/link-click-plugin.ts";
+import { linkDomAttributes } from "@/features/editor/components/link/link-href.ts";
 import SpoilerView from "@/features/editor/components/spoiler/spoiler-view.tsx";
 import i18n from "@/i18n.ts";
 import { MarkdownClipboard } from "@/features/editor/extensions/markdown-clipboard.ts";
@@ -245,6 +246,13 @@ export const mainExtensions = [
   LinkExtension.configure({
     openOnClick: false,
   }).extend({
+    // Links render as plain <a>: the href is the one the UI points at (a share
+    // route maps internal links to the shared copy, external ones are
+    // normalized), and none of the document's own class/rel/target attributes
+    // reach the DOM — see linkDomAttributes.
+    renderHTML({ mark }) {
+      return ["a", linkDomAttributes(mark.attrs, window.location.pathname), 0];
+    },
     addProseMirrorPlugins() {
       return [...(this.parent?.() ?? []), createLinkClickPlugin(this.editor)];
     },

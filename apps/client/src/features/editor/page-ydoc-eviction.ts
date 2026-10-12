@@ -143,6 +143,7 @@ export function unregisterPageYdoc(dbName: string): void {
 interface PageSessionDestroyHooks {
   destroyPageSession: (dbName: string) => void;
   destroyAllPageSessions: () => void;
+  destroyParkedPageSessions: () => void;
 }
 let pageSessionDestroyHooks: PageSessionDestroyHooks | null = null;
 
@@ -518,7 +519,12 @@ export function installYdocPurgeBroadcastListener(): void {
   const channel = getPurgeChannel();
   if (!channel) return;
   channel.onmessage = (event: MessageEvent) => {
-    if (event?.data?.type === "purge") closeLivePersistencesInThisTab();
+    if (event?.data?.type !== "purge") return;
+    // #709 — another tab purged this scope (logout / sign-in / 401): this tab's
+    // parked collab sessions belong to it and must stop syncing now. The active
+    // one stays with the mounted page, whose next request decides.
+    pageSessionDestroyHooks?.destroyParkedPageSessions();
+    closeLivePersistencesInThisTab();
   };
 }
 

@@ -22,6 +22,21 @@ interface PageEventLike {
 }
 
 /**
+ * `@OnEvent(event)` once per event of `events`, all on the decorated method.
+ * Not `@OnEvent(events)`: with the default (non-wildcard) EventEmitter2 an
+ * array registers ONE listener under the comma-joined name, which no emit ever
+ * matches. page-change.listener.spec subscribes through a real
+ * EventEmitterModule and fails if any event of the list does not reach the
+ * handler.
+ */
+function OnEachEvent(events: readonly string[]): MethodDecorator {
+  return (target, key, descriptor) => {
+    for (const event of events) OnEvent(event)(target, key, descriptor);
+    return descriptor;
+  };
+}
+
+/**
  * Event-driven trigger for the git-sync control plane. Subscribes to
  * the page lifecycle events and, for an enabled space, schedules a DEBOUNCED
  * `orchestrator.runOnce(spaceId, workspaceId)` — coalescing a burst of edits into
@@ -56,14 +71,14 @@ export class PageChangeListener implements OnModuleDestroy {
   ) {}
 
   /**
-   * One handler bound to ALL git-sync page events (the array form of `@OnEvent`).
+   * One handler bound to ALL git-sync page events (one `@OnEvent` per event).
    * Fetches the page row once to apply the loop-guard (unconditionally) and to
    * resolve the page's space + workspace, then schedules the debounced cycle.
    */
-  @OnEvent(GIT_SYNC_PAGE_EVENTS as unknown as string[])
+  @OnEachEvent(GIT_SYNC_PAGE_EVENTS)
   async handlePageEvent(event: PageEventLike): Promise<void> {
-    if (!this.environmentService.isGitSyncEnabled()) return;
-
+    // No GIT_SYNC_ENABLED check: this listener is registered only when the flag
+    // is on (GitSyncModule is empty otherwise).
     try {
       const pageId = this.firstPageId(event);
       if (!pageId) return;

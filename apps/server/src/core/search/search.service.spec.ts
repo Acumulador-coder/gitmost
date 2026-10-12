@@ -13,6 +13,7 @@ describe('SearchService', () => {
       {} as any, // pagePermissionRepo
       {} as any, // pageEmbeddingRepo
       {} as any, // embeddingGeneration (#599)
+      {} as any, // shareService
     );
     expect(service).toBeDefined();
   });
@@ -65,6 +66,7 @@ describe('SearchService.searchSuggestions — onlyTemplates filter', () => {
       pagePermissionRepo as any,
       {} as any, // pageEmbeddingRepo
       {} as any, // embeddingGeneration (#599; searchSuggestions has no vector arm)
+      {} as any, // shareService
     );
 
     return { service, db, pageBuilder };

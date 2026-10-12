@@ -1,20 +1,23 @@
 import * as Y from 'yjs';
-import { getSchema } from '@tiptap/core';
-import type { Schema } from '@tiptap/pm/model';
+import { updateYFragment, yXmlFragmentToProsemirrorJSON } from 'y-prosemirror';
+import {
+  isIgnorableBlockKey,
+  markdownBlockKey,
+} from '@docmost/prosemirror-markdown';
 
-import { tiptapExtensions } from '../collaboration.util';
-import { diff3PlanWithConflicts } from './three-way-merge';
-import { buildLcsTable } from './lcs';
+import { getDocumentSchema } from '../collaboration.util';
+import { diff3PlanWithConflicts, Pick } from './three-way-merge';
+import { createDiffBudget, lcsMatches } from './lcs';
 
 /**
  * Block-level merge of an incoming (git) page body into a LIVE Yjs document.
  *
- * Diff the two documents at TOP-LEVEL BLOCK granularity (an LCS over a canonical
- * structural serialization of each block) and apply only the minimal
- * insert/delete operations. Blocks identical on both sides are left UNTOUCHED, so
- * a human editing one paragraph is unaffected when git changes another, and an
- * unchanged re-sync is a no-op (zero Yjs operations). Yjs then CRDT-merges the
- * minimal ops with any concurrent edits.
+ * Diff the two documents at TOP-LEVEL BLOCK granularity (an LCS over each
+ * block's markdown projection, `blockKey`) and apply only the minimal
+ * operations. Blocks with the same projection on both sides are left UNTOUCHED,
+ * so a human editing one paragraph is unaffected when git changes another, and
+ * an unchanged re-sync is a no-op (zero Yjs operations). Yjs then CRDT-merges
+ * the minimal ops with any concurrent edits.
  *
  * A THREE-WAY merge (live vs incoming vs base) runs whenever the engine passes
  * the body at the last export (`baseMarkdown` from refs/docmost/last-export): a
@@ -27,190 +30,112 @@ import { buildLcsTable } from './lcs';
 type XmlNode = Y.XmlElement | Y.XmlText | Y.XmlHook;
 
 /**
- * Node attributes that are VOLATILE identity (not content) and so must be
- * excluded from the block comparison key.
+ * The comparison key of a top-level block: its markdown projection
+ * (`markdownBlockKey` from the canonical converter). The live Yjs document is
+ * lossless while the base and the git body are rebuilt from markdown, so the
+ * two sides are compared by what markdown keeps of them — a live block equals
+ * its git twin whenever they differ only in what markdown cannot carry (the
+ * block `id`, `indent`, a callout `icon`, table `colwidth`/cell colours,
+ * schema-default attributes, an erased empty text). There is no hand-kept list
+ * of such attributes to drift from the converter: whatever the converter drops
+ * is, by construction, not part of the key. A block whose projection is empty
+ * (an empty paragraph) is ignorable (`isIgnorableBlockKey`).
  *
- * `id` is the per-block UniqueID the editor stamps on every heading/paragraph
- * (and transclusionSource). It exists only in the live Yjs document — a body
- * from git carries no block ids (`markdownToProseMirror` materializes
- * `id: null`, which the Yjs transform drops). With `id` in the key an unchanged
- * live block would never match its git twin, the LCS could not anchor on it,
- * and an unanchored incoming block (e.g. content at the TOP of the page) would
- * be re-added on every sync cycle.
- *
- * Block identity is still preserved in the output: `diff3Plan` keeps the LIVE
- * block INSTANCE (with its id) for an anchor — picks are by index, not by key.
- * `canonicalize.ts` strips the regenerated block `id` for the same reason.
- *
- * Known limitation: two distinct blocks with byte-identical content share a key,
+ * Known limitation: two distinct blocks with the same projection share a key,
  * so when git deletes one of them the LCS may drop the OTHER live instance. The
  * visible result is identical, but an in-flight human edit on the dropped
  * instance could be lost.
  */
-const VOLATILE_KEY_ATTRS = new Set(['id']);
+export function blockKey(node: unknown): string {
+  return markdownBlockKey(yBlockToJson(node));
+}
 
 /**
- * The editor (ProseMirror) schema, built ONCE from the same `tiptapExtensions`
- * the collaboration server uses to materialize Yjs docs. Memoized: building the
- * schema is non-trivial and the block key is computed per block per cycle.
- *
- * Why the schema (not a hardcoded denylist): the LIVE Yjs document is produced by
- * `TiptapTransformer.toYdoc(pm, 'default', tiptapExtensions)`, which STAMPS every
- * schema-default attribute onto every node and mark — `indent: 0` on every
- * paragraph/heading, `image.align: "center"`, the link mark's `internal: false`,
- * a pdf's `width: 800`, and so on. A body re-imported from git can carry null
- * instead (the converter defaults pdf and youtube sizes to null), and null attrs
- * are DROPPED by `y-prosemirror`'s toYdoc. Unnormalized, the same block would key
- * differently on the two sides and the merge would anchor on nothing.
- *
- * Any attribute equal to its schema default — or null/undefined — is dropped
- * from the key, on element attributes and on the mark attributes inside each
- * XmlText delta. Non-default values (a real `indent: 2`, `align: "left"`,
- * `link.href`, highlight color) are content and stay in the key.
+ * ProseMirror JSON of one top-level Yjs block, through y-prosemirror's own
+ * Y→JSON serializer (the one `TiptapTransformer.fromYdoc` uses for the whole
+ * document; it only reads `toArray()` of what it is given).
  */
-let memoSchema: Schema | null = null;
-let memoSchemaTried = false;
-function getMergeSchema(): Schema | null {
-  if (!memoSchemaTried) {
-    memoSchemaTried = true;
-    try {
-      memoSchema = getSchema(tiptapExtensions as any);
-    } catch {
-      // Defensive: if the schema can't be built (e.g. a degenerate extension
-      // set in a unit test that stubs `tiptapExtensions`), fall back to dropping
-      // only null/undefined attrs. The real server always builds it fine.
-      memoSchema = null;
+function yBlockToJson(node: unknown): any {
+  return yXmlFragmentToProsemirrorJSON({ toArray: () => [node] } as any)
+    .content[0];
+}
+
+/** Blocks projected between two yields while keys are computed ahead of a merge. */
+const KEY_CHUNK = 200;
+
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * `blockKey` of every top-level block of `frag`, computed in chunks that yield
+ * to the event loop between them (AGENTS invariant 3: projecting a 10k-block
+ * page is tens of milliseconds of synchronous CPU). For a fragment nobody else
+ * mutates meanwhile (a git body or base built for this merge).
+ */
+export async function fragmentKeysYielding(
+  frag: Y.XmlFragment,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const kids = frag.toArray();
+  const keys: string[] = [];
+  for (let i = 0; i < kids.length; i++) {
+    if (i > 0 && i % KEY_CHUNK === 0) {
+      await yieldToEventLoop();
+      signal?.throwIfAborted();
     }
+    keys.push(blockKey(kids[i]));
   }
-  return memoSchema;
-}
-
-/** True if `value` is the schema default for `attrName` of `attrSpecs`, or is
- * null/undefined (which a git round-trip drops). Such attributes are excluded
- * from the comparison key. `attrSpecs` is a ProseMirror node/mark spec attr map
- * (`{ [name]: { default } }`); a missing map (unknown node/mark) only drops
- * null/undefined. (A non-null value matching an attr declared without a default
- * cannot occur — `spec.default === value` is then `undefined === value`, false.) */
-function isDefaultAttr(
-  attrSpecs: Record<string, any> | undefined | null,
-  attrName: string,
-  value: unknown,
-): boolean {
-  if (value === null || value === undefined) return true;
-  const spec = attrSpecs?.[attrName];
-  if (!spec) return false;
-  // A numeric default also matches its string form, so a default size stored
-  // as a string (a pdf's `width: "800"`) is dropped from the key too.
-  return (
-    spec.default === value ||
-    (typeof spec.default === 'number' && String(spec.default) === value)
-  );
+  return keys;
 }
 
 /**
- * Normalize one XmlText delta op's mark attributes: drop every mark-attr whose
- * value equals the mark's schema default (or is null/undefined), so the link
- * mark's materialized `internal: false`/`target: "_blank"` and a highlight's
- * `colorName: null` match a git round-trip that carries neither.
- * The text (op.insert) and genuinely-set mark attrs (a real `href`, a real
- * highlight color) are preserved verbatim. `attributes` maps markName -> mark
- * attrs object (or `true`/boolean for attr-less marks); each is handled safely.
+ * `blockKey`s of a LIVE fragment, primed ahead of the merge transaction in
+ * yielding chunks and kept valid against edits that land meanwhile: a deep
+ * observer marks every top-level block an update touches, and `keysOf`
+ * recomputes only those (and blocks inserted since) synchronously, inside the
+ * transaction. `dispose()` MUST be called (it removes the observer).
  */
-function normalizeDelta(delta: any[]): any[] {
-  const schema = getMergeSchema();
-  return delta.map((op) => {
-    if (!op || op.attributes == null || typeof op.attributes !== 'object') {
-      return op;
-    }
-    const marks: Record<string, unknown> = {};
-    for (const markName of Object.keys(op.attributes).sort()) {
-      const markVal = op.attributes[markName];
-      if (markVal === null || markVal === undefined) continue;
-      if (typeof markVal !== 'object') {
-        // attr-less mark stored as a primitive (e.g. `true`) — keep as-is.
-        marks[markName] = markVal;
-        continue;
+export class LiveBlockKeys {
+  private readonly keys = new WeakMap<object, string>();
+  private readonly stale = new WeakSet<object>();
+  private readonly observer = (events: Array<Y.YEvent<any>>): void => {
+    for (const event of events) {
+      let type: any = event.target;
+      while (type && type.parent && type.parent !== this.frag) {
+        type = type.parent;
       }
-      const markSpec = schema?.marks[markName]?.spec.attrs as
-        | Record<string, any>
-        | undefined;
-      const cleaned: Record<string, unknown> = {};
-      for (const ak of Object.keys(markVal as object).sort()) {
-        const av = (markVal as Record<string, unknown>)[ak];
-        if (isDefaultAttr(markSpec, ak, av)) continue;
-        cleaned[ak] = av;
+      if (type && type.parent === this.frag) this.stale.add(type);
+    }
+  };
+
+  constructor(private readonly frag: Y.XmlFragment) {
+    frag.observeDeep(this.observer);
+  }
+
+  async prime(signal?: AbortSignal): Promise<void> {
+    const kids = this.frag.toArray();
+    for (let i = 0; i < kids.length; i++) {
+      if (i > 0 && i % KEY_CHUNK === 0) {
+        await yieldToEventLoop();
+        signal?.throwIfAborted();
       }
-      marks[markName] = cleaned;
+      this.keys.set(kids[i], blockKey(kids[i]));
     }
-    return { ...op, attributes: marks };
-  });
-}
-
-/**
- * Canonical, comparable serialization of a Yjs XML node (structure + text +
- * marks + attributes), with attribute keys sorted so equal blocks always produce
- * an identical string regardless of attribute insertion order. The volatile
- * block `id` (see `VOLATILE_KEY_ATTRS`) and every schema-default attribute (see
- * `getMergeSchema`) are excluded at every level — on element attributes AND on
- * the mark attributes inside each XmlText delta — so a block compares equal by
- * CONTENT across the git round-trip (which materializes neither), keeping the
- * merge anchor-able and idempotent. For the same reason a numeric attribute is
- * keyed by its string form and an empty XmlText child is ignored.
- */
-export function serializeXmlNode(node: unknown): unknown {
-  if (node instanceof Y.XmlText) {
-    return { t: normalizeDelta(node.toDelta()) };
   }
-  if (node instanceof Y.XmlElement) {
-    const attrs = node.getAttributes() as Record<string, unknown>;
-    const attrSpecs = getMergeSchema()?.nodes[node.nodeName]?.spec.attrs as
-      | Record<string, any>
-      | undefined;
-    const sorted: Record<string, unknown> = {};
-    for (const k of Object.keys(attrs).sort()) {
-      if (VOLATILE_KEY_ATTRS.has(k)) continue;
-      if (isDefaultAttr(attrSpecs, k, attrs[k])) continue;
-      // A number compares by its string form, so the same size stored as 652 on
-      // one side and "652" on the other still matches — otherwise the live image
-      // never matches its git twin and the merge loses its anchors.
-      sorted[k] = typeof attrs[k] === 'number' ? String(attrs[k]) : attrs[k];
-    }
-    return {
-      n: node.nodeName,
-      a: sorted,
-      // An empty XmlText (left behind when a user types into a block and erases
-      // it) carries no content: such a paragraph is the same empty paragraph a
-      // git body produces with no text child at all.
-      c: node
-        .toArray()
-        .filter((c) => !(c instanceof Y.XmlText && c.length === 0))
-        .map(serializeXmlNode),
-    };
-  }
-  // XmlHook / unknown: fall back to a stable string so it compares by identity
-  // of its serialized form (these do not occur in the Docmost block schema).
-  return { u: String(node) };
-}
 
-const key = (node: unknown): string => JSON.stringify(serializeXmlNode(node));
-
-/**
- * Whether `k` is the key of an empty paragraph (an empty line in the editor).
- * Markdown cannot carry one, so the base and the git body never contain one
- * between blocks (only the trailing paragraph `inEditorShape` appends), while
- * the live page keeps every empty line. The 3-way planner treats it as not
- * content, so such a live-only line is not a human edit that conflicts. The key
- * is computed once through `key` itself, so it cannot drift from the format.
- */
-let emptyParagraphKey: string | null = null;
-function isEmptyParagraphKey(k: string): boolean {
-  if (emptyParagraphKey === null) {
-    // Insert into a doc first: reading a detached Yjs type warns.
-    const frag = new Y.Doc().getXmlFragment('default');
-    frag.insert(0, [new Y.XmlElement('paragraph')]);
-    emptyParagraphKey = key(frag.get(0));
+  /** Keys of `kids` (the fragment's CURRENT children, read in the same tick). */
+  keysOf(kids: unknown[]): string[] {
+    return kids.map((kid) => {
+      const cached = this.stale.has(kid as object)
+        ? undefined
+        : this.keys.get(kid as object);
+      return cached ?? blockKey(kid);
+    });
   }
-  return k === emptyParagraphKey;
+
+  dispose(): void {
+    this.frag.unobserveDeep(this.observer);
+  }
 }
 
 /**
@@ -243,34 +168,36 @@ type Op = { op: 'keep' } | { op: 'del' } | { op: 'ins'; bi: number };
 
 /**
  * LCS-based edit script turning sequence `a` (live block keys) into `b` (incoming
- * block keys): a run of keep/del/ins ops. O(n*m) table — fine for page block
- * counts.
+ * block keys): a run of keep/del/ins ops. The alignment is bounded by `budget`
+ * (see `lcs.ts`): it throws `MergeBudgetExceededError` instead of allocating
+ * an n×m table.
  */
-export function diffBlocks(a: string[], b: string[]): Op[] {
-  const n = a.length;
-  const m = b.length;
-  const dp = buildLcsTable(a, b);
+export function diffBlocks(
+  a: string[],
+  b: string[],
+  budget = createDiffBudget(),
+): Op[] {
   const ops: Op[] = [];
   let i = 0;
   let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      ops.push({ op: 'keep' });
-      i++;
-      j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+  for (const [x, y] of lcsMatches(a, b, budget)) {
+    while (i < x) {
       ops.push({ op: 'del' });
       i++;
-    } else {
+    }
+    while (j < y) {
       ops.push({ op: 'ins', bi: j });
       j++;
     }
+    ops.push({ op: 'keep' });
+    i++;
+    j++;
   }
-  while (i < n) {
+  while (i < a.length) {
     ops.push({ op: 'del' });
     i++;
   }
-  while (j < m) {
+  while (j < b.length) {
     ops.push({ op: 'ins', bi: j });
     j++;
   }
@@ -278,41 +205,76 @@ export function diffBlocks(a: string[], b: string[]): Op[] {
 }
 
 /**
+ * Keys for `kids`: the precomputed ones when given (they MUST belong to exactly
+ * these children, read in the same synchronous section), else computed here.
+ */
+function keysFor(kids: unknown[], given: string[] | undefined, side: string) {
+  if (!given) return kids.map(blockKey);
+  if (given.length !== kids.length) {
+    throw new Error(
+      `git-sync merge: ${given.length} precomputed ${side} keys for ` +
+        `${kids.length} ${side} blocks`,
+    );
+  }
+  return given;
+}
+
+/** Run `fn` as ONE Yjs transaction of `frag`'s document (nested-safe). */
+function inTransaction<T>(frag: Y.XmlFragment, fn: () => T): T {
+  let result!: T;
+  if (frag.doc) {
+    frag.doc.transact(() => {
+      result = fn();
+    });
+  } else {
+    result = fn();
+  }
+  return result;
+}
+
+/**
  * Merge `target` block children into `live`, mutating `live` in place with the
- * minimal set of inserts/deletes. MUST be called inside a Yjs transaction.
- * Returns the number of block operations applied (0 == content already identical).
+ * minimal set of inserts/deletes, as one Yjs transaction. Returns the number of
+ * block operations applied (0 == content already identical). `keys` may carry
+ * precomputed `blockKey`s of both sides (see `keysFor`).
  */
 export function mergeXmlFragments(
   live: Y.XmlFragment,
   target: Y.XmlFragment,
+  keys: { live?: string[]; target?: string[] } = {},
 ): number {
   const liveKids = live.toArray();
   const targetKids = target.toArray();
-  const liveKeys = liveKids.map(key);
-  const targetKeys = targetKids.map(key);
+  const liveKeys = keysFor(liveKids, keys.live, 'live');
+  const targetKeys = keysFor(targetKids, keys.target, 'target');
 
   const ops = diffBlocks(liveKeys, targetKeys);
 
-  let cursor = 0; // index into the LIVE fragment as we mutate it
-  let applied = 0;
-  for (const op of ops) {
-    if (op.op === 'keep') {
-      cursor++;
-    } else if (op.op === 'del') {
-      live.delete(cursor, 1); // remove the live block at the cursor; do not advance
-      applied++;
-    } else {
-      live.insert(cursor, [cloneXmlNode(targetKids[op.bi] as XmlNode)]);
-      cursor++;
-      applied++;
+  return inTransaction(live, () => {
+    let cursor = 0; // index into the LIVE fragment as we mutate it
+    let applied = 0;
+    for (const op of ops) {
+      if (op.op === 'keep') {
+        cursor++;
+      } else if (op.op === 'del') {
+        live.delete(cursor, 1); // remove the live block at the cursor; do not advance
+        applied++;
+      } else {
+        live.insert(cursor, [cloneXmlNode(targetKids[op.bi] as XmlNode)]);
+        cursor++;
+        applied++;
+      }
     }
-  }
-  return applied;
+    return applied;
+  });
 }
 
 /** Outcome of a 3-way block merge: ops applied + same-block conflict count. */
 export interface Merge3WayResult {
-  /** Number of block insert/delete operations spliced into `live`. */
+  /**
+   * Number of block operations applied to `live`: inserts, deletes and
+   * in-place updates of a live block git changed.
+   */
   applied: number;
   /**
    * Regions where the human AND git rewrote the SAME base block. The rule is
@@ -324,62 +286,237 @@ export interface Merge3WayResult {
   conflicts: number;
 }
 
+const isElementJson = (n: any): boolean =>
+  n != null && typeof n === 'object' && !Array.isArray(n) && n.type !== 'text';
+
+/** Attribute equality where absent and null are the same. */
+function sameAttr(a: unknown, b: unknown): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Structural signature of a node with every `id` attribute left out. */
+function withoutIds(node: any): string {
+  return JSON.stringify(node, (k, v) => (k === 'id' ? undefined : v));
+}
+
+/**
+ * Pair `target` children with `base` children (both parsed from markdown):
+ * the common prefix and suffix by structure, and the middle index by index when
+ * both middles have the same length. Returns target index -> base index.
+ */
+function pairChildren(base: any[], target: any[]): Map<number, number> {
+  const pairs = new Map<number, number>();
+  let p = 0;
+  while (
+    p < base.length &&
+    p < target.length &&
+    withoutIds(base[p]) === withoutIds(target[p])
+  ) {
+    pairs.set(p, p);
+    p++;
+  }
+  let s = 0;
+  while (
+    s < base.length - p &&
+    s < target.length - p &&
+    withoutIds(base[base.length - 1 - s]) ===
+      withoutIds(target[target.length - 1 - s])
+  ) {
+    pairs.set(target.length - 1 - s, base.length - 1 - s);
+    s++;
+  }
+  if (base.length - p - s === target.length - p - s) {
+    for (let k = p; k < target.length - s; k++) pairs.set(k, k);
+  }
+  return pairs;
+}
+
+/**
+ * `target` — a git block replacing a live block whose projection equals the
+ * base — with the live block's attributes that the markdown projection loses
+ * carried over, at every level where the three trees line up (table rows and
+ * cells, list items, callout children, ...): an attribute git left as the base
+ * had it while live holds it differently is one git could not see (`indent`,
+ * callout `icon`, cell `colwidth`/`backgroundColor`, ...), so live's value
+ * stays. An attribute git changed keeps git's value. The `id` comes from live
+ * wherever live has one: the base and git ids are fresh per markdown import,
+ * never content.
+ */
+function carryOver(live: any, base: any, target: any): any {
+  if (
+    !isElementJson(live) ||
+    !isElementJson(base) ||
+    !isElementJson(target) ||
+    live.type !== base.type ||
+    base.type !== target.type
+  ) {
+    return target;
+  }
+  const liveAttrs = live.attrs ?? {};
+  const baseAttrs = base.attrs ?? {};
+  const attrs: Record<string, unknown> = { ...(target.attrs ?? {}) };
+  for (const k of new Set([
+    ...Object.keys(liveAttrs),
+    ...Object.keys(baseAttrs),
+  ])) {
+    if (k === 'id') continue;
+    if (
+      !sameAttr(liveAttrs[k], baseAttrs[k]) &&
+      sameAttr(attrs[k], baseAttrs[k])
+    ) {
+      if (liveAttrs[k] == null) delete attrs[k];
+      else attrs[k] = liveAttrs[k];
+    }
+  }
+  if (liveAttrs.id != null) attrs.id = liveAttrs.id;
+  const out = { ...target, attrs };
+  const lc: any[] = live.content ?? [];
+  const bc: any[] = base.content ?? [];
+  const tc: any[] = target.content ?? [];
+  if (lc.length === bc.length && tc.length > 0) {
+    const pairs = pairChildren(bc, tc);
+    out.content = tc.map((t, j) => {
+      const b = pairs.get(j);
+      return b === undefined ? t : carryOver(lc[b], bc[b], t);
+    });
+  }
+  return out;
+}
+
+type Step =
+  | { kind: 'keep'; live: number }
+  | { kind: 'update'; live: number; node: any }
+  | { kind: 'insert'; target: number };
+
+/**
+ * The plan's picks as apply steps. A git block that replaces an unchanged live
+ * block of the same type becomes an IN-PLACE update of that live block
+ * (`updateYFragment`: only the changed attributes, children and text ranges
+ * are touched), so the live block keeps its identity, its lossy attributes
+ * (`carryOver`) and any concurrent client edit outside the changed range
+ * (GL-5); anything else is inserted as a clone. Built entirely before the
+ * first mutation, so a failure here leaves the live doc untouched.
+ */
+function planSteps(
+  picks: Pick[],
+  liveKids: unknown[],
+  baseKids: unknown[],
+  targetKids: unknown[],
+): Step[] {
+  const schema = getDocumentSchema();
+  const steps: Step[] = picks.map((p): Step => {
+    if (p.src === 'live') return { kind: 'keep', live: p.index };
+    const liveEl = p.replaces ? liveKids[p.replaces.live] : undefined;
+    const baseEl = p.replaces ? baseKids[p.replaces.base] : undefined;
+    const targetEl = targetKids[p.index];
+    if (
+      liveEl instanceof Y.XmlElement &&
+      baseEl instanceof Y.XmlElement &&
+      targetEl instanceof Y.XmlElement &&
+      liveEl.nodeName === targetEl.nodeName &&
+      baseEl.nodeName === targetEl.nodeName
+    ) {
+      const json = carryOver(
+        yBlockToJson(liveEl),
+        yBlockToJson(baseEl),
+        yBlockToJson(targetEl),
+      );
+      return {
+        kind: 'update',
+        live: p.replaces!.live,
+        node: schema.nodeFromJSON(json),
+      };
+    }
+    return { kind: 'insert', target: p.index };
+  });
+  // The applier walks live once, front to back.
+  let last = -1;
+  for (const step of steps) {
+    if (step.kind === 'insert') continue;
+    if (step.live <= last) {
+      throw new Error(
+        `git-sync merge plan does not keep live blocks in order (live block ` +
+          `${step.live} after ${last}); refusing to apply it`,
+      );
+    }
+    last = step.live;
+  }
+  return steps;
+}
+
 /**
  * THREE-WAY block merge: reconcile `live` toward `target` using `base` (the
  * last-synced common ancestor) so a block only the human changed is KEPT and a
  * block only git changed is taken. Conflicts (both changed the same block)
- * resolve to git.
+ * resolve to git; their count is returned so the caller can log that git won a
+ * same-block edit, whose prior state stays recoverable via page history.
  *
- * Implementation: diff3Plan computes the merged block ORDER (picks from live or
- * target); we materialize that as a virtual target fragment and reuse the 2-way
- * `mergeXmlFragments` to splice it into `live` minimally (so untouched live block
- * instances — and their in-flight edits — stay put). MUST be called inside a Yjs
- * transaction. Returns the number of block operations applied. (Use
- * `mergeXmlFragments3WayWithStats` when the SAME-BLOCK conflict count is needed.)
- */
-export function mergeXmlFragments3Way(
-  live: Y.XmlFragment,
-  target: Y.XmlFragment,
-  base: Y.XmlFragment,
-): number {
-  return mergeXmlFragments3WayWithStats(live, target, base).applied;
-}
-
-/**
- * As `mergeXmlFragments3Way`, but also returns the SAME-BLOCK conflict count so
- * the caller can make a "git won a concurrent same-block edit" event OBSERVABLE
- * (the documented conflict contract: git wins deterministically, but the losing
- * human content is never destroyed silently — it is logged and recoverable via
- * page history).
+ * `diff3PlanWithConflicts` computes the merged block order (picks from live or
+ * target, bounded by one work budget — over it, `MergeBudgetExceededError` is
+ * thrown before anything changes); the steps are then applied to `live` as ONE
+ * Yjs transaction: untouched live blocks stay the same instances, a block git
+ * changed is updated in place (`planSteps`), and only genuinely new blocks are
+ * inserted. `keys` may carry precomputed `blockKey`s of the three sides (the
+ * caller computes them ahead of its transaction, see `fragmentKeysYielding` /
+ * `LiveBlockKeys`).
  */
 export function mergeXmlFragments3WayWithStats(
   live: Y.XmlFragment,
   target: Y.XmlFragment,
   base: Y.XmlFragment,
+  keys: { live?: string[]; target?: string[]; base?: string[] } = {},
 ): Merge3WayResult {
   const liveKids = live.toArray();
   const targetKids = target.toArray();
-  const liveKeys = liveKids.map(key);
-  const targetKeys = targetKids.map(key);
-  const baseKeys = base.toArray().map(key);
+  const baseKids = base.toArray();
+  const liveKeys = keysFor(liveKids, keys.live, 'live');
+  const targetKeys = keysFor(targetKids, keys.target, 'target');
+  const baseKeys = keysFor(baseKids, keys.base, 'base');
 
-  const { picks: plan, conflicts } = diff3PlanWithConflicts(
+  const { picks, conflicts } = diff3PlanWithConflicts(
     baseKeys,
     liveKeys,
     targetKeys,
-    isEmptyParagraphKey,
+    isIgnorableBlockKey,
   );
+  const steps = planSteps(picks, liveKids, baseKids, targetKids);
 
-  // Build the merged block sequence in a throwaway doc, cloning from whichever
-  // side each pick came from, then 2-way merge it back into the live fragment.
-  const merged = new Y.Doc();
-  const mergedFrag = merged.getXmlFragment('default');
-  const nodes = plan.map((p) =>
-    cloneXmlNode(
-      (p.src === 'live' ? liveKids[p.index] : targetKids[p.index]) as XmlNode,
-    ),
-  );
-  if (nodes.length) mergedFrag.insert(0, nodes);
+  const applied = inTransaction(live, () => {
+    let cursor = 0; // index into the LIVE fragment as we mutate it
+    let li = 0; // next not-yet-visited block of the original live sequence
+    let ops = 0;
+    // Live blocks the plan does not keep are deleted as the walk passes them.
+    const dropUntil = (end: number): void => {
+      while (li < end) {
+        live.delete(cursor, 1);
+        li++;
+        ops++;
+      }
+    };
+    for (const step of steps) {
+      if (step.kind === 'insert') {
+        live.insert(cursor, [cloneXmlNode(targetKids[step.target] as XmlNode)]);
+        cursor++;
+        ops++;
+        continue;
+      }
+      dropUntil(step.live);
+      if (step.kind === 'update') {
+        updateYFragment(
+          live.doc,
+          liveKids[step.live] as Y.XmlElement,
+          step.node,
+          { mapping: new Map(), isOMark: new Map() } as any,
+        );
+        ops++;
+      }
+      cursor++;
+      li++;
+    }
+    dropUntil(liveKids.length);
+    return ops;
+  });
 
-  return { applied: mergeXmlFragments(live, mergedFrag), conflicts };
+  return { applied, conflicts };
 }

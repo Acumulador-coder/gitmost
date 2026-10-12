@@ -12,9 +12,11 @@ import {
   computePullActions,
   buildExportTree,
   logDeletionDecision,
+  type PullFailure,
 } from "./pull.js";
 import { runPush, type CreatedPage, type PushFailure } from "./push.js";
 import { upgradeLegacyVault, type UpgradeVaultDeps } from "./upgrade.js";
+import { throwIfAborted } from "./abort.js";
 
 /** Provenance of an export commit on `main` (SPEC §7.3): `docmost`. */
 const SOURCE_TRAILER = "Docmost-Sync-Source";
@@ -51,20 +53,33 @@ export interface RunCycleDeps {
    */
   exportKeys?: Map<string, string>;
   /**
-   * Optional cooperative-abort signal. The caller (orchestrator) wires this to
-   * the per-space lock: if a heartbeat refresh cannot CONFIRM the lock is still
-   * held, the signal is aborted and the cycle bails at its next checkpoint
-   * (before the apply and before the export) instead of writing blind after a
-   * possible lock loss. A COARSE best-effort guard, not a fenced cross-process
-   * single-writer.
+   * Optional cooperative-abort signal. The caller (orchestrator) aborts it when
+   * a heartbeat refresh cannot CONFIRM the per-space lock is still held, or
+   * when the cycle's deadline passes. The cycle checks it before the apply,
+   * before the export and before `main` moves; the apply and the export check
+   * it between page operations and hand it to every conversion. An abort ends
+   * the cycle with a `CycleAbortedError` instead of writing blind after a
+   * possible lock loss: no ref moves before `main`'s compare-and-swap, and the
+   * next cycle re-applies the same changes, which is idempotent. A COARSE
+   * best-effort guard, not a fenced cross-process single-writer.
    */
   signal?: AbortSignal;
 }
 
 export interface RunCycleResult {
   ran: boolean;
-  /** The export: pages fetched and files of removed pages dropped. */
-  pull?: { written: number; deleted: number };
+  /**
+   * The export: pages fetched and files of removed pages dropped. `failures`
+   * counts the live pages the export could not place (they did not reach git
+   * this cycle and are retried the next); `firstFailure` is the first of them
+   * (absent when none).
+   */
+  pull?: {
+    written: number;
+    deleted: number;
+    failures: number;
+    firstFailure?: PullFailure;
+  };
   /** `firstFailure` is the first per-page apply failure (absent when none). */
   push?: { mode: string; failures: number; firstFailure?: PushFailure };
 }
@@ -177,7 +192,7 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
   );
 
   // 1. APPLY ---------------------------------------------------------------
-  signal?.throwIfAborted();
+  throwIfAborted(signal, "before applying the user's changes");
   let failures: PushFailure[] = [];
   let created: CreatedPage[] = [];
   if (mainTree !== baseTree) {
@@ -190,6 +205,7 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
         headRef: main0,
         symlinks,
         log,
+        signal,
       },
       { dryRun: false },
     );
@@ -239,7 +255,7 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
   logDeletionDecision(log, plan);
 
   // Bail before the export moves any ref if the lock was lost.
-  signal?.throwIfAborted();
+  throwIfAborted(signal, "before the export");
 
   // A failed page keeps git's files on `main` (no export of it this cycle), and
   // its paths keep their last-export version in the recorded base.
@@ -266,7 +282,7 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
       return blob === undefined ? p : { ...p, blob };
     });
   const exported = await buildExportTree(
-    { client, git: vault, log },
+    { client, git: vault, log, signal },
     {
       start: main0,
       pages,
@@ -286,6 +302,16 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
       pinned: pinnedPaths,
     },
   );
+  // Pages the export could not place never reach git while the cycle itself
+  // succeeds: WARN the count and the first one (the export's log names each).
+  if (exported.failed > 0) {
+    const first = exported.firstFailure;
+    warn(
+      `space ${spaceId}: the export could not place ${exported.failed} ` +
+        `page(s) in the vault (retried next cycle)` +
+        (first ? `; first: page ${first.pageId}: ${first.error}` : ""),
+    );
+  }
 
   const recordTree =
     pinnedPaths.size === 0
@@ -310,6 +336,8 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
     deleted > 0
       ? `docmost: export ${exported.written} page(s), ${deleted} deleted`
       : `docmost: export ${exported.written} page(s)`;
+  // The last check before `main` moves: the export may have run long.
+  throwIfAborted(signal, `before moving '${DEFAULT_BRANCH}'`);
   const newMain =
     exported.tree === mainTree
       ? main0
@@ -343,7 +371,12 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
 
   return {
     ran: true,
-    pull: { written: exported.written, deleted },
+    pull: {
+      written: exported.written,
+      deleted,
+      failures: exported.failed,
+      ...(exported.firstFailure ? { firstFailure: exported.firstFailure } : {}),
+    },
     push: {
       mode: "apply",
       failures: failures.length,

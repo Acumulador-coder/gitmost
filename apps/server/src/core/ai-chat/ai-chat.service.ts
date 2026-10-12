@@ -58,6 +58,8 @@ import {
 import {
   RunAlreadyActiveError,
   AiChatRunService,
+  RunHandle,
+  SUPERSEDE_SETTLE_TIMEOUT_MS,
 } from './ai-chat-run.service';
 import { inAppToolCallCapMs } from './tools/ai-chat-tools.service';
 import { computePageChange } from './page-change/page-change.util';
@@ -102,6 +104,12 @@ const STEP_BUDGET_WARNING_LEAD = 6;
 // CONNECT_TIMEOUT_MS in mcp-clients.service: servers connect concurrently, so the
 // per-server bound normally fires first; this only catches a total build stall.
 const MCP_TOOLSET_BUILD_DEADLINE_MS = 60_000;
+
+// Deadline for the turn-end writes (open-page snapshot + activated tools). The
+// run is settled only after them, and that settle frees the chat's run slot a
+// supersede waits for at most SUPERSEDE_SETTLE_TIMEOUT_MS; half of it leaves the
+// rest of that window for the settle itself.
+export const TURN_END_WRITES_DEADLINE_MS = SUPERSEDE_SETTLE_TIMEOUT_MS / 2;
 
 // System-prompt addendum injected ONLY on the final step (see prepareAgentStep).
 // It forbids further tool calls and tells the model to synthesize the best
@@ -499,17 +507,16 @@ export interface AiChatStreamBody {
 }
 
 /**
- * Optional run-lifecycle hooks. When supplied, the turn is wrapped in a
- * server-side RUN: `begin` is called once the chat id is known and returns the
- * run's AbortSignal (decoupled from the HTTP socket), and the lifecycle callbacks
- * persist the run's progress and terminal status. Absent => the turn is bound to
- * the caller's `signal` and `runId` is undefined (only test harnesses omit it).
+ * Run-lifecycle hooks. Every turn is a server-side RUN: `begin` is called once
+ * the chat id is known and returns the run's AbortSignal (decoupled from the
+ * HTTP socket), and the lifecycle callbacks persist the run's progress and
+ * terminal status.
  */
 export interface AiChatRunHooks {
   // Called once the chat id is resolved; returns the run handle whose `signal`
-  // drives the agent loop's abort. Returning null disables run tracking (the
-  // turn falls back to the passed-in socket signal).
-  begin(chatId: string): Promise<{ runId: string; signal: AbortSignal } | null>;
+  // drives the agent loop's abort. A failure (incl. losing the chat's single
+  // active slot) rejects the turn before any provider call.
+  begin(chatId: string): Promise<RunHandle>;
   onAssistantSeeded?(
     runId: string,
     assistantMessageId: string,
@@ -528,11 +535,9 @@ export interface AiChatStreamArgs {
   sessionId: string;
   body: AiChatStreamBody;
   res: FastifyReply;
-  signal: AbortSignal;
-  // Run-lifecycle hooks (#184). When present the turn becomes a detached,
-  // durable RUN whose abort is governed by the run (explicit stop), not the
-  // socket; when absent (test harnesses only) the turn is bound to `signal`.
-  runHooks?: AiChatRunHooks;
+  // Run-lifecycle hooks (#184). The turn is a detached, durable RUN whose abort
+  // is governed by the run (explicit stop), never by the socket.
+  runHooks: AiChatRunHooks;
   // Resolved by the controller BEFORE res.hijack(), so an unconfigured provider
   // (AiNotConfiguredException -> 503) surfaces as clean JSON before streaming.
   // For a role with a model override this already carries the override-resolved
@@ -1003,7 +1008,6 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
     sessionId,
     body,
     res,
-    signal,
     model,
     role,
     runHooks,
@@ -1065,53 +1069,46 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
 
     // Start the durable RUN now that the chat id is known. Its `signal` is the
     // user's explicit stop, not the HTTP socket, so a browser disconnect does not
-    // end the turn. Without runHooks the turn is socket-bound and `runId` is
-    // undefined.
-    let runId: string | undefined;
-    let effectiveSignal = signal;
-    if (runHooks) {
-      try {
-        const handle = await runHooks.begin(chatId);
-        if (handle) {
-          runId = handle.runId;
-          effectiveSignal = handle.signal;
-        }
-      } catch (err) {
-        // RACE BACKSTOP: the run-row INSERT lost the chat's single active slot
-        // (the partial unique index rejected it). This is the AUTHORITATIVE
-        // concurrency gate — the controller's pre-check is only a fast-path, and a
-        // request that slipped past it must NOT proceed. Reject the turn with a
-        // 409 NOW, BEFORE any AI/provider call: no tokens are spent and no
-        // untracked turn streams. (Matches the controller's pre-check 409.)
-        if (err instanceof RunAlreadyActiveError) {
-          throw new ConflictException({
-            message: 'An agent run is already in progress for this chat',
-            code: 'A_RUN_ALREADY_ACTIVE',
-          });
-        }
-        // Any other run-start failure must fail the turn: a turn without a run-row
-        // cannot be stopped (/stop can't see it, disconnect doesn't abort it) and
-        // the one-run-per-chat gate would admit a second run. Reject before the
-        // first byte (no user row, no MCP lease yet) so the controller's
-        // post-hijack catch turns this HttpException into a 503.
-        this.logger.error(
-          `Failed to begin agent run (chat ${chatId}); failing the turn`,
-          err as Error,
-        );
-        throw new ServiceUnavailableException({
-          message:
-            'Could not start the agent run. This is usually temporary — please try again.',
-          code: 'A_RUN_BEGIN_FAILED',
-          // Self-describe the status in the body: the controller's post-hijack
-          // catch writes getResponse() verbatim onto the raw socket, and an
-          // object-arg HttpException does NOT inject statusCode. Without it the
-          // client's 503 classifier (which reads the body JSON) could not see the
-          // status. With it present, the client's A_RUN_BEGIN_FAILED branch (which
-          // runs strictly before the generic-503 branch) shows "temporary, retry".
-          statusCode: 503,
+    // end the turn.
+    let run: RunHandle;
+    try {
+      run = await runHooks.begin(chatId);
+    } catch (err) {
+      // RACE BACKSTOP: the run-row INSERT lost the chat's single active slot
+      // (the partial unique index rejected it). This is the AUTHORITATIVE
+      // concurrency gate — the controller's pre-check is only a fast-path, and a
+      // request that slipped past it must NOT proceed. Reject the turn with a
+      // 409 NOW, BEFORE any AI/provider call: no tokens are spent and no
+      // untracked turn streams. (Matches the controller's pre-check 409.)
+      if (err instanceof RunAlreadyActiveError) {
+        throw new ConflictException({
+          message: 'An agent run is already in progress for this chat',
+          code: 'A_RUN_ALREADY_ACTIVE',
         });
       }
+      // Any other run-start failure must fail the turn: a turn without a run-row
+      // cannot be stopped (/stop can't see it, disconnect doesn't abort it) and
+      // the one-run-per-chat gate would admit a second run. Reject before the
+      // first byte (no user row, no MCP lease yet) so the controller's
+      // post-hijack catch turns this HttpException into a 503.
+      this.logger.error(
+        `Failed to begin agent run (chat ${chatId}); failing the turn`,
+        err as Error,
+      );
+      throw new ServiceUnavailableException({
+        message:
+          'Could not start the agent run. This is usually temporary — please try again.',
+        code: 'A_RUN_BEGIN_FAILED',
+        // Self-describe the status in the body: the controller's post-hijack
+        // catch writes getResponse() verbatim onto the raw socket, and an
+        // object-arg HttpException does NOT inject statusCode. Without it the
+        // client's 503 classifier (which reads the body JSON) could not see the
+        // status. With it present, the client's A_RUN_BEGIN_FAILED branch (which
+        // runs strictly before the generic-503 branch) shows "temporary, retry".
+        statusCode: 503,
+      });
     }
+    const { runId, signal: runSignal } = run;
 
     // #487: opportunistic single-chat reconcile — settle any streaming row on this
     // chat whose run is already terminal BEFORE this turn's history load, so the
@@ -1372,7 +1369,7 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
           // #686: the toolset is per-user — admin servers ∪ THIS user's personal
           // servers. `user.id` is REQUIRED (the cache is always keyed per-user).
           this.mcpClients.toolsFor(workspace.id, user.id),
-          effectiveSignal,
+          runSignal,
           MCP_TOOLSET_BUILD_DEADLINE_MS,
           (late) => {
             void Promise.all(
@@ -1384,9 +1381,8 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         mcpFailures = buildMcpFailures(external.outcomes);
       } catch (err) {
         // An explicit Stop reached the run's signal during setup: re-throw so the
-        // outer catch finalizes the run as aborted. Without `runId` (begin returned
-        // no handle, `effectiveSignal` is the bare socket signal) warn and proceed.
-        if (runId && effectiveSignal.aborted) {
+        // outer catch finalizes the run as aborted.
+        if (runSignal.aborted) {
           throw err;
         }
         // Otherwise a down/slow server (build timeout or other fault) must never
@@ -1599,6 +1595,40 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         }
       };
 
+      // Both turn-end writes, bounded together by TURN_END_WRITES_DEADLINE_MS:
+      // every terminal callback settles the run right after them, and a slow page
+      // export (the loopback exportPageMarkdown) must not hold the run slot past
+      // the supersede window. On the deadline we stop waiting (the export takes no
+      // signal, so it finishes in the background and swallows its own errors).
+      // The two run side by side, so a slow export does not hold back the
+      // activated-tools write.
+      const runTurnEndWrites = async (): Promise<void> => {
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<false>((resolve) => {
+          deadlineTimer = setTimeout(
+            () => resolve(false),
+            TURN_END_WRITES_DEADLINE_MS,
+          );
+        });
+        const writes = Promise.all([
+          snapshotTurnEnd(),
+          persistActivatedTools(),
+        ]).then(() => true);
+        try {
+          const finished = await Promise.race([writes, deadline]);
+          if (!finished) {
+            this.logger.warn(
+              `Turn-end writes (page snapshot, activated tools) of chat ` +
+                `${chatId} (open page ${openPageContext?.id ?? 'none'}) did not ` +
+                `finish within ${TURN_END_WRITES_DEADLINE_MS}ms; settling the ` +
+                `run without waiting for them.`,
+            );
+          }
+        } finally {
+          clearTimeout(deadlineTimer);
+        }
+      };
+
       // Accumulate the turn's streamed output so a provider error / disconnect can
       // persist the PARTIAL answer the user already saw — the SDK's onError/onAbort
       // callbacks don't hand us the in-progress text. `capturedSteps` holds finished
@@ -1613,7 +1643,7 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       const partsCache: StepPartsCache = new WeakMap();
 
       // Token-degeneration guard: when the final-step lockdown is OFF, a runaway
-      // repetition loop is aborted via this controller, unioned with the run/socket
+      // repetition loop is aborted via this controller, unioned with the run
       // signal below. The detector runs on `inProgressText` in onChunk, every
       // ~DEGENERATION_CHECK_STEP bytes of growth.
       const degenerationController = new AbortController();
@@ -1650,9 +1680,9 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
 
       // Link the assistant message (the #183 projection) to its run (#184), so a
       // reconnecting client can resolve the run's output. Best-effort.
-      if (runId && assistantId) {
+      if (assistantId) {
         try {
-          await runHooks?.onAssistantSeeded?.(runId, assistantId);
+          await runHooks.onAssistantSeeded?.(runId, assistantId);
         } catch (err) {
           this.logger.warn(
             `Failed to link assistant row to run ${runId}: ${
@@ -1744,12 +1774,27 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       // on `finalized`, so a tail of late updates is cheap.
       let stepUpdateChain: Promise<void> = Promise.resolve();
 
-      // Terminal finalize: write the completed/error/aborted row exactly once
-      // across the mutually-exclusive onFinish/onError/onAbort callbacks. The
-      // once-gate closes only after a successful write, which is retried a bounded
-      // number of times; on give-up the gate stays open and the periodic reconcile
-      // settles the row. Returns whether the write landed, so the caller can
-      // error-mark the run (the run is finalized regardless).
+      // The terminal callbacks are NOT mutually exclusive in the SDK: a Stop after
+      // a finished step fires onAbort (synchronously, not awaited) and then
+      // onFinish (with the finished steps, an empty usage and finishReason
+      // 'other'); a mid-stream provider error fires onError and then onFinish the
+      // same way. The callback that fires first owns the terminal handling (one
+      // row write, one run settle, one title); every later one returns without
+      // touching anything. Claimed synchronously, before any await, so two
+      // callbacks cannot both pass it.
+      let terminalClaimed = false;
+      const claimTerminal = (): boolean => {
+        if (terminalClaimed) return false;
+        terminalClaimed = true;
+        return true;
+      };
+
+      // Terminal finalize: write the completed/error/aborted row exactly once,
+      // from the callback that claimed the terminal above. The once-gate closes
+      // only after a successful write, which is retried a bounded number of times;
+      // on give-up the gate stays open and the periodic reconcile settles the row.
+      // Returns whether the write landed, so the caller can error-mark the run
+      // (the run is finalized regardless).
       let finalized = false;
       const FINALIZE_MSG_MAX_ATTEMPTS = 3;
       const finalizeAssistant = async (
@@ -1785,8 +1830,8 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
             }
           }
         }
-        // Gave up: leave the gate OPEN (no in-process second settler exists — the
-        // terminal callbacks are mutually exclusive) and log. The periodic reconcile
+        // Gave up: leave the gate OPEN (no in-process second settler exists — only
+        // the callback that claimed the terminal finalizes) and log. The periodic reconcile
         // settles the stranded row; a late owner-write is impossible for this turn,
         // so the reconcile stamp (aborted+finalizeFailed) is the final state.
         this.logger.error(
@@ -1843,14 +1888,13 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
             if (!viewImageEnabled) return base;
             return injectViewImages(base, opts, viewImageCache);
           },
-          // #184: the RUN's signal (explicit-stop) when a run wraps this turn, else
-          // the socket-bound signal (no run). A browser disconnect never aborts a
-          // run by itself (#714: the controller stops a new chat's run via the run
-          // signal when its client left before the first frame). #444: UNION it
-          // with the internal degeneration signal so a detected token-loop aborts
-          // the run too (AbortSignal.any — Node 20.3+).
+          // #184: the RUN's signal (explicit-stop). A browser disconnect never
+          // aborts a run by itself (#714: the controller stops a new chat's run via
+          // the run signal when its client left before the first frame). #444:
+          // UNION it with the internal degeneration signal so a detected
+          // token-loop aborts the run too (AbortSignal.any — Node 20.3+).
           abortSignal: AbortSignal.any([
-            effectiveSignal,
+            runSignal,
             degenerationController.signal,
           ]),
           onChunk: ({ chunk }) => {
@@ -1901,7 +1945,7 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
             // return rotates nothing.
             stepUpdateChain = stepUpdateChain.then(async () => {
               const persisted = await updateStreaming();
-              if (persisted != null && runId) {
+              if (persisted != null) {
                 this.streamRegistry?.confirmPersistedStep(
                   chatId,
                   runId,
@@ -1911,9 +1955,12 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
             });
             // #184: persist the run's progress (finished-step count). Fire-and-
             // forget; the hook swallows its own errors.
-            if (runId) runHooks?.onStep?.(runId, capturedSteps.length);
+            runHooks.onStep?.(runId, capturedSteps.length);
           },
           onFinish: async ({ text, finishReason, totalUsage, usage, steps }) => {
+            // A Stop or a mid-stream error already claimed the terminal (see
+            // claimTerminal): this late onFinish must not write 'completed' over it.
+            if (!claimTerminal()) return;
             // Finalize the upfront row to 'completed' with the final text,
             // cumulative usage and full UIMessage parts. `inProgressText` is '' here
             // (the last step already finished). Final-step usage
@@ -1952,32 +1999,43 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
                 mcpFailures,
               }),
             );
-            // #184/#487: the RUN is finalized ALWAYS (never gated on the message).
-            // If the message finalize GAVE UP, error-mark the run so the asymmetry
-            // "run succeeded / message streaming forever" cannot arise; the
-            // periodic reconcile then settles the stuck message from this run.
-            if (runId) {
-              await runHooks?.onSettled?.(
-                runId,
-                msgOk ? 'completed' : 'error',
-                msgOk
-                  ? undefined
-                  : 'Assistant message could not be persisted (finalize failed).',
-              );
-            }
             // Turn end (#274): snapshot the open page's current Markdown (after all
             // of the agent's edits this turn) so the NEXT turn can diff against it
             // and detect edits a human made in between. Self-clearing — the agent's
             // own edits are baked in — and this also SEEDS the snapshot on the first
             // turn. Runs once across every terminal path (see snapshotTurnEnd).
-            await snapshotTurnEnd();
             // #490: persist the deferred-tool activation set for the next turn.
-            await persistActivatedTools();
+            // Both bounded by TURN_END_WRITES_DEADLINE_MS (see runTurnEndWrites).
+            await runTurnEndWrites();
+            // #184/#487: the RUN is finalized ALWAYS (never gated on the message).
+            // If the message finalize GAVE UP, error-mark the run so the asymmetry
+            // "run succeeded / message streaming forever" cannot arise; the
+            // periodic reconcile then settles the stuck message from this run.
+            //
+            // ORDER MATTERS: settling the run frees the chat's single active slot,
+            // and that is the signal the NEXT turn starts on (a supersede waits for
+            // exactly this settle; a queued send sees the run terminal). Both
+            // turn-end writes above are read by the next turn, so they must land
+            // BEFORE the slot is released, or it reads a stale snapshot (and
+            // reports this turn's own edits as a human's) and an empty activation
+            // set — unless they outlive their deadline, which would otherwise make
+            // a waiting supersede time out. Safe because both writes are
+            // self-guarding — snapshotOpenPage and persistActivatedTools swallow
+            // and log their own errors — so neither can throw and skip this settle
+            // (which the SDK would swallow silently: it ignores onFinish
+            // rejections).
+            await runHooks.onSettled?.(
+              runId,
+              msgOk ? 'completed' : 'error',
+              msgOk
+                ? undefined
+                : 'Assistant message could not be persisted (finalize failed).',
+            );
 
             // Release the external MCP clients leased for this turn. Runs after
-            // both turn-end writes: observers (the turn-lifecycle integration test,
-            // operators) treat the lease release as "turn finished". Both writes
-            // swallow their own errors, so neither can skip this release.
+            // the turn-end writes and the settle: observers (the turn-lifecycle
+            // integration test, operators) treat the lease release as "turn
+            // finished".
             await closeExternalClients();
 
             // Generate the chat title for a freshly created chat AFTER the stream's
@@ -1997,6 +2055,8 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
             }
           },
           onError: async ({ error }) => {
+            // A Stop already claimed the terminal: keep its 'aborted' outcome.
+            if (!claimTerminal()) return;
             // NestJS Logger.error(message, stack?, context?): pass the real message
             // (with statusCode when present) + the stack string, not the Error
             // object, so the actual provider cause is clearly logged. Reuse the
@@ -2037,18 +2097,22 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
                 mcpFailures,
               }),
             );
-            // #184: settle the RUN as failed, carrying the provider/transport cause.
-            if (runId) await runHooks?.onSettled?.(runId, 'error', errorText);
             // Advance the page snapshot even on failure (#274): an agent edit that
             // committed before the error must be baked into the snapshot, or the
             // next turn would mis-report it as a user edit.
-            await snapshotTurnEnd();
             // #490: persist the deferred-tool activation set for the next turn.
-            await persistActivatedTools();
+            await runTurnEndWrites();
+            // #184: settle the RUN as failed, carrying the provider/transport cause
+            // — after the turn-end writes (see the onFinish path for why).
+            await runHooks.onSettled?.(runId, 'error', errorText);
             // Released last — see the onFinish path for why the order matters.
             await closeExternalClients();
           },
           onAbort: async ({ steps }) => {
+            // Called synchronously by the SDK when the run's signal aborts, BEFORE
+            // the onFinish that a turn with finished steps still gets: claiming
+            // here (no await before it) makes the Stop the turn's outcome.
+            if (!claimTerminal()) return;
             // #444: distinguish a degeneration abort (our internal controller) from
             // a user Stop / disconnect. On degeneration we truncate the runaway tail
             // before persist (so hundreds of KB of garbage never reach the DB /
@@ -2066,15 +2130,14 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
                   mcpFailures,
                 }),
               );
-              if (runId)
-                await runHooks?.onSettled?.(
-                  runId,
-                  'error',
-                  OUTPUT_DEGENERATION_ERROR,
-                );
-              await snapshotTurnEnd();
               // #490: persist the deferred-tool activation set for the next turn.
-              await persistActivatedTools();
+              await runTurnEndWrites();
+              // Settled after the turn-end writes — see the onFinish path.
+              await runHooks.onSettled?.(
+                runId,
+                'error',
+                OUTPUT_DEGENERATION_ERROR,
+              );
               // Released last — see the onFinish path for why the order matters.
               await closeExternalClients();
               return;
@@ -2097,15 +2160,15 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
                 mcpFailures,
               }),
             );
-            // #184: settle the RUN as aborted (an explicit user stop reached the
-            // run's signal; a disconnect does not abort a run-wrapped turn).
-            if (runId) await runHooks?.onSettled?.(runId, 'aborted');
             // Advance the page snapshot even on abort (#274): an agent edit that
             // committed before the client disconnect / stop() must be baked into the
             // snapshot, or the next turn would mis-report it as a user edit.
-            await snapshotTurnEnd();
             // #490: persist the deferred-tool activation set for the next turn.
-            await persistActivatedTools();
+            await runTurnEndWrites();
+            // #184: settle the RUN as aborted (an explicit user stop reached the
+            // run's signal; a disconnect does not abort a run-wrapped turn) — after
+            // the turn-end writes, which a superseding turn reads (see onFinish).
+            await runHooks.onSettled?.(runId, 'aborted');
             // Released last — see the onFinish path for why the order matters.
             await closeExternalClients();
           },
@@ -2135,32 +2198,14 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         // as the cumulative authoritative usage so the client never jumps DOWN.
         let cumulativeStepUsage: ChatStreamUsage | undefined;
         result.pipeUIMessageStreamToResponse(res.raw, {
-          // #184 phase 1.5: both fields are gated on `runId` (present only for a
-          // durable run); without a run the wire carries no start.messageId.
-          ...(runId
-            ? {
-                // Tee the SSE frames into the run-stream registry so late tabs can
-                // attach (replay + live tail).
-                consumeSseStream: ({
-                  stream,
-                }: {
-                  stream: ReadableStream<string>;
-                }) =>
-                  this.streamRegistry?.bind(
-                    chatId,
-                    runId!,
-                    assistantId,
-                    stream,
-                  ),
-                // Stamp the persisted assistant row's DB id onto the streamed
-                // message so every tab renders the SAME id as the DB row (id-based
-                // reconciliation). Seeding is best-effort: when it failed, let the
-                // client generate the id.
-                ...(assistantId
-                  ? { generateMessageId: () => assistantId }
-                  : {}),
-              }
-            : {}),
+          // #184 phase 1.5: tee the SSE frames into the run-stream registry so
+          // late tabs can attach (replay + live tail).
+          consumeSseStream: ({ stream }: { stream: ReadableStream<string> }) =>
+            this.streamRegistry?.bind(chatId, runId, assistantId, stream),
+          // Stamp the persisted assistant row's DB id onto the streamed message so
+          // every tab renders the SAME id as the DB row (id-based reconciliation).
+          // Seeding is best-effort: when it failed, let the client generate the id.
+          ...(assistantId ? { generateMessageId: () => assistantId } : {}),
           headers: { 'X-Accel-Buffering': 'no' },
           // Attach the authoritative chatId on the `start` part so the client adopts
           // the real chat id at the first chunk instead of guessing the newest chat
@@ -2221,26 +2266,24 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       // stays 'running' forever (which would 409 every later turn in this chat).
       // finalizeRun (onSettled) is idempotent — a settle here and a settle from a
       // streamText callback collapse to a single terminal write.
-      if (runId) {
-        // #184 phase 1.5: a failure here means the tee `done` will never arrive,
-        // so release the registry entry's subscribers explicitly — otherwise an
-        // attached tab hangs forever.
-        this.streamRegistry?.abortEntry(chatId, runId);
-        // Distinguish an explicit Stop (the run's signal aborted during setup) from
-        // a real failure, so the run settles with the correct terminal status
-        // instead of always 'error'. onSettled/finalizeRun is idempotent, so this
-        // is safe even if a streamText callback also settles the run.
-        const settleStatus = effectiveSignal.aborted ? 'aborted' : 'error';
-        await runHooks?.onSettled?.(
-          runId,
-          settleStatus,
-          settleStatus === 'aborted'
-            ? undefined
-            : err instanceof Error
-              ? err.message
-              : 'Agent run failed before streaming started',
-        );
-      }
+      // #184 phase 1.5: a failure here means the tee `done` will never arrive,
+      // so release the registry entry's subscribers explicitly — otherwise an
+      // attached tab hangs forever.
+      this.streamRegistry?.abortEntry(chatId, runId);
+      // Distinguish an explicit Stop (the run's signal aborted during setup) from
+      // a real failure, so the run settles with the correct terminal status
+      // instead of always 'error'. onSettled/finalizeRun is idempotent, so this
+      // is safe even if a streamText callback also settles the run.
+      const settleStatus = runSignal.aborted ? 'aborted' : 'error';
+      await runHooks.onSettled?.(
+        runId,
+        settleStatus,
+        settleStatus === 'aborted'
+          ? undefined
+          : err instanceof Error
+            ? err.message
+            : 'Agent run failed before streaming started',
+      );
       throw err;
     }
   }
@@ -2419,8 +2462,8 @@ export function chatStreamMetadata(
   chatId: string,
   cumulativeStepUsage?: ChatStreamUsage,
   // #184: the active run's id, attached alongside `chatId` on the `start` part so
-  // the client learns the run it can reconnect to / stop. Omitted when the turn
-  // is not run-wrapped (no runHooks — test harnesses only).
+  // the client learns the run it can reconnect to / stop. Every turn is a run,
+  // so AiChatService.stream always passes it.
   runId?: string,
   // #686 P4: external-MCP connection failures for this turn, delivered on the
   // `start` part so the client can show which external tools are unavailable.

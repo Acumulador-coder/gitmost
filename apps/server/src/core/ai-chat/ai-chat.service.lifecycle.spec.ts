@@ -148,7 +148,6 @@ describe('AiChatService.stream run-lifecycle safety net (#184)', () => {
           ],
         },
         res: {} as never,
-        signal: new AbortController().signal,
         model: {} as never,
         role: null,
         runHooks,

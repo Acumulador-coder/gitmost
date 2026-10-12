@@ -1,24 +1,29 @@
 // Unit tests for the event-driven git-sync trigger. The orchestrator
 // and page repo are hand-built mocks; the debounce coalescing is exercised with
-// jest fake timers. We assert the gate, the loop-guard (anti-echo), the
+// jest fake timers. We assert the loop-guard (anti-echo), the
 // missing-page short-circuit, the heterogeneous event-shape id resolution, the
 // debounce collapse, and that errors are swallowed + logged.
 import { Logger } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { EventEmitter2, EventEmitterModule } from '@nestjs/event-emitter';
+import { PageRepo } from '@docmost/db/repos/page/page.repo';
+import { EnvironmentService } from '../../environment/environment.service';
+import { GitSyncOrchestrator } from '../services/git-sync.orchestrator';
+import { GIT_SYNC_PAGE_EVENTS } from '../git-sync.constants';
 import { PageChangeListener } from './page-change.listener';
 
 type AnyMock = jest.Mock;
 
 interface Built {
   listener: PageChangeListener;
-  env: { isGitSyncEnabled: AnyMock; getGitSyncDebounceMs: AnyMock };
+  env: { getGitSyncDebounceMs: AnyMock };
   orchestrator: { runOnce: AnyMock };
   pageRepo: { findById: AnyMock };
 }
 
-function build(opts: { enabled?: boolean; debounceMs?: number } = {}): Built {
-  const { enabled = true, debounceMs = 2000 } = opts;
+function build(opts: { debounceMs?: number } = {}): Built {
+  const { debounceMs = 2000 } = opts;
   const env = {
-    isGitSyncEnabled: jest.fn(() => enabled),
     getGitSyncDebounceMs: jest.fn(() => debounceMs),
   };
   const orchestrator = { runOnce: jest.fn(async () => undefined) };
@@ -37,15 +42,6 @@ beforeEach(() => {
 });
 
 describe('PageChangeListener', () => {
-  describe('gate', () => {
-    it('does nothing when git-sync is disabled (no findById, no schedule)', async () => {
-      const { listener, orchestrator, pageRepo } = build({ enabled: false });
-      await listener.handlePageEvent({ pageId: 'p1', workspaceId: 'ws-1' });
-      expect(pageRepo.findById).not.toHaveBeenCalled();
-      expect(orchestrator.runOnce).not.toHaveBeenCalled();
-    });
-  });
-
   describe('loop-guard (anti-echo)', () => {
     it("does NOT schedule a cycle when the page row's source is 'git-sync'", async () => {
       jest.useFakeTimers();
@@ -247,6 +243,44 @@ describe('PageChangeListener', () => {
       } finally {
         warnSpy.mockRestore();
       }
+    });
+  });
+
+  // The subscription itself, through a REAL Nest EventEmitterModule: the tests
+  // above call handlePageEvent directly, so they cannot see an @OnEvent that
+  // never fires (the array form `@OnEvent(GIT_SYNC_PAGE_EVENTS)` registers one
+  // listener under the comma-joined name, and no emit matches it).
+  describe('event subscription', () => {
+    let moduleRef: TestingModule;
+    let emitter: EventEmitter2;
+    let handlePageEvent: jest.SpyInstance;
+
+    beforeEach(async () => {
+      moduleRef = await Test.createTestingModule({
+        imports: [EventEmitterModule.forRoot()],
+        providers: [
+          PageChangeListener,
+          { provide: EnvironmentService, useValue: {} },
+          { provide: GitSyncOrchestrator, useValue: {} },
+          { provide: PageRepo, useValue: {} },
+        ],
+      }).compile();
+      await moduleRef.init();
+      emitter = moduleRef.get(EventEmitter2);
+      handlePageEvent = jest
+        .spyOn(moduleRef.get(PageChangeListener), 'handlePageEvent')
+        .mockResolvedValue(undefined);
+    });
+
+    afterEach(async () => {
+      await moduleRef.close();
+    });
+
+    it.each(GIT_SYNC_PAGE_EVENTS)('%s reaches handlePageEvent', (event) => {
+      const payload = { pageId: 'p1', workspaceId: 'ws-1' };
+      emitter.emit(event, payload);
+
+      expect(handlePageEvent.mock.calls).toEqual([[payload]]);
     });
   });
 });

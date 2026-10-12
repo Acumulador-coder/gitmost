@@ -13,7 +13,8 @@ export class SearchResultDto {
   icon: string;
   title: string;
   space?: Partial<Space>;
-  creatorId: string;
+  // Omitted (with `space`) for an anonymous share reader.
+  creatorId?: string;
   createdAt: Date;
   updatedAt: Date;
   // ts_rank_cd of the FTS branch; null for substring-only hits.
@@ -93,6 +94,11 @@ export class SearchResponseDto {
     match: string;
   };
   // Absent on the early-exit paths (empty/garbage query); present once search
-  // actually runs. Optional so those short-circuit responses stay valid.
+  // actually runs. Optional so those short-circuit responses stay valid. Never
+  // sent to an anonymous share reader: its coverage counters are workspace-wide.
   semantic?: SearchSemanticDto;
+  // Share search only: why search is unavailable on this share (an approved-mode
+  // share publishes only saved versions, while the index holds the live draft).
+  // Set together with an empty result.
+  disabledReason?: string;
 }

@@ -1,3 +1,4 @@
+import './git-env';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -235,7 +236,7 @@ describe('VaultGit (integration; temp bare vault)', () => {
     expect((stdout as unknown as Buffer).includes(Buffer.from('\r\n'))).toBe(false);
   });
 
-  it('reads a large path list in chunks of 1000 paths per cat-file call', async () => {
+  it('reads a large path list: sizes in chunks of 1000 paths, then the files that exist', async () => {
     if (!available) return;
     const { git, init } = await freshVault();
     const head = await commitFiles(git, init, { 'a.md': 'first\n', 'z.md': 'last\n' });
@@ -245,7 +246,20 @@ describe('VaultGit (integration; temp bare vault)', () => {
     const read = await git.readFilesAtRef(head, paths);
 
     expect(Object.fromEntries(read)).toEqual({ 'a.md': 'first\n', 'z.md': 'last\n' });
-    expect(runRaw).toHaveBeenCalledTimes(2);
+    // Two `--batch-check` calls (1000 + 1 paths), one `--batch` for the two files.
+    expect(runRaw).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads files whose sum is over the output budget of one git call, in batches by bytes', async () => {
+    if (!available) return;
+    const { git, init } = await freshVault();
+    const big = (c: string) => c.repeat(25 * 1024 * 1024);
+    const head = await commitFiles(git, init, { 'a.md': big('a'), 'b.md': big('b'), 'c.md': big('c') });
+
+    const read = await git.readFilesAtRef(head, ['a.md', 'b.md', 'c.md']);
+
+    expect([...read.keys()]).toEqual(['a.md', 'b.md', 'c.md']);
+    expect(read.get('c.md')).toBe(big('c'));
   });
 
   it('lsTree lists every file with its mode and RAW UTF-8 path; buildTree applies changes, removals and modes', async () => {
@@ -394,6 +408,35 @@ describe('VaultGit (integration; temp bare vault)', () => {
     ]);
     expect(await git.commitAddingPath(head, 'Dir [x]/B.md')).toBe(added);
     expect(await git.commitAddingPath(head, 'never.md')).toBeNull();
+  });
+
+  it('pageIdsAtRef reads a 1 MB whitespace run inside an id line in linear time', async () => {
+    if (!available) return;
+    const { git, init } = await freshVault();
+    const run = ' '.repeat(1024 * 1024);
+    const head = await commitFiles(git, init, {
+      'Hostile.md': `---\ngitmost_id: a${run}b\n---\n\nx\n`,
+      'Page.md': '---\ngitmost_id: "page-1"\n---\n\nx\n',
+    });
+
+    const started = performance.now();
+    const ids = await git.pageIdsAtRef(head);
+    const elapsed = performance.now() - started;
+
+    expect(ids).toContainEqual({ path: 'Page.md', id: 'page-1' });
+    expect(ids).toContainEqual({ path: 'Hostile.md', id: `a${run}b` });
+    expect(elapsed).toBeLessThan(1000);
+  });
+
+  it('a git output over the output budget fails with that reason, not as an exit status', async () => {
+    if (!available) return;
+    const { git, init } = await freshVault();
+    const head = await commitFiles(git, init, { 'huge.md': 'x'.repeat(65 * 1024 * 1024) });
+
+    // Read as an exit status, the cut-off `git show` would be "path absent".
+    await expect(git.showFileAtRef(head, 'huge.md')).rejects.toThrow(
+      /git show [0-9a-f]+:huge\.md printed more than its \d+-byte output budget and was stopped/,
+    );
   });
 
   it('installPushGuard writes the pre-receive hook once, executable', async () => {

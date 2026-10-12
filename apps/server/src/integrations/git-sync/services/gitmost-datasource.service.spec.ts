@@ -6,7 +6,6 @@
 jest.mock('../../../collaboration/collaboration.util', () => ({
   tiptapExtensions: [],
   getPageId: (name: string) => name.replace(/^page\./, ''),
-  inEditorShape: jest.fn((json: any) => json),
 }));
 // writeBody now builds the replacement Yjs state eagerly (before clearing the
 // live doc), so TiptapTransformer.toYdoc runs in these unit tests. Real Tiptap
@@ -15,6 +14,7 @@ jest.mock('../../../collaboration/collaboration.util', () => ({
 // The real conversion is exercised by the @docmost/git-sync converter tests and
 // the integration tests.
 jest.mock('@hocuspocus/transformer', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const Yjs = require('yjs');
   return {
     TiptapTransformer: {
@@ -54,22 +54,13 @@ jest.mock('../git-sync.loader', () => ({
     // rename fixtures use filename-hostile chars, so the sanitized form equals
     // the input and the guard never fires).
     sanitizeTitle: (title: string) => title,
-    // importPageMarkdown guard #2 uses docsCanonicallyEqual to skip a no-op
-    // re-ingest. A key-order-insensitive JSON compare is a sufficient stand-in
-    // for the unit tests (the real semantic equality is covered by the
-    // @docmost/git-sync converter tests); returning false for genuinely
-    // different docs lets the write paths under test proceed.
-    docsCanonicallyEqual: (a: unknown, b: unknown) =>
-      JSON.stringify(a) === JSON.stringify(b),
   })),
 }));
 
-import { GitmostDataSourceService } from './gitmost-datasource.service';
-// The loader is mocked above; this binding is the hoisted jest.fn, so a single
-// test can swap the runtime bridge (e.g. a smarter `docsCanonicallyEqual`) via
-// `mockResolvedValueOnce` without perturbing the default used by every other test.
-import { loadGitSync } from '../git-sync.loader';
-import { inEditorShape } from '../../../collaboration/collaboration.util';
+import {
+  GIT_SYNC_BODY_WRITE_TIMEOUT_MS,
+  GitmostDataSourceService,
+} from './gitmost-datasource.service';
 
 // Focused unit/contract test for the native GitSyncClient adapter.
 // No DB, no real collab server: the repos/services/gateway are mocked and we
@@ -141,10 +132,13 @@ function build(rows: any[] = []): {
   return { service, mocks };
 }
 
-const CTX = { workspaceId: 'ws-1', userId: 'svc-user' };
-// A bound context that carries the reconciling spaceId, enabling deletePage's
-// cross-space MOVE guard (the `if (ctx.spaceId)` branch).
-const CTX_SPACE = { ...CTX, spaceId: 'space-1' };
+const CTX = { workspaceId: 'ws-1', userId: 'svc-user', spaceId: 'space-1' };
+// The same bound context; kept as a separate name where a test is about the
+// reconciling space (the cross-space guards compare against it).
+const CTX_SPACE = CTX;
+// The fields every id-scoped write checks: a page of the reconciling
+// space in the reconciling workspace.
+const IN_SPACE = { workspaceId: 'ws-1', spaceId: 'space-1' };
 // A syntactically VALID parent uuid. createPage/movePage now coerce a malformed
 // (non-UUID) parentPageId to root (F1), so tests exercising the normal
 // pass-through parent path must use a real uuid, not an arbitrary token.
@@ -302,6 +296,7 @@ describe('GitmostDataSourceService', () => {
       const { service, mocks } = build();
       mocks.pageRepo.findById.mockResolvedValue({
         id: 'p1',
+        ...IN_SPACE,
         updatedAt: new Date('2026-06-20T11:00:00.000Z'),
       });
 
@@ -334,6 +329,7 @@ describe('GitmostDataSourceService', () => {
       mocks.pageRepo.findById
         .mockResolvedValueOnce({
           id: 'p1',
+          ...IN_SPACE,
           updatedAt: new Date('2026-06-20T11:00:00.000Z'),
         }) // currentPage (import-time read) exists
         .mockResolvedValue(undefined); // post-write read: page is gone
@@ -361,63 +357,11 @@ describe('GitmostDataSourceService', () => {
       expect(mocks.collabGateway.writePageBody).not.toHaveBeenCalled();
     });
 
-    it('guard #2 treats NULL page content as an empty doc: an empty body is not written', async () => {
-      const { service, mocks } = build();
-      mocks.pageRepo.findById.mockResolvedValue({
-        id: 'p1',
-        updatedAt: new Date('2026-06-20T11:00:00.000Z'),
-        content: null,
-      });
-
-      const res = await service.bind(CTX).importPageMarkdown('p1', '');
-
-      expect(mocks.collabGateway.writePageBody).not.toHaveBeenCalled();
-      expect(res.updatedAt).toBe('2026-06-20T11:00:00.000Z');
-    });
-
-    it('guard #2 treats block-less page content as an empty doc: an empty body is not written', async () => {
-      const { service, mocks } = build();
-      mocks.pageRepo.findById.mockResolvedValue({
-        id: 'p1',
-        updatedAt: new Date('2026-06-20T11:00:00.000Z'),
-        content: { type: 'doc', content: [] },
-      });
-
-      await service.bind(CTX).importPageMarkdown('p1', '');
-
-      expect(mocks.collabGateway.writePageBody).not.toHaveBeenCalled();
-    });
-
-    it('guard #2 compares the incoming body in the shape a write stores it: a page holding it with its trailing paragraph is not written', async () => {
-      const { service, mocks } = build();
-      const list = { type: 'bulletList', content: [] };
-      mocks.pageRepo.findById.mockResolvedValue({
-        id: 'p1',
-        updatedAt: new Date('2026-06-20T11:00:00.000Z'),
-        content: { type: 'doc', content: [list, { type: 'paragraph' }] },
-      });
-      (loadGitSync as jest.Mock).mockResolvedValueOnce({
-        parseDocmostMarkdown: (md: string) => ({ meta: {}, body: md }),
-        markdownToProseMirror: async () => ({ type: 'doc', content: [list] }),
-        sanitizeTitle: (title: string) => title,
-        docsCanonicallyEqual: (a: unknown, b: unknown) =>
-          JSON.stringify(a) === JSON.stringify(b),
-      });
-      // Stand-in for the real shaping: the editor's trailing paragraph.
-      (inEditorShape as jest.Mock).mockImplementationOnce((json: any) => ({
-        ...json,
-        content: [...json.content, { type: 'paragraph' }],
-      }));
-
-      await service.bind(CTX).importPageMarkdown('p1', '- item');
-
-      expect(mocks.collabGateway.writePageBody).not.toHaveBeenCalled();
-    });
-
     it('a non-empty body over NULL page content is still written', async () => {
       const { service, mocks } = build();
       mocks.pageRepo.findById.mockResolvedValue({
         id: 'p1',
+        ...IN_SPACE,
         updatedAt: new Date('2026-06-20T11:00:00.000Z'),
         content: null,
       });
@@ -425,76 +369,6 @@ describe('GitmostDataSourceService', () => {
       await service.bind(CTX).importPageMarkdown('p1', 'first words');
 
       expect(mocks.collabGateway.writePageBody).toHaveBeenCalledTimes(1);
-    });
-
-    // Guard #2 (docsCanonicallyEqual) must SKIP the
-    // re-ingest when the freshly-parsed doc is canonically equal to the page's
-    // current DB content even though the two are NOT byte-identical — the DB copy
-    // carries the real per-block uuids (comments anchor to them) while a fresh
-    // parse has none. Skipping is what protects a concurrent, not-yet-flushed
-    // human edit from being clobbered by an idempotent poll re-ingest.
-    //
-    // `currentContent` here differs from `doc` in raw JSON (it has an `attrs.id`
-    // uuid `doc` lacks), so the default mock (a plain `JSON.stringify` compare)
-    // would return FALSE. We model the package's id-stripping equality by
-    // swapping in a `docsCanonicallyEqual` that normalizes away block ids, so it
-    // is the SEMANTIC equality — not a byte compare — that suppresses the write.
-    it('does NOT call writePageBody (guard #2) when content is canonically equal despite differing block ids (F5 criterion b)', async () => {
-      const { service, mocks } = build();
-      const realUuid = '11111111-1111-4111-8111-111111111111';
-      // The DB row's content carries a REAL per-block uuid; a fresh parse does not.
-      // These two docs are canonically equal (id-only difference) but NOT
-      // byte-identical, so a naive JSON compare treats the page as "changed".
-      mocks.pageRepo.findById.mockResolvedValue({
-        id: 'p1',
-        updatedAt: new Date('2026-06-20T11:00:00.000Z'),
-        content: {
-          type: 'doc',
-          content: [{ type: 'paragraph', attrs: { id: realUuid } }],
-        },
-      });
-      // Swap the runtime bridge for THIS call only: same passthrough parse/convert
-      // as the default mock (so `doc` is the id-less `{type:'doc',[paragraph]}`),
-      // but `docsCanonicallyEqual` strips block ids before comparing — the real
-      // converter's semantics. It returns TRUE for (doc, currentContent) here.
-      const stripIds = (node: any): any => {
-        if (Array.isArray(node)) return node.map(stripIds);
-        if (node && typeof node === 'object') {
-          const out: any = {};
-          for (const [k, v] of Object.entries(node)) {
-            if (k === 'attrs' && v && typeof v === 'object') {
-              const { id: _id, ...rest } = v as Record<string, unknown>;
-              if (Object.keys(rest).length) out.attrs = stripIds(rest);
-            } else {
-              out[k] = stripIds(v);
-            }
-          }
-          return out;
-        }
-        return node;
-      };
-      (loadGitSync as jest.Mock).mockResolvedValueOnce({
-        parseDocmostMarkdown: (md: string) => ({ meta: {}, body: md }),
-        markdownToProseMirror: async () => ({
-          type: 'doc',
-          content: [{ type: 'paragraph' }],
-        }),
-        sanitizeTitle: (title: string) => title,
-        docsCanonicallyEqual: (a: unknown, b: unknown) =>
-          JSON.stringify(stripIds(a)) === JSON.stringify(stripIds(b)),
-      });
-
-      // No baseMarkdown -> guard #1 (fullMarkdown === baseMarkdown) cannot fire, so
-      // the outcome is decided purely by guard #2.
-      const res = await service
-        .bind(CTX)
-        .importPageMarkdown('p1', '# Hello\n\nworld');
-
-      // Guard #2 fired: the redundant re-ingest is skipped, so the concurrent
-      // human edit in the live doc is NOT clobbered.
-      expect(mocks.collabGateway.writePageBody).not.toHaveBeenCalled();
-      // The unchanged page's updatedAt is still surfaced from the DB row.
-      expect(res.updatedAt).toBe('2026-06-20T11:00:00.000Z');
     });
 
     // The 2-way path (no base) is covered above; this exercises the THREE-WAY
@@ -507,6 +381,7 @@ describe('GitmostDataSourceService', () => {
         const { service, mocks } = build();
         mocks.pageRepo.findById.mockResolvedValue({
           id: 'p1',
+          ...IN_SPACE,
           updatedAt: new Date('2026-06-20T11:00:00.000Z'),
         });
 
@@ -537,12 +412,12 @@ describe('GitmostDataSourceService', () => {
       it('does NOT call writePageBody when the target page lives in another space', async () => {
         const { service, mocks } = build();
         // The resolved page is in space-2, but the reconciling context is space-1.
-        // Its content DIFFERS from the parsed doc, so guard #2 (docsCanonicallyEqual)
-        // cannot be what suppresses the write — proving NON-VACUITY: without the S2
-        // guard the flow would reach writeBody and writePageBody WOULD be called.
+        // NON-VACUITY: without the S2 guard the flow would reach writeBody and
+        // writePageBody WOULD be called.
         mocks.pageRepo.findById.mockResolvedValue({
           id: 'p1',
           deletedAt: null,
+          workspaceId: 'ws-1',
           spaceId: 'space-2',
           updatedAt: new Date('2026-06-21T09:00:00.000Z'),
           content: {
@@ -630,6 +505,7 @@ describe('GitmostDataSourceService', () => {
       expect(mocks.collabGateway.writePageBody).toHaveBeenCalledWith(
         'page.new-id',
         expect.objectContaining({ userId: 'svc-user' }),
+        expect.any(AbortSignal),
       );
       expect(res).toEqual({
         data: { id: 'new-id' },
@@ -807,15 +683,16 @@ describe('GitmostDataSourceService', () => {
       expect((mocks.pageService as any).forceDelete).toBeUndefined();
     });
 
-    // The cross-space MOVE guard fires only when ctx.spaceId is bound. It re-reads
-    // the page and SKIPS the soft-delete when the page has already moved to a
-    // DIFFERENT space (otherwise a move-out would trash the page from both vaults).
-    describe('cross-space move guard (ctx.spaceId bound)', () => {
+    // The cross-space MOVE guard re-reads the page and SKIPS the soft-delete when
+    // the page has already moved to a DIFFERENT space (otherwise a move-out would
+    // trash the page from both vaults).
+    describe('cross-space move guard', () => {
       it("skips removePage when the page moved to another space (move-out)", async () => {
         const { service, mocks } = build();
         mocks.pageRepo.findById.mockResolvedValue({
           id: 'p1',
           deletedAt: null,
+          workspaceId: 'ws-1',
           spaceId: 'space-2',
         });
 
@@ -831,7 +708,7 @@ describe('GitmostDataSourceService', () => {
         mocks.pageRepo.findById.mockResolvedValue({
           id: 'p1',
           deletedAt: null,
-          spaceId: 'space-1',
+          ...IN_SPACE,
         });
 
         await service.bind(CTX_SPACE).deletePage('p1');
@@ -864,6 +741,7 @@ describe('GitmostDataSourceService', () => {
         mocks.pageRepo.findById.mockResolvedValue({
           id: 'p1',
           deletedAt: new Date('2026-06-20T10:00:00.000Z'),
+          workspaceId: 'ws-1',
           spaceId: 'space-2',
         });
 
@@ -886,7 +764,7 @@ describe('GitmostDataSourceService', () => {
       const { service, mocks } = build([{ position: 'a0' }]);
       mocks.pageRepo.findById.mockResolvedValue({
         id: 'p1',
-        spaceId: 'space-1',
+        ...IN_SPACE,
       });
 
       await service.bind(CTX).movePage('p1', PARENT_UUID);
@@ -898,7 +776,7 @@ describe('GitmostDataSourceService', () => {
       expect(dto.parentPageId).toBe(PARENT_UUID);
       expect(typeof dto.position).toBe('string');
       expect(dto.position.length).toBeGreaterThan(0);
-      expect(page).toEqual({ id: 'p1', spaceId: 'space-1' });
+      expect(page).toEqual({ id: 'p1', ...IN_SPACE });
       expect(provenance).toEqual({ actor: 'git-sync', aiChatId: null });
       // The git-initiated move is attributed to the service user (lastUpdatedById
       // parity with create/delete/rename).
@@ -909,7 +787,7 @@ describe('GitmostDataSourceService', () => {
       const { service, mocks } = build();
       mocks.pageRepo.findById.mockResolvedValue({
         id: 'p1',
-        spaceId: 'space-1',
+        ...IN_SPACE,
       });
 
       await service.bind(CTX).movePage('p1', null, 'zz');
@@ -919,12 +797,12 @@ describe('GitmostDataSourceService', () => {
       expect(mocks.db.selectFrom).not.toHaveBeenCalled();
     });
 
-    it('throws NotFound and moves nothing when the page does not exist', async () => {
+    it('skips (cross-space) and moves nothing when the page does not exist', async () => {
       const { service, mocks } = build();
       mocks.pageRepo.findById.mockResolvedValue(undefined);
       await expect(
         service.bind(CTX).movePage('gone', 'parent-1'),
-      ).rejects.toThrow(/not found/i);
+      ).resolves.toEqual({ id: 'gone', skipped: 'cross-space' });
       expect(mocks.pageService.movePage).not.toHaveBeenCalled();
     });
 
@@ -940,7 +818,7 @@ describe('GitmostDataSourceService', () => {
       const { service, mocks } = build([]); // no siblings -> fresh position key
       mocks.pageRepo.findById.mockResolvedValue({
         id: 'p1',
-        spaceId: 'space-1',
+        ...IN_SPACE,
         parentPageId: '22222222-2222-4222-8222-222222222222',
       });
 
@@ -979,7 +857,7 @@ describe('GitmostDataSourceService', () => {
             ? parentRow
             : {
                 id: 'p1',
-                spaceId: 'space-1',
+                ...IN_SPACE,
                 parentPageId: '22222222-2222-4222-8222-222222222222',
               },
         );
@@ -1001,7 +879,7 @@ describe('GitmostDataSourceService', () => {
       // move to the same parent must stay a no-op, not be re-rooted.
       mocks.pageRepo.findById.mockImplementation(async (id: string) =>
         id === 'p1'
-          ? { id: 'p1', spaceId: 'space-1', parentPageId: PARENT_UUID }
+          ? { id: 'p1', ...IN_SPACE, parentPageId: PARENT_UUID }
           : undefined,
       );
 
@@ -1016,13 +894,17 @@ describe('GitmostDataSourceService', () => {
   describe('renamePage', () => {
     it('updates only the title with git-sync provenance', async () => {
       const { service, mocks } = build();
-      mocks.pageRepo.findById.mockResolvedValue({ id: 'p1', title: 'old' });
+      mocks.pageRepo.findById.mockResolvedValue({
+        id: 'p1',
+        ...IN_SPACE,
+        title: 'old',
+      });
 
       await service.bind(CTX).renamePage('p1', 'new title');
 
       const [page, dto, user, provenance] =
         mocks.pageService.update.mock.calls[0];
-      expect(page).toEqual({ id: 'p1', title: 'old' });
+      expect(page).toEqual({ id: 'p1', ...IN_SPACE, title: 'old' });
       expect(dto.title).toBe('new title');
       expect(user).toEqual({ id: 'svc-user' });
       expect(provenance).toEqual({ actor: 'git-sync', aiChatId: null });
@@ -1032,6 +914,7 @@ describe('GitmostDataSourceService', () => {
       const { service, mocks } = build();
       mocks.pageRepo.findById.mockResolvedValue({
         id: 'p1',
+        ...IN_SPACE,
         slugId: 's1',
         title: 'old',
       });
@@ -1047,6 +930,7 @@ describe('GitmostDataSourceService', () => {
       const { service, mocks } = build();
       mocks.pageRepo.findById.mockResolvedValue({
         id: 'p1',
+        ...IN_SPACE,
         slugId: 's1',
         title: 'old',
       });
@@ -1058,12 +942,12 @@ describe('GitmostDataSourceService', () => {
       expect(dto.title).toBe('Real Title ~other');
     });
 
-    it('throws NotFound and renames nothing when the page does not exist', async () => {
+    it('skips (cross-space) and renames nothing when the page does not exist', async () => {
       const { service, mocks } = build();
       mocks.pageRepo.findById.mockResolvedValue(undefined);
       await expect(
         service.bind(CTX).renamePage('gone', 'whatever'),
-      ).rejects.toThrow(/not found/i);
+      ).resolves.toEqual({ id: 'gone', skipped: 'cross-space' });
       expect(mocks.pageService.update).not.toHaveBeenCalled();
     });
   });
@@ -1071,6 +955,11 @@ describe('GitmostDataSourceService', () => {
   describe('restorePage', () => {
     it('restores via the repo restore path scoped to the workspace', async () => {
       const { service, mocks } = build();
+      mocks.pageRepo.findById.mockResolvedValue({
+        id: 'p1',
+        ...IN_SPACE,
+        deletedAt: new Date('2026-06-20T10:00:00.000Z'),
+      });
       const res = await service.bind(CTX).restorePage('p1');
       // Stamps lastUpdatedSource='git-sync' on restore (loop-guard).
       expect(mocks.pageRepo.restorePage).toHaveBeenCalledWith(
@@ -1079,6 +968,187 @@ describe('GitmostDataSourceService', () => {
         'git-sync',
       );
       expect(res).toEqual({ id: 'p1' });
+    });
+  });
+
+  // A vault file of space A can carry the gitmost_id of a page in space B or in
+  // another workspace. Every id-scoped write must leave such a page alone:
+  // PageService runs these writes as the service user, without CASL.
+  describe('foreign-page guard: id-scoped writes never touch a page of another space or workspace', () => {
+    const OTHER_SPACE = {
+      id: 'pB',
+      workspaceId: 'ws-1',
+      spaceId: 'space-2',
+      slugId: 'sB',
+      title: 'B title',
+      parentPageId: null,
+      deletedAt: null,
+      updatedAt: new Date('2026-06-21T09:00:00.000Z'),
+      content: null,
+    };
+    const OTHER_WORKSPACE = {
+      ...OTHER_SPACE,
+      workspaceId: 'ws-2',
+      spaceId: 'space-1',
+    };
+
+    // NON-VACUITY: the title differs from the page's and the move carries an
+    // explicit position, so without the guard both writes WOULD reach
+    // pageService.update / pageService.movePage.
+    it('an R-commit naming a page of another space neither renames nor moves it', async () => {
+      const { service, mocks } = build([]);
+      mocks.pageRepo.findById.mockResolvedValue(OTHER_SPACE);
+      const client = service.bind(CTX);
+
+      await expect(client.renamePage('pB', 'Bar')).resolves.toEqual({
+        id: 'pB',
+        skipped: 'cross-space',
+      });
+      await expect(client.movePage('pB', null, 'zz')).resolves.toEqual({
+        id: 'pB',
+        skipped: 'cross-space',
+      });
+
+      expect(mocks.pageService.update).not.toHaveBeenCalled();
+      expect(mocks.pageService.movePage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another space', OTHER_SPACE],
+      ['another workspace', OTHER_WORKSPACE],
+    ])(
+      'leaves a page of %s untouched on rename, move, restore and import',
+      async (_case, row) => {
+        const { service, mocks } = build([]);
+        mocks.pageRepo.findById.mockResolvedValue(row);
+        const client = service.bind(CTX);
+
+        await client.renamePage('pB', 'Bar');
+        await client.movePage('pB', null, 'zz');
+        await client.restorePage('pB');
+        await client.importPageMarkdown('pB', 'new body');
+
+        expect(mocks.pageService.update).not.toHaveBeenCalled();
+        expect(mocks.pageService.movePage).not.toHaveBeenCalled();
+        expect(mocks.pageRepo.restorePage).not.toHaveBeenCalled();
+        expect(mocks.collabGateway.writePageBody).not.toHaveBeenCalled();
+      },
+    );
+
+    it('deletePage leaves a page of another workspace untouched', async () => {
+      const { service, mocks } = build([]);
+      mocks.pageRepo.findById.mockResolvedValue(OTHER_WORKSPACE);
+
+      await expect(service.bind(CTX).deletePage('pB')).resolves.toEqual({
+        id: 'pB',
+        skipped: 'cross-space',
+      });
+      expect(mocks.pageService.removePage).not.toHaveBeenCalled();
+    });
+
+    it('restorePage skips a page id that matches no page', async () => {
+      const { service, mocks } = build([]);
+      mocks.pageRepo.findById.mockResolvedValue(undefined);
+
+      await expect(service.bind(CTX).restorePage('gone')).resolves.toEqual({
+        id: 'gone',
+        skipped: 'cross-space',
+      });
+      expect(mocks.pageRepo.restorePage).not.toHaveBeenCalled();
+    });
+  });
+
+  // Every datasource call honours the cycle's abort signal (lost lock or cycle
+  // deadline), and a body write is awaited for a bounded time only.
+  describe('cycle abort and body-write deadline', () => {
+    const LIVE_PAGE = {
+      id: 'p1',
+      ...IN_SPACE,
+      deletedAt: null,
+      updatedAt: new Date('2026-06-20T11:00:00.000Z'),
+      content: null,
+    };
+
+    /** Let queued promise continuations run until `cond` holds. */
+    async function until(cond: () => boolean): Promise<void> {
+      for (let i = 0; i < 100 && !cond(); i++) await Promise.resolve();
+      expect(cond()).toBe(true);
+    }
+
+    it('an aborted cycle signal stops every client call before it touches anything', async () => {
+      const { service, mocks } = build([]);
+      const controller = new AbortController();
+      const reason = new Error('cycle deadline');
+      controller.abort(reason);
+      const client = service.bind({ ...CTX, signal: controller.signal });
+
+      await expect(client.getPageJson('p1')).rejects.toBe(reason);
+      await expect(client.importPageMarkdown('p1', 'x')).rejects.toBe(reason);
+      await expect(client.createPage('T', 'x', 'space-1')).rejects.toBe(reason);
+      await expect(client.renamePage('p1', 'X')).rejects.toBe(reason);
+      await expect(client.movePage('p1', null, 'zz')).rejects.toBe(reason);
+      await expect(client.deletePage('p1')).rejects.toBe(reason);
+
+      expect(mocks.pageRepo.findById).not.toHaveBeenCalled();
+      expect(mocks.pageService.create).not.toHaveBeenCalled();
+      expect(mocks.pageService.removePage).not.toHaveBeenCalled();
+      expect(mocks.collabGateway.writePageBody).not.toHaveBeenCalled();
+    });
+
+    it('stops waiting for a body write that does not finish in time, with a specific error', async () => {
+      jest.useFakeTimers();
+      try {
+        const { service, mocks } = build();
+        mocks.pageRepo.findById.mockResolvedValue(LIVE_PAGE);
+        // The owning instance never answers.
+        mocks.collabGateway.writePageBody.mockImplementation(
+          () => new Promise(() => undefined),
+        );
+
+        const pending = service.bind(CTX).importPageMarkdown('p1', 'new body');
+        const outcome = expect(pending).rejects.toThrow(
+          `page.p1 did not finish within ${GIT_SYNC_BODY_WRITE_TIMEOUT_MS} ms`,
+        );
+        await until(
+          () => mocks.collabGateway.writePageBody.mock.calls.length > 0,
+        );
+        await jest.advanceTimersByTimeAsync(GIT_SYNC_BODY_WRITE_TIMEOUT_MS);
+        await outcome;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('stops waiting for a body write as soon as the cycle is aborted, and logs a later failure of that write', async () => {
+      const { service, mocks } = build();
+      const error = jest
+        .spyOn((service as any).logger, 'error')
+        .mockImplementation(() => undefined);
+      mocks.pageRepo.findById.mockResolvedValue(LIVE_PAGE);
+      let failWrite!: (err: Error) => void;
+      mocks.collabGateway.writePageBody.mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            failWrite = reject;
+          }),
+      );
+      const controller = new AbortController();
+
+      const pending = service
+        .bind({ ...CTX, signal: controller.signal })
+        .importPageMarkdown('p1', 'new body');
+      await until(
+        () => mocks.collabGateway.writePageBody.mock.calls.length > 0,
+      );
+      const reason = new Error('lock lost');
+      controller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+
+      // The write fails later, with no awaiter left: logged, not unhandled.
+      failWrite(new Error('merge exploded'));
+      await until(() => error.mock.calls.length > 0);
+      expect(String(error.mock.calls[0][0])).toContain('merge exploded');
+      expect(String(error.mock.calls[0][0])).toContain('page.p1');
     });
   });
 

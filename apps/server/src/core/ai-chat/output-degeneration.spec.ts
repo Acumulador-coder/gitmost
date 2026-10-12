@@ -398,10 +398,15 @@ describe('AiChatService: onStepFinish re-arms the degeneration watermark (#486)'
         ],
       } as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
-      // No runHooks -> legacy path (socket signal), degeneration guard active.
+      // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+      runHooks: {
+        begin: async () => ({
+          runId: 'run-1',
+          signal: new AbortController().signal,
+        }),
+      },
     });
 
     expect(streamTextMock).toHaveBeenCalledTimes(1);

@@ -3,6 +3,8 @@ import { Hocuspocus, Document } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import {
   applyPmJsonToFragment,
+  flushPendingStore,
+  isCanonicalPageDocumentName,
   isEmptyParagraphDoc,
   prosemirrorNodeToYElement,
   tiptapExtensions,
@@ -19,6 +21,8 @@ import {
 import * as Y from 'yjs';
 import { User } from '@docmost/db/types/entity.types';
 import {
+  fragmentKeysYielding,
+  LiveBlockKeys,
   mergeXmlFragments,
   mergeXmlFragments3WayWithStats,
 } from './merge/yjs-body-merge';
@@ -329,6 +333,9 @@ export class CollaborationHandler {
        * git changed is taken (conflicts -> git). Without a base it falls back to
        * the 2-way merge, which REFUSES (throws) an empty body over a non-empty
        * live doc.
+       *
+       * An aborted `signal` stops the write at the next step before the merge
+       * transaction (which is atomic): the live doc is then left untouched.
        */
       gitSyncWriteBody: async (
         documentName: string,
@@ -337,8 +344,20 @@ export class CollaborationHandler {
           baseProsemirrorJson?: any;
           userId: string;
         },
+        signal?: AbortSignal,
       ) => {
         const { prosemirrorJson, baseProsemirrorJson, userId } = payload;
+        // CO-7 — git-sync assumes ONE live document per page: `page.<uuid>`.
+        // Hocuspocus would happily open an alias (`page.<slugId>`, any other
+        // prefix) as a SEPARATE Y.Doc of the same page, whose stale state an
+        // editor's later store would then write over this merge. Refuse it.
+        if (!isCanonicalPageDocumentName(documentName)) {
+          const message =
+            `git-sync write for ${documentName} refused: the document name ` +
+            `is not the canonical page.<uuid> of a page`;
+          this.logger.error(message);
+          throw new Error(message);
+        }
         const targetEmpty = isEmptyParagraphDoc(prosemirrorJson);
         // Only git clearing a file that HAD content (empty body, non-empty base)
         // may persist an empty doc over a non-empty page; the store-side
@@ -370,6 +389,17 @@ export class CollaborationHandler {
               )
             : null;
 
+        // Block keys (markdown projections) of the git body and the base,
+        // computed in yielding chunks BEFORE the merge transaction (AGENTS
+        // invariant 3): nobody else mutates these two docs.
+        const targetFrag = targetDoc.getXmlFragment('default');
+        signal?.throwIfAborted();
+        const targetKeys = await fragmentKeysYielding(targetFrag, signal);
+        const baseFrag = baseDoc ? baseDoc.getXmlFragment('default') : null;
+        const baseKeys = baseFrag
+          ? await fragmentKeysYielding(baseFrag, signal)
+          : null;
+
         // Flush the pending store first. The 3-way merge runs against the LIVE
         // Y.Doc, and a user's edit is debounced before it lands (the collab store
         // up to 10s), so the merge could run against a pre-edit doc and silently
@@ -378,22 +408,46 @@ export class CollaborationHandler {
         // (b) persists the live doc so the baseline is current on the
         // reload-from-DB path. A same-block edit is then detected as a conflict
         // and the PersistenceExtension boundary snapshot pins it to history.
-        await this.flushPendingStore(hocuspocus, documentName);
+        // A flush failure must not abort the git-sync write: it is logged and
+        // the merge proceeds.
+        try {
+          await flushPendingStore(hocuspocus, documentName);
+        } catch (err) {
+          this.logger.error(
+            `git-sync pre-merge flush failed for ${documentName}: ` +
+              (err instanceof Error ? err.message : String(err)),
+            err instanceof Error ? err.stack : undefined,
+          );
+        }
 
+        signal?.throwIfAborted();
         // actor:'git-sync' + the service user flow into PersistenceExtension
         // (lastUpdatedSource='git-sync', lastUpdatedById=userId).
-        const refused = await this.withYdocConnection(
-          hocuspocus,
-          documentName,
-          { actor: 'git-sync', user: { id: userId }, gitSyncIntentionalClear },
-          (doc): boolean => {
+        const connection = await hocuspocus.openDirectConnection(documentName, {
+          actor: 'git-sync',
+          user: { id: userId },
+          gitSyncIntentionalClear,
+        });
+        let liveKeys: LiveBlockKeys | null = null;
+        let refused = false;
+        try {
+          // The live doc's keys are primed in yielding chunks too; edits landing
+          // meanwhile mark their blocks stale, and only those are re-projected
+          // inside the transaction.
+          liveKeys = new LiveBlockKeys(
+            connection.document!.getXmlFragment('default'),
+          );
+          await liveKeys.prime(signal);
+          signal?.throwIfAborted();
+          await connection.transact((doc) => {
             const liveFrag = doc.getXmlFragment('default');
-            const targetFrag = targetDoc.getXmlFragment('default');
-            if (baseDoc) {
+            const liveBlockKeys = liveKeys!.keysOf(liveFrag.toArray());
+            if (baseFrag) {
               const { conflicts } = mergeXmlFragments3WayWithStats(
                 liveFrag,
                 targetFrag,
-                baseDoc.getXmlFragment('default'),
+                baseFrag,
+                { live: liveBlockKeys, target: targetKeys, base: baseKeys! },
               );
               // SAME-BLOCK conflict contract (SPEC §9): a block both the human
               // and git changed resolves to GIT (deterministic). Make that
@@ -418,13 +472,30 @@ export class CollaborationHandler {
                 liveFrag.length > 0 &&
                 !isEmptyParagraphDoc(TiptapTransformer.fromYdoc(doc, 'default'))
               ) {
-                return true;
+                refused = true;
+                return;
               }
-              mergeXmlFragments(liveFrag, targetFrag);
+              mergeXmlFragments(liveFrag, targetFrag, {
+                live: liveBlockKeys,
+                target: targetKeys,
+              });
             }
-            return false;
-          },
-        );
+          });
+        } catch (err) {
+          // Includes MergeBudgetExceededError: the plan is computed before the
+          // first mutation, so that refusal leaves the live doc untouched.
+          const message =
+            `git-sync write for ${documentName} failed: ` +
+            (err instanceof Error ? err.message : String(err));
+          this.logger.error(
+            message,
+            err instanceof Error ? err.stack : undefined,
+          );
+          throw new Error(message);
+        } finally {
+          liveKeys?.dispose();
+          await connection.disconnect();
+        }
         if (refused) {
           const message =
             `git-sync write for ${documentName} refused: an empty body with ` +
@@ -434,33 +505,6 @@ export class CollaborationHandler {
         }
       },
     };
-  }
-
-  /**
-   * Flush any pending DEBOUNCED store for `documentName` so the live Y.Doc and the
-   * DB are current BEFORE a git-sync merge reads them. Mirrors the
-   * PersistenceExtension.onDisconnect
-   * flush: only acts when a store is actually pending (`isDebounced`), runs the
-   * SAME scheduled payload (`executeNow`, preserving the edit's context/actor), and
-   * never throws — a flush failure must not abort the git-sync write. Awaiting it
-   * also drains the event loop, so a client Yjs update sitting in the socket buffer
-   * is applied to the live doc before the merge transaction runs.
-   */
-  private async flushPendingStore(
-    hocuspocus: Hocuspocus,
-    documentName: string,
-  ): Promise<void> {
-    const debounceId = `onStoreDocument-${documentName}`;
-    try {
-      const debouncer = (hocuspocus as any)?.debouncer;
-      if (!debouncer?.isDebounced?.(debounceId)) return;
-      await debouncer.executeNow(debounceId);
-    } catch (err) {
-      this.logger.warn(
-        `git-sync pre-merge flush failed for ${documentName}: ` +
-          (err instanceof Error ? err.message : String(err)),
-      );
-    }
   }
 
   async withYdocConnection<T>(

@@ -8,6 +8,7 @@
 // come from WorkspaceRepo; a handler reading `req.raw.workspaceId` would 401 in
 // the happy-path fetch test below.
 import {
+  BadRequestException,
   Logger,
   NotFoundException,
   UnauthorizedException,
@@ -24,8 +25,6 @@ type AnyMock = jest.Mock;
 
 interface BuildOptions {
   selfHosted?: boolean;
-  gitSyncEnabled?: boolean;
-  gitHttpEnabled?: boolean;
   /** What workspaceRepo.findFirst() returns (self-hosted resolution). */
   workspace?: { id: string } | null;
   /** What spaceRepo.findById() returns. */
@@ -34,6 +33,8 @@ interface BuildOptions {
   user?: { id: string; email: string } | null;
   /** Whether the created ability grants the requested action. */
   abilityCan?: boolean;
+  /** What GitSyncRestrictionsService.spaceHasRestrictedPages() returns. */
+  restricted?: boolean;
 }
 
 interface Built {
@@ -49,24 +50,22 @@ interface Built {
     ingestExternalPush: AnyMock;
   };
   backend: { run: AnyMock };
+  restrictions: { spaceHasRestrictedPages: AnyMock };
 }
 
 function build(opts: BuildOptions = {}): Built {
   const {
     selfHosted = true,
-    gitSyncEnabled = true,
-    gitHttpEnabled = true,
     workspace = { id: 'ws-1' },
     space = { id: 'space-1', settings: { gitSync: { enabled: true } } },
     user = { id: 'user-1', email: 'dev@example.com' },
     abilityCan = true,
+    restricted = false,
   } = opts;
 
   const env: Record<string, AnyMock> = {
     isSelfHosted: jest.fn(() => selfHosted),
     isCloud: jest.fn(() => !selfHosted),
-    isGitSyncEnabled: jest.fn(() => gitSyncEnabled),
-    isGitSyncHttpEnabled: jest.fn(() => gitHttpEnabled),
   };
 
   const authService = {
@@ -93,6 +92,18 @@ function build(opts: BuildOptions = {}): Built {
     ingestExternalPush: jest.fn(async () => undefined),
   };
   const backend = { run: jest.fn(async () => undefined) };
+  const restrictions = {
+    spaceHasRestrictedPages: jest.fn(async () => restricted),
+  };
+  // An in-memory stand-in for the global cache-manager (the cached workspace
+  // loader shared with DomainMiddleware goes through it).
+  const store = new Map<string, unknown>();
+  const cacheManager = {
+    get: jest.fn(async (key: string) => store.get(key)),
+    set: jest.fn(async (key: string, value: unknown) => {
+      store.set(key, value);
+    }),
+  };
 
   const service = new GitHttpService(
     env as any,
@@ -103,6 +114,8 @@ function build(opts: BuildOptions = {}): Built {
     vaultRegistry as any,
     orchestrator as any,
     backend as any,
+    restrictions as any,
+    cacheManager as any,
   );
 
   return {
@@ -116,6 +129,7 @@ function build(opts: BuildOptions = {}): Built {
     vaultRegistry,
     orchestrator,
     backend,
+    restrictions,
   };
 }
 
@@ -144,7 +158,9 @@ function fakeReply() {
       return reply;
     },
     hijack() {
+      // Fastify 5: `reply.sent` is true once the reply is hijacked.
       state.hijacked = true;
+      state.sent = true;
     },
     get sent() {
       return state.sent;
@@ -167,17 +183,29 @@ function fakeRequest(opts: {
   method?: string;
   authorization?: string;
   host?: string;
+  /** The framework-parsed client IP (the limiter key source). */
+  ip?: string;
 }) {
-  const { url, method = 'GET', authorization, host = 'docs.example.com' } = opts;
+  const {
+    url,
+    method = 'GET',
+    authorization,
+    host = 'docs.example.com',
+    ip,
+  } = opts;
   const headers: Record<string, string> = { host };
   if (authorization) headers['authorization'] = authorization;
-  // query is parsed by Fastify; mirror the `service` param when present.
+  // query is parsed by Fastify; mirror it, including that a repeated key
+  // becomes an array.
   const qIdx = url.indexOf('?');
-  const query: Record<string, string> = {};
+  const query: Record<string, string | string[]> = {};
   if (qIdx !== -1) {
     for (const pair of url.slice(qIdx + 1).split('&')) {
       const [k, v] = pair.split('=');
-      if (k) query[k] = v ?? '';
+      if (!k) continue;
+      const prev = query[k];
+      if (prev === undefined) query[k] = v ?? '';
+      else query[k] = [...(Array.isArray(prev) ? prev : [prev]), v ?? ''];
     }
   }
   return {
@@ -185,6 +213,7 @@ function fakeRequest(opts: {
     method,
     headers,
     query,
+    ip,
     // raw is intentionally WITHOUT workspaceId — the handler must resolve it
     // itself via WorkspaceRepo (reading req.raw.workspaceId would 401).
     raw: {},
@@ -195,11 +224,15 @@ function basic(email: string, password: string): string {
   return 'Basic ' + Buffer.from(`${email}:${password}`).toString('base64');
 }
 
+let errorSpy: jest.SpyInstance;
+
 beforeEach(() => {
   jest.clearAllMocks();
   // Silence the handler's logger.warn/error in negative-path tests.
   jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-  jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+  errorSpy = jest
+    .spyOn(Logger.prototype, 'error')
+    .mockImplementation(() => undefined);
 });
 
 describe('GitHttpService.handle', () => {
@@ -345,21 +378,6 @@ describe('GitHttpService.handle', () => {
     expect(state.statusCode).toBe(404);
     // CASL is never even evaluated for a non-candidate space.
     expect(built.abilityFactory.createForUser).not.toHaveBeenCalled();
-    expect(built.backend.run).not.toHaveBeenCalled();
-  });
-
-  it('git-sync globally disabled -> 404 even with valid creds', async () => {
-    const built = build({ gitSyncEnabled: false });
-    const { reply, state } = fakeReply();
-    const req = fakeRequest({
-      url: '/git/space-1.git/info/refs?service=git-upload-pack',
-      method: 'GET',
-      authorization: basic('dev@example.com', 'pw'),
-    });
-
-    await built.service.handle(req, reply);
-
-    expect(state.statusCode).toBe(404);
     expect(built.backend.run).not.toHaveBeenCalled();
   });
 
@@ -513,7 +531,7 @@ describe('GitHttpService.handle', () => {
     expect(built.backend.run).not.toHaveBeenCalled();
   });
 
-  // --- brute-force throttle (must-fix #1, mirrors the /mcp Basic limiter) -----
+  // --- brute-force throttle (per-IP and per-IP+email keys) --------------------
   describe('HTTP-Basic brute-force throttle', () => {
     /** A request with wrong credentials for the given email. */
     const wrongCredReq = (email = 'dev@example.com') =>
@@ -599,16 +617,349 @@ describe('GitHttpService.handle', () => {
         new Error('db down'),
       );
 
-      // 10 such failures — far beyond the threshold — must all be 401, never 429,
-      // because each releases its reservation.
+      // 10 such failures — far beyond the threshold — must all be 500 (never a
+      // 401), never 429, because each releases its reservation.
       for (let i = 0; i < 10; i++) {
         const { reply, state } = fakeReply();
         await built.service.handle(wrongCredReq(), reply);
-        expect(state.statusCode).toBe(401);
+        expect(state.statusCode).toBe(500);
       }
       expect(built.authService.verifyUserCredentials).toHaveBeenCalledTimes(10);
 
       built.service.onModuleDestroy();
     });
+
+    it('failures from one IP do not lock the victim out from another IP', async () => {
+      const built = build();
+      built.authService.verifyUserCredentials.mockRejectedValue(
+        new UnauthorizedException(CREDENTIALS_MISMATCH_MESSAGE),
+      );
+      const attempt = (ip: string, password: string) =>
+        fakeRequest({
+          url: '/git/space-1.git/info/refs?service=git-upload-pack',
+          method: 'GET',
+          authorization: basic('victim@example.com', password),
+          ip,
+        });
+
+      // The attacker burns the (attacker IP, victim email) budget...
+      for (let i = 0; i < 5; i++) {
+        const { reply, state } = fakeReply();
+        await built.service.handle(attempt('203.0.113.9', 'guess'), reply);
+        expect(state.statusCode).toBe(401);
+      }
+      const blocked = fakeReply();
+      await built.service.handle(
+        attempt('203.0.113.9', 'guess'),
+        blocked.reply,
+      );
+      expect(blocked.state.statusCode).toBe(429);
+
+      // ...but the victim, from their own IP, is still checked and gets in.
+      built.authService.verifyUserCredentials.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'victim@example.com',
+      });
+      const victim = fakeReply();
+      await built.service.handle(
+        attempt('198.51.100.7', 'right'),
+        victim.reply,
+      );
+      expect(victim.state.statusCode).toBeUndefined();
+      expect(victim.state.hijacked).toBe(true);
+      expect(built.authService.verifyUserCredentials).toHaveBeenCalledTimes(6);
+      expect(built.backend.run).toHaveBeenCalledTimes(1);
+
+      built.service.onModuleDestroy();
+    });
+
+    it('the per-IP bucket throttles one source across different emails', async () => {
+      const built = build();
+      built.authService.verifyUserCredentials.mockRejectedValue(
+        new UnauthorizedException(CREDENTIALS_MISMATCH_MESSAGE),
+      );
+      const spray = (email: string) =>
+        fakeRequest({
+          url: '/git/space-1.git/info/refs?service=git-upload-pack',
+          method: 'GET',
+          authorization: basic(email, 'guess'),
+          ip: '203.0.113.9',
+        });
+
+      for (let i = 0; i < 5; i++) {
+        const { reply, state } = fakeReply();
+        await built.service.handle(spray(`user${i}@example.com`), reply);
+        expect(state.statusCode).toBe(401);
+      }
+      const { reply, state } = fakeReply();
+      await built.service.handle(spray('user5@example.com'), reply);
+      expect(state.statusCode).toBe(429);
+      // The 6th email never reached bcrypt.
+      expect(built.authService.verifyUserCredentials).toHaveBeenCalledTimes(5);
+
+      built.service.onModuleDestroy();
+    });
+  });
+
+  // --- infrastructure failures are logged 500s, never 401/404 ----------------
+  describe('infrastructure failures', () => {
+    const fetchReq = () =>
+      fakeRequest({
+        url: '/git/space-1.git/info/refs?service=git-upload-pack',
+        method: 'GET',
+        authorization: basic('dev@example.com', 'pw'),
+      });
+
+    it('a workspace lookup failure -> logged 500, not 401 (git would erase the saved password)', async () => {
+      const built = build();
+      built.workspaceRepo.findFirst.mockRejectedValue(
+        new Error('ECONNREFUSED'),
+      );
+      const { reply, state } = fakeReply();
+
+      await built.service.handle(fetchReq(), reply);
+
+      expect(state.statusCode).toBe(500);
+      expect(state.headers['WWW-Authenticate']).toBeUndefined();
+      expect(String(state.body)).toContain('could not resolve the workspace');
+      expect(built.authService.verifyUserCredentials).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error: ECONNREFUSED'),
+        expect.stringContaining('ECONNREFUSED'),
+      );
+    });
+
+    it('a credential-check infrastructure failure -> logged 500 with its stack, not 401', async () => {
+      const built = build();
+      built.authService.verifyUserCredentials.mockRejectedValue(
+        new Error('connection terminated'),
+      );
+      const { reply, state } = fakeReply();
+
+      await built.service.handle(fetchReq(), reply);
+
+      expect(state.statusCode).toBe(500);
+      expect(state.headers['WWW-Authenticate']).toBeUndefined();
+      expect(String(state.body)).toContain('could not verify the credentials');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('connection terminated'),
+        expect.stringContaining('connection terminated'),
+      );
+      expect(built.backend.run).not.toHaveBeenCalled();
+    });
+
+    it('a client error from the credential check (unverified email) -> its own 400 + message, not 500/401, reservation released', async () => {
+      const built = build();
+      // The shape throwIfEmailNotVerified throws in cloud mode.
+      built.authService.verifyUserCredentials.mockRejectedValue(
+        new BadRequestException({
+          message: 'Please verify your email address.',
+          emailSignature: 'sig',
+        }),
+      );
+
+      // Beyond the limiter threshold: each attempt releases its reservation.
+      for (let i = 0; i < 6; i++) {
+        const { reply, state } = fakeReply();
+        await built.service.handle(fetchReq(), reply);
+        expect(state.statusCode).toBe(400);
+        expect(state.body).toBe('Please verify your email address.');
+        expect(state.headers['WWW-Authenticate']).toBeUndefined();
+      }
+      expect(built.authService.verifyUserCredentials).toHaveBeenCalledTimes(6);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(built.backend.run).not.toHaveBeenCalled();
+
+      built.service.onModuleDestroy();
+    });
+
+    it('a membership-check infrastructure failure -> logged 500, not the non-member 404', async () => {
+      const built = build();
+      built.abilityFactory.createForUser.mockRejectedValue(
+        new Error('pool exhausted'),
+      );
+      const { reply, state } = fakeReply();
+
+      await built.service.handle(fetchReq(), reply);
+
+      expect(state.statusCode).toBe(500);
+      expect(String(state.body)).toContain(
+        'could not check the space membership',
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('pool exhausted'),
+        expect.stringContaining('pool exhausted'),
+      );
+      expect(built.backend.run).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- a duplicated `service` parameter is refused ---------------------------
+  it('a duplicated service query parameter -> 400, nothing authorized or served', async () => {
+    const built = build();
+    const { reply, state } = fakeReply();
+    const req = fakeRequest({
+      url: '/git/space-1.git/info/refs?service=git-upload-pack&service=git-receive-pack',
+      method: 'GET',
+      authorization: basic('dev@example.com', 'pw'),
+    });
+
+    await built.service.handle(req, reply);
+
+    expect(state.statusCode).toBe(400);
+    expect(String(state.body)).toContain("'service'");
+    expect(built.abilityFactory.createForUser).not.toHaveBeenCalled();
+    expect(built.backend.run).not.toHaveBeenCalled();
+  });
+
+  it('a duplicated service parameter without credentials still gets the 401 first', async () => {
+    const built = build();
+    const { reply, state } = fakeReply();
+    const req = fakeRequest({
+      url: '/git/space-1.git/info/refs?service=git-upload-pack&service=git-receive-pack',
+      method: 'GET',
+    });
+
+    await built.service.handle(req, reply);
+
+    expect(state.statusCode).toBe(401);
+  });
+
+  // --- every throw on the raw route ends in a logged 500 ---------------------
+  describe('unexpected throws', () => {
+    it('a space lookup that throws BEFORE the hijack -> logged 500 via the reply, handle() resolves', async () => {
+      const built = build();
+      built.spaceRepo.findById.mockRejectedValue(new Error('relation missing'));
+      const { reply, state } = fakeReply();
+
+      await expect(
+        built.service.handle(
+          fakeRequest({
+            url: '/git/space-1.git/info/refs?service=git-upload-pack',
+            method: 'GET',
+            authorization: basic('dev@example.com', 'pw'),
+          }),
+          reply,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(state.statusCode).toBe(500);
+      expect(String(state.body)).toContain('Internal server error');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('relation missing'),
+        expect.stringContaining('relation missing'),
+      );
+    });
+
+    it('a backend bridge that throws AFTER the hijack -> 500 on the raw socket, which is ended', async () => {
+      const built = build();
+      built.backend.run.mockRejectedValue(new Error('git-sync loader failed'));
+      const { reply, state } = fakeReply();
+
+      await expect(
+        built.service.handle(
+          fakeRequest({
+            url: '/git/space-1.git/git-upload-pack',
+            method: 'POST',
+            authorization: basic('dev@example.com', 'pw'),
+          }),
+          reply,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(state.hijacked).toBe(true);
+      const raw = reply.raw as any;
+      expect(raw.statusCode).toBe(500);
+      expect(raw.end).toHaveBeenCalledTimes(1);
+      expect(String(raw.end.mock.calls[0][0])).toContain(
+        'Internal server error',
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('git-sync loader failed'),
+        expect.stringContaining('git-sync loader failed'),
+      );
+    });
+
+    it('a vault preparation failure -> logged 500, nothing hijacked', async () => {
+      const built = build();
+      built.vaultRegistry.ensureServable.mockRejectedValue(
+        new Error('config.lock exists'),
+      );
+      const { reply, state } = fakeReply();
+
+      await built.service.handle(
+        fakeRequest({
+          url: '/git/space-1.git/info/refs?service=git-upload-pack',
+          method: 'GET',
+          authorization: basic('dev@example.com', 'pw'),
+        }),
+        reply,
+      );
+
+      expect(state.statusCode).toBe(500);
+      expect(state.hijacked).toBe(false);
+      expect(built.backend.run).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- restricted spaces -------------------------------------------------------
+  it('a MEMBER of a space with restricted pages -> 403 naming the reason, nothing served', async () => {
+    const built = build({ restricted: true });
+    const { reply, state } = fakeReply();
+
+    await built.service.handle(
+      fakeRequest({
+        url: '/git/space-1.git/info/refs?service=git-upload-pack',
+        method: 'GET',
+        authorization: basic('dev@example.com', 'pw'),
+      }),
+      reply,
+    );
+
+    expect(built.restrictions.spaceHasRestrictedPages).toHaveBeenCalledWith(
+      'space-1',
+      'ws-1',
+    );
+    expect(state.statusCode).toBe(403);
+    expect(String(state.body)).toContain('restricted');
+    expect(built.vaultRegistry.ensureServable).not.toHaveBeenCalled();
+    expect(built.backend.run).not.toHaveBeenCalled();
+  });
+
+  it('a NON-member of a space with restricted pages -> the same 404 as a missing space', async () => {
+    const built = build({ restricted: true });
+    built.abilityFactory.createForUser.mockRejectedValue(
+      new NotFoundException('Space permissions not found'),
+    );
+    const { reply, state } = fakeReply();
+
+    await built.service.handle(
+      fakeRequest({
+        url: '/git/space-1.git/info/refs?service=git-upload-pack',
+        method: 'GET',
+        authorization: basic('dev@example.com', 'pw'),
+      }),
+      reply,
+    );
+
+    expect(state.statusCode).toBe(404);
+    expect(built.restrictions.spaceHasRestrictedPages).not.toHaveBeenCalled();
+  });
+
+  it('repeated requests share the cached workspace lookup (one DB query)', async () => {
+    const built = build();
+    for (let i = 0; i < 3; i++) {
+      const { reply } = fakeReply();
+      await built.service.handle(
+        fakeRequest({
+          url: '/git/space-1.git/git-upload-pack',
+          method: 'POST',
+          authorization: basic('dev@example.com', 'pw'),
+        }),
+        reply,
+      );
+    }
+    expect(built.workspaceRepo.findFirst).toHaveBeenCalledTimes(1);
+    expect(built.backend.run).toHaveBeenCalledTimes(3);
   });
 });

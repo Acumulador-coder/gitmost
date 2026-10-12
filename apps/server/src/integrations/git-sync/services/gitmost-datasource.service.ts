@@ -12,7 +12,6 @@ import { InjectKysely } from 'nestjs-kysely';
 import { KyselyDB } from '@docmost/db/types/kysely.types';
 import { PageService } from '../../../core/page/services/page.service';
 import { CollaborationGateway } from '../../../collaboration/collaboration.gateway';
-import { inEditorShape } from '../../../collaboration/collaboration.util';
 import { AuthProvenanceData } from '../../../common/decorators/auth-provenance.decorator';
 
 /**
@@ -26,14 +25,26 @@ export interface GitSyncBindContext {
   workspaceId: string;
   userId: string;
   /**
-   * The space this cycle reconciles. Used to distinguish a genuine page deletion
-   * from a cross-space MOVE: when a page leaves space A, A's vault file is removed
-   * and the push phase would otherwise soft-delete the page — but the page still
-   * lives in space B. `deletePage` skips the soft-delete when the page's current
-   * space differs from the reconciling space. Optional for back-compat.
+   * The space this cycle reconciles. Every id-scoped write checks the target
+   * page lives in it (and in `workspaceId`): a vault file of this space can
+   * carry another space's page id. `deletePage` also uses it to tell a genuine
+   * deletion from a cross-space MOVE (the page still lives in space B).
    */
-  spaceId?: string;
+  spaceId: string;
+  /**
+   * The cycle's abort signal (lost lock or cycle deadline). Every client call
+   * checks it first and a body write stops waiting when it fires, so an aborted
+   * cycle ends at its next datasource call instead of running to completion.
+   */
+  signal?: AbortSignal;
 }
+
+/**
+ * Wall-clock budget for one git-sync body write (the collab merge of one page).
+ * The cycle stops waiting after this and records a per-page failure; the page
+ * is retried by the next cycle.
+ */
+export const GIT_SYNC_BODY_WRITE_TIMEOUT_MS = 60_000;
 
 /**
  * The git-sync provenance carried into PageService writes. PageService.create/
@@ -76,44 +87,86 @@ export class GitmostDataSourceService {
    * `GitSyncClient` the engine can consume directly.
    */
   bind(ctx: GitSyncBindContext): GitSyncClient {
+    // Every call first checks the cycle's abort signal (lost lock / deadline).
+    const live = <T>(run: () => Promise<T>) => this.unlessAborted(ctx, run);
     return {
       listSpaceTree: (spaceId, rootPageId) =>
-        this.listSpaceTree(ctx, spaceId, rootPageId),
-      pageIdsExist: (pageIds) => this.pageIdsExist(ctx, pageIds),
-      getPageJson: (pageId) => this.getPageJson(ctx, pageId),
+        live(() => this.listSpaceTree(ctx, spaceId, rootPageId)),
+      pageIdsExist: (pageIds) => live(() => this.pageIdsExist(ctx, pageIds)),
+      getPageJson: (pageId) => live(() => this.getPageJson(ctx, pageId)),
       // The id-scoped WRITE ops are wrapped so a malformed (non-UUID) `pageId`
       // from a broken vault `gitmost_id` frontmatter cannot wedge the space's sync
       // loop (bug C9-D1) — see `skipIfMalformedId`.
       importPageMarkdown: (pageId, fullMarkdown, baseMarkdown) =>
-        this.skipIfMalformedId(
-          'import',
-          pageId,
-          ctx,
-          () => this.importPageMarkdown(ctx, pageId, fullMarkdown, baseMarkdown),
-          {},
+        live(() =>
+          this.skipIfMalformedId(
+            'import',
+            pageId,
+            ctx,
+            () =>
+              this.importPageMarkdown(ctx, pageId, fullMarkdown, baseMarkdown),
+            {},
+          ),
         ),
       createPage: (title, content, spaceId, parentPageId) =>
-        this.createPage(ctx, title, content, spaceId, parentPageId),
+        live(() => this.createPage(ctx, title, content, spaceId, parentPageId)),
       deletePage: (pageId) =>
-        this.skipIfMalformedId('delete', pageId, ctx, () =>
-          this.deletePage(ctx, pageId),
+        live(() =>
+          this.skipIfMalformedId('delete', pageId, ctx, () =>
+            this.deletePage(ctx, pageId),
+          ),
         ),
       movePage: (pageId, parentPageId, position) =>
-        this.skipIfMalformedId('move', pageId, ctx, () =>
-          this.movePage(ctx, pageId, parentPageId, position),
+        live(() =>
+          this.skipIfMalformedId('move', pageId, ctx, () =>
+            this.movePage(ctx, pageId, parentPageId, position),
+          ),
         ),
       renamePage: (pageId, title) =>
-        this.skipIfMalformedId('rename', pageId, ctx, () =>
-          this.renamePage(ctx, pageId, title),
+        live(() =>
+          this.skipIfMalformedId('rename', pageId, ctx, () =>
+            this.renamePage(ctx, pageId, title),
+          ),
         ),
       listRecentSince: (spaceId, sinceIso, hardPageCap) =>
-        this.listRecentSince(spaceId, sinceIso, hardPageCap),
-      listTrash: (spaceId) => this.listTrash(spaceId),
+        live(() => this.listRecentSince(spaceId, sinceIso, hardPageCap)),
+      listTrash: (spaceId) => live(() => this.listTrash(spaceId)),
       restorePage: (pageId) =>
-        this.skipIfMalformedId('restore', pageId, ctx, () =>
-          this.restorePage(ctx, pageId),
+        live(() =>
+          this.skipIfMalformedId('restore', pageId, ctx, () =>
+            this.restorePage(ctx, pageId),
+          ),
         ),
     };
+  }
+
+  /** Run `run` unless the cycle was aborted; then throw the abort reason. */
+  private async unlessAborted<T>(
+    ctx: GitSyncBindContext,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    ctx.signal?.throwIfAborted();
+    return run();
+  }
+
+  /**
+   * Confused-deputy guard. A vault file of the reconciling space can carry
+   * the `gitmost_id` of a page in another space or workspace (hand-edited
+   * frontmatter), and these writes run as the service user without CASL. Returns
+   * why the page must not be touched, or null when it lives in the reconciling
+   * space of the reconciling workspace.
+   */
+  private foreignPageReason(
+    ctx: GitSyncBindContext,
+    page: { workspaceId: string; spaceId: string } | null | undefined,
+  ): string | null {
+    if (!page) return 'no page with that id';
+    if (page.workspaceId !== ctx.workspaceId)
+      return 'page is in another workspace';
+    if (page.spaceId !== ctx.spaceId) {
+      return `page lives in space ${page.spaceId}`;
+    }
+    return null;
   }
 
   /**
@@ -145,7 +198,7 @@ export class GitmostDataSourceService {
     } catch (err) {
       if ((err as { code?: string })?.code === '22P02') {
         this.logger.warn(
-          `git-sync[${ctx.spaceId ?? '-'}] skip ${op}: malformed (non-UUID) id reached a uuid predicate; ignored (no wedge)`,
+          `git-sync[${ctx.spaceId}] skip ${op}: malformed (non-UUID) id reached a uuid predicate; ignored (no wedge)`,
         );
         return fallback;
       }
@@ -301,22 +354,21 @@ export class GitmostDataSourceService {
     // lives in the filename, which the engine classifier holds, not this method.)
     if (currentPage == null) {
       this.logger.warn(
-        `git-sync[${ctx.spaceId ?? '-'}] skip import of page ${pageId}: no page with that id (stale/foreign gitmost_id; not adopted, no wedge)`,
+        `git-sync[${ctx.spaceId}] skip import of page ${pageId}: no page with that id (stale/foreign gitmost_id; not adopted, no wedge)`,
       );
       return {};
     }
-    // Cross-space confused-deputy guard. The target `pageId` comes
-    // from THIS space's vault file frontmatter, but a file in space A could carry
-    // space B's page id. Without this check that file could resurrect (via
-    // restorePage), overwrite the body (writeBody), or clear the content of B's
-    // page — a cross-space write the reconciling space has no authority over.
-    // Mirror deletePage's guard (same `ctx.spaceId` source, same fail-safe
-    // direction): when the reconciling space is known and the resolved page
-    // already lives in a DIFFERENT space, skip — touch nothing. A null page is
-    // already handled by the unknown-page guard above.
-    if (ctx.spaceId && currentPage.spaceId !== ctx.spaceId) {
+    // Cross-space confused-deputy guard. The target `pageId` comes from THIS
+    // space's vault file frontmatter, but a file in space A could carry the id
+    // of a page in space B (or in another workspace). Without this check that
+    // file could resurrect (via restorePage), overwrite the body (writeBody), or
+    // clear the content of that page — a write the reconciling space has no
+    // authority over. Skip — touch nothing. A null page is already handled by
+    // the unknown-page guard above.
+    const foreign = this.foreignPageReason(ctx, currentPage);
+    if (foreign) {
       this.logger.log(
-        `git-sync[${ctx.spaceId}] skip import of page ${pageId}: page lives in space ${currentPage.spaceId} (cross-space vault reference; page preserved)`,
+        `git-sync[${ctx.spaceId}] skip import of page ${pageId}: ${foreign} (cross-space vault reference; page preserved)`,
       );
       return {
         updatedAt: new Date(currentPage.updatedAt).toISOString(),
@@ -344,60 +396,31 @@ export class GitmostDataSourceService {
       };
     }
 
-    const { parseDocmostMarkdown, markdownToProseMirror, docsCanonicallyEqual } =
-      await loadGitSync();
+    const { parseDocmostMarkdown, markdownToProseMirror } = await loadGitSync();
     const { body } = parseDocmostMarkdown(fullMarkdown);
-    const doc = await markdownToProseMirror(body);
+    const doc = await markdownToProseMirror(body, undefined, ctx.signal);
 
-    // Idempotency guard #2 (defense-in-depth). Even when the vault file text
-    // differs cosmetically, the PARSED body can be SEMANTICALLY identical to the
-    // page's current Docmost content — the markdown<->ProseMirror round-trip is
-    // not byte-stable, so upstream change-detection mis-flags such pages as
-    // changed every cycle. But the divergence is NOT just JSON key order: a fresh
-    // `markdownToProseMirror(doc)` carries new/null block ids and materialized
-    // schema default attrs, whereas `currentContent` (from the DB) carries the
-    // real per-block uuids (to which comments are anchored) and KNOWN_DEFAULTS.
-    // A key-order-only compare therefore NEVER matches a real collab page, so use
-    // the package's authoritative `docsCanonicallyEqual` — the same equality the
-    // converter's round-trip losslessness tests use, which strips block ids and
-    // normalizes KNOWN_DEFAULTS. If the incoming body already equals current
-    // content, this ingest is a no-op — skip it so a concurrent live edit is
-    // never clobbered and the vault never churns. A genuine content change is not
-    // canonically equal, so it proceeds.
-    const currentContent =
-      typeof currentPage.content === 'string'
-        ? (() => {
-            try {
-              return JSON.parse(currentPage.content as unknown as string);
-            } catch {
-              return currentPage.content;
-            }
-          })()
-        : currentPage.content;
-    // A page whose content is NULL or has no blocks (a never-edited shell)
-    // compares as an EMPTY doc, so an empty incoming body is a no-op here
-    // instead of reaching the collab merge. The incoming doc is compared in the
-    // shape the write would store it (its trailing paragraph included).
-    if (
-      docsCanonicallyEqual(
-        inEditorShape(doc),
-        currentContent?.content?.length
-          ? currentContent
-          : await markdownToProseMirror(''),
-      )
-    ) {
-      return {
-        updatedAt: new Date(currentPage.updatedAt).toISOString(),
-      };
-    }
-
+    // A body that differs from the page only cosmetically (the markdown round
+    // trip is not byte-stable) needs no guard here: the collab merge keys blocks
+    // by their markdown projection, so such a body merges with zero operations
+    // and the store skips the unchanged content. The keys are computed in
+    // yielding chunks there; a whole-document compare here would block the
+    // event loop on a large page (AGENTS invariant 3).
     let baseDoc: unknown;
     if (baseMarkdown != null) {
       const { body: baseBody } = parseDocmostMarkdown(baseMarkdown);
-      baseDoc = await markdownToProseMirror(baseBody);
+      baseDoc = await markdownToProseMirror(baseBody, undefined, ctx.signal);
     }
 
-    await this.writeBody(pageId, doc, ctx.userId, baseDoc);
+    // The page's own id, not the frontmatter's spelling of it: the collab
+    // layer accepts only the canonical lower-case `page.<uuid>` document name.
+    await this.writeBody(
+      currentPage.id,
+      doc,
+      ctx.userId,
+      baseDoc,
+      ctx.signal,
+    );
 
     // CAVEAT: writeBody merges through collab, whose persistence is DEBOUNCED, so
     // this `updatedAt` read can be STALE — it may reflect the row BEFORE the
@@ -437,7 +460,7 @@ export class GitmostDataSourceService {
     // a slugId — so a VALID parentPageId is left untouched.
     if (parentPageId && !isValidUUID(parentPageId)) {
       this.logger.warn(
-        `git-sync[${ctx.spaceId ?? '-'}] createPage: malformed (non-UUID) parentPageId '${parentPageId}' coerced to root (self-heal; no wedge)`,
+        `git-sync[${ctx.spaceId}] createPage: malformed (non-UUID) parentPageId '${parentPageId}' coerced to root (self-heal; no wedge)`,
       );
       parentPageId = undefined;
     }
@@ -449,7 +472,7 @@ export class GitmostDataSourceService {
       !(await this.isLiveParentInSpace(parentPageId, spaceId))
     ) {
       this.logger.warn(
-        `git-sync[${ctx.spaceId ?? '-'}] createPage: parentPageId '${parentPageId}' is not a live page in space ${spaceId} (missing, trashed or in another space) — coerced to root (self-heal; no wedge)`,
+        `git-sync[${ctx.spaceId}] createPage: parentPageId '${parentPageId}' is not a live page in space ${spaceId} (missing, trashed or in another space) — coerced to root (self-heal; no wedge)`,
       );
       parentPageId = undefined;
     }
@@ -467,8 +490,8 @@ export class GitmostDataSourceService {
     // paragraph and block id from the first viewer).
     const { parseDocmostMarkdown, markdownToProseMirror } = await loadGitSync();
     const { body } = parseDocmostMarkdown(content);
-    const doc = await markdownToProseMirror(body);
-    await this.writeBody(page.id, doc, ctx.userId);
+    const doc = await markdownToProseMirror(body, undefined, ctx.signal);
+    await this.writeBody(page.id, doc, ctx.userId, undefined, ctx.signal);
 
     const fresh = await this.pageRepo.findById(page.id);
     return {
@@ -493,14 +516,19 @@ export class GitmostDataSourceService {
     // the page from BOTH vaults and dump it in Trash. If the page's CURRENT space differs
     // from the space we're reconciling, this is a move-out — drop only the vault
     // file (already done by the engine), never the page.
-    if (ctx.spaceId) {
-      const page = await this.pageRepo.findById(pageId);
-      if (page && page.deletedAt == null && page.spaceId !== ctx.spaceId) {
-        this.logger.log(
-          `git-sync[${ctx.spaceId}] skip delete of page ${pageId}: moved to space ${page.spaceId} (vault file removed, page preserved)`,
-        );
-        return { id: pageId, skipped: 'moved-to-other-space' };
-      }
+    const page = await this.pageRepo.findById(pageId);
+    // A page of another workspace is never touched.
+    if (page && page.workspaceId !== ctx.workspaceId) {
+      this.logger.warn(
+        `git-sync[${ctx.spaceId}] skip delete of page ${pageId}: page is in another workspace (foreign gitmost_id; page preserved)`,
+      );
+      return { id: pageId, skipped: 'cross-space' };
+    }
+    if (page && page.deletedAt == null && page.spaceId !== ctx.spaceId) {
+      this.logger.log(
+        `git-sync[${ctx.spaceId}] skip delete of page ${pageId}: moved to space ${page.spaceId} (vault file removed, page preserved)`,
+      );
+      return { id: pageId, skipped: 'moved-to-other-space' };
     }
     await this.pageService.removePage(
       pageId,
@@ -523,8 +551,15 @@ export class GitmostDataSourceService {
     position?: string,
   ): Promise<unknown> {
     const page = await this.pageRepo.findById(pageId);
-    if (!page) {
-      throw new NotFoundException(`Page ${pageId} not found`);
+    // The pageId comes from this space's vault frontmatter; a page that is
+    // missing or lives elsewhere is never moved (PageService.movePage would run
+    // as the service user without CASL).
+    const foreign = this.foreignPageReason(ctx, page);
+    if (foreign) {
+      this.logger.warn(
+        `git-sync[${ctx.spaceId}] skip move of page ${pageId}: ${foreign} (foreign gitmost_id; nothing changed)`,
+      );
+      return { id: pageId, skipped: 'cross-space' };
     }
 
     // Self-heal for a malformed parent id, mirror of createPage. `parentPageId` is a
@@ -540,7 +575,7 @@ export class GitmostDataSourceService {
     // `uuid` validator as createPage; a valid parent is left untouched.
     if (parentPageId && !isValidUUID(parentPageId)) {
       this.logger.warn(
-        `git-sync[${ctx.spaceId ?? '-'}] movePage: malformed (non-UUID) parentPageId '${parentPageId}' coerced to root (self-heal; no wedge)`,
+        `git-sync[${ctx.spaceId}] movePage: malformed (non-UUID) parentPageId '${parentPageId}' coerced to root (self-heal; no wedge)`,
       );
       parentPageId = null;
     }
@@ -555,7 +590,7 @@ export class GitmostDataSourceService {
       !(await this.isLiveParentInSpace(parentPageId, page.spaceId))
     ) {
       this.logger.warn(
-        `git-sync[${ctx.spaceId ?? '-'}] movePage: parentPageId '${parentPageId}' is not a live page in space ${page.spaceId} (missing, trashed or in another space) — coerced to root (self-heal; no wedge)`,
+        `git-sync[${ctx.spaceId}] movePage: parentPageId '${parentPageId}' is not a live page in space ${page.spaceId} (missing, trashed or in another space) — coerced to root (self-heal; no wedge)`,
       );
       parentPageId = null;
     }
@@ -632,8 +667,14 @@ export class GitmostDataSourceService {
     title: string,
   ): Promise<unknown> {
     const page = await this.pageRepo.findById(pageId);
-    if (!page) {
-      throw new NotFoundException(`Page ${pageId} not found`);
+    // Never retitle a page that is missing or lives in another space or
+    // workspace (PageService.update runs as the service user without CASL).
+    const foreign = this.foreignPageReason(ctx, page);
+    if (foreign) {
+      this.logger.warn(
+        `git-sync[${ctx.spaceId}] skip rename of page ${pageId}: ${foreign} (foreign gitmost_id; nothing changed)`,
+      );
+      return { id: pageId, skipped: 'cross-space' };
     }
     // Defensive de-pollution of the cosmetic ` ~<slugId>` disambiguation suffix.
     // When two sibling pages share a title, the vault layout appends ` ~<slugId>`
@@ -688,8 +729,8 @@ export class GitmostDataSourceService {
   // --- continuous (phase B+) ------------------------------------------------
 
   /**
-   * Pages in the space updated since `sinceIso` (poll-safety reconciliation,
-   * SPEC §8). `spaceId` undefined widens to all spaces; `hardPageCap` bounds the
+   * Pages in the space updated since `sinceIso` (poll-safety reconciliation).
+   * `spaceId` undefined widens to all spaces; `hardPageCap` bounds the
    * result. Reads the DB directly (no cursor pagination needed here).
    */
   private async listRecentSince(
@@ -742,6 +783,18 @@ export class GitmostDataSourceService {
     ctx: GitSyncBindContext,
     pageId: string,
   ): Promise<unknown> {
+    // pageRepo.restorePage is not scoped to a workspace or space, so check
+    // here that the page is one this space may restore.
+    const foreign = this.foreignPageReason(
+      ctx,
+      await this.pageRepo.findById(pageId),
+    );
+    if (foreign) {
+      this.logger.warn(
+        `git-sync[${ctx.spaceId}] skip restore of page ${pageId}: ${foreign} (foreign gitmost_id; nothing changed)`,
+      );
+      return { id: pageId, skipped: 'cross-space' };
+    }
     // Stamp git-sync provenance so the change-listener loop-guard skips the
     // PAGE_RESTORED echo (mirrors deletePage / create / update / move).
     await this.pageRepo.restorePage(
@@ -776,18 +829,69 @@ export class GitmostDataSourceService {
    * `{ actor: 'git-sync', user: { id: userId } }` context flows into
    * PersistenceExtension.onStoreDocument, which persists ydoc+content+textContent,
    * stamps `lastUpdatedSource = 'git-sync'`, and broadcasts `page.updated`.
+   *
+   * Deadline: the write is aborted after GIT_SYNC_BODY_WRITE_TIMEOUT_MS
+   * or when the cycle's `signal` fires, so one stuck merge cannot hold the
+   * space lock. We stop waiting at once; the gateway stops the write at its
+   * next step before the (atomic) merge transaction, so a merge that already
+   * ran stays applied and the next cycle re-checks the page.
    */
   private async writeBody(
     pageId: string,
     prosemirrorJson: unknown,
     userId: string,
     baseProsemirrorJson?: unknown,
+    signal?: AbortSignal,
   ): Promise<void> {
+    signal?.throwIfAborted();
     const documentName = `page.${pageId}`;
-    await this.collabGateway.writePageBody(documentName, {
-      prosemirrorJson,
-      baseProsemirrorJson,
-      userId,
+    // One controller carries both stop reasons (the cycle's signal and the
+    // deadline) into the write.
+    const stop = new AbortController();
+    const timer = setTimeout(
+      () =>
+        stop.abort(
+          new Error(
+            `git-sync: body write of ${documentName} did not finish within ` +
+              `${GIT_SYNC_BODY_WRITE_TIMEOUT_MS} ms; aborted (a merge that ` +
+              `already ran stays applied; the next cycle re-checks the page)`,
+          ),
+        ),
+      GIT_SYNC_BODY_WRITE_TIMEOUT_MS,
+    );
+    timer.unref?.();
+    const onAbort = () => stop.abort(signal!.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const write = this.collabGateway.writePageBody(
+      documentName,
+      { prosemirrorJson, baseProsemirrorJson, userId },
+      stop.signal,
+    );
+    let waiting = true;
+    // A write that fails after we stopped waiting has no awaiter left: log it
+    // instead of leaving an unhandled rejection. Its own abort is expected.
+    write.catch((err) => {
+      if (waiting || err === stop.signal.reason) return;
+      this.logger.error(
+        `git-sync: body write of ${documentName} failed after the cycle stopped waiting for it: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        err instanceof Error ? err.stack : undefined,
+      );
     });
+    const stopped = new Promise<never>((_, reject) => {
+      stop.signal.addEventListener(
+        'abort',
+        () => reject(stop.signal.reason),
+        { once: true },
+      );
+    });
+    try {
+      await Promise.race([write, stopped]);
+    } finally {
+      waiting = false;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    }
   }
 }

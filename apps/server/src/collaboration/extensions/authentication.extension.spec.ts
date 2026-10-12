@@ -1,5 +1,8 @@
 import { NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { AuthenticationExtension } from './authentication.extension';
+import {
+  ACCESS_DENIED_REASON,
+  AuthenticationExtension,
+} from './authentication.extension';
 import { SpaceRole } from '../../common/helpers/types/permission';
 import { JwtType } from '../../core/auth/dto/jwt-payload';
 
@@ -126,6 +129,21 @@ describe('AuthenticationExtension.onAuthenticate', () => {
     );
   });
 
+  it.each([
+    `page.${PAGE_ID.toUpperCase()}`,
+    'page.slug12345',
+    `other.${PAGE_ID}`,
+  ])(
+    'CO-7: alias document name %s → Unauthorized, before any lookup',
+    async (documentName) => {
+      await expect(
+        ext.onAuthenticate({ ...buildData(), documentName } as any),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(tokenService.verifyJwt).not.toHaveBeenCalled();
+      expect(pageRepo.findById).not.toHaveBeenCalled();
+    },
+  );
+
   it('no space role → Unauthorized', async () => {
     spaceMemberRepo.getUserSpaceRoles.mockResolvedValue([]);
     await expect(ext.onAuthenticate(buildData() as any)).rejects.toThrow(
@@ -142,6 +160,60 @@ describe('AuthenticationExtension.onAuthenticate', () => {
     await expect(ext.onAuthenticate(buildData() as any)).rejects.toThrow(
       UnauthorizedException,
     );
+  });
+
+  // The reason hocuspocus sends the client in its permission-denied message:
+  // only a genuine denial carries ACCESS_DENIED_REASON (the client then drops a
+  // parked session with its local copy); any other failure keeps the default.
+  describe('permission-denied reason', () => {
+    it.each([
+      ['user not found', () => userRepo.findById.mockResolvedValue(null)],
+      [
+        'user disabled',
+        () =>
+          userRepo.findById.mockResolvedValue(
+            buildUser({ deactivatedAt: new Date() }),
+          ),
+      ],
+      ['page not found', () => pageRepo.findById.mockResolvedValue(null)],
+      [
+        'no space role',
+        () => spaceMemberRepo.getUserSpaceRoles.mockResolvedValue([]),
+      ],
+      [
+        'page-level denial',
+        () =>
+          pagePermissionRepo.canUserEditPage.mockResolvedValue({
+            hasAnyRestriction: true,
+            canAccess: false,
+            canEdit: false,
+          }),
+      ],
+    ])('%s → the access-denied reason', async (_case, arrange) => {
+      arrange();
+      await expect(
+        ext.onAuthenticate(buildData() as any),
+      ).rejects.toMatchObject({ reason: ACCESS_DENIED_REASON });
+    });
+
+    it.each([
+      [
+        'a failed access lookup',
+        () =>
+          pagePermissionRepo.canUserEditPage.mockRejectedValue(
+            new Error('db down'),
+          ),
+      ],
+      [
+        'an invalid token',
+        () => tokenService.verifyJwt.mockRejectedValue(new Error('bad sig')),
+      ],
+    ])('%s → no reason (the hocuspocus default)', async (_case, arrange) => {
+      arrange();
+      const err = await ext.onAuthenticate(buildData() as any).catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.reason).toBeUndefined();
+    });
   });
 
   it('restriction canAccess=true & canEdit=false → readOnly (no restricted-page write)', async () => {

@@ -385,6 +385,32 @@ describe('applyPushActions — create RETRY-ADOPT idempotency (#1)', () => {
     }
   });
 
+  it('ADOPTS a page git-sync wrote that already holds this file body', async () => {
+    const client = makeClient({ createId: 'should-not-be-used' });
+    client.listSpaceTree.mockResolvedValue({
+      pages: [{ id: 'own-create', parentPageId: null, title: 'Doc' }],
+      complete: true,
+    });
+    const page = await client.getPageJson('own-create');
+    client.getPageJson.mockResolvedValue({
+      ...page,
+      content: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Same body.' }] }],
+      },
+    });
+    const { git } = makeGit();
+    const fs = makeFs({ 'Doc.md': 'Same body.\n' });
+
+    const res = await applyPushActions(
+      deps(client, git, fs),
+      actions({ creates: [{ path: 'Doc.md' }] }),
+    );
+
+    expect(client.createPage).not.toHaveBeenCalled();
+    expect(res.createdPages).toEqual([{ path: 'Doc.md', pageId: 'own-create' }]);
+  });
+
   it('does NOT adopt from an INCOMPLETE tree even when a node matches (falls back to createPage)', async () => {
     // Defensive guard: retry-adopt is only safe from a COMPLETE live tree. A
     // TRUNCATED tree (complete:false) could miss an already-created page and let

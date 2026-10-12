@@ -54,6 +54,8 @@ import {
   AUDIT_SERVICE,
   IAuditService,
 } from '../../../integrations/audit/audit.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { emitCollabAccessChanged } from '../../../common/events/collab-access-changed';
 
 @Injectable()
 export class WorkspaceService {
@@ -80,6 +82,7 @@ export class WorkspaceService {
     private userSessionRepo: UserSessionRepo,
     // #686: evict a deleted user's per-user external-MCP toolset cache.
     private readonly mcpClients: McpClientsService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async findById(workspaceId: string) {
@@ -854,6 +857,11 @@ export class WorkspaceService {
       await this.userSessionRepo.revokeByUserId(userId, workspaceId, trx);
     });
 
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId,
+      userIds: [userId],
+    });
+
     this.auditService.log({
       event: AuditEvent.USER_DEACTIVATED,
       resourceType: AuditResource.USER,
@@ -989,6 +997,11 @@ export class WorkspaceService {
     // sessions are revoked above so they can't start a turn, but drop any warm
     // entry now rather than waiting out the TTL.
     this.mcpClients.invalidateUser(workspaceId, userId);
+
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId,
+      userIds: [userId],
+    });
 
     this.auditService.log({
       event: AuditEvent.USER_DELETED,

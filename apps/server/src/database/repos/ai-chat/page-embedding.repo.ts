@@ -17,9 +17,9 @@ import { dbOrTx } from '../../utils';
  * (see `deleteByPage`) so search never returns stale vectors.
  *
  * TRADE-OFF: a dimension-agnostic column cannot carry an HNSW/ivfflat ANN index
- * (those require a fixed dimension), so `searchByEmbedding` is a sequential scan
- * with the `<=>` cosine operator. Fine at wiki scale; re-add an HNSW index if a
- * single embedding dimension is ever pinned per deployment.
+ * (those require a fixed dimension), so the vector arm (`vectorCandidateArm`) is
+ * a sequential scan with the `<=>` cosine operator. Fine at wiki scale; re-add an
+ * HNSW index if a single embedding dimension is ever pinned per deployment.
  */
 
 /** A single chunk row to persist for a page (page-body embeddings). */
@@ -41,15 +41,13 @@ export interface PageEmbeddingChunkRow {
   embedding: number[];
 }
 
-/** A single ANN search hit. */
-export interface PageEmbeddingSearchHit {
-  pageId: string;
-  spaceId: string;
-  title: string | null;
-  content: string;
-  // Cosine distance (0 = identical direction). Lower is more similar.
-  distance: number;
-}
+/**
+ * Rows per INSERT statement in {@link PageEmbeddingRepo.insertChunks}. Each row
+ * binds 12 parameters, so a batch binds 6,000 — far under Postgres's 65,535
+ * per-statement limit — and, since every row also carries its vector as a text
+ * literal (~10 bytes per dimension), keeps one statement in the low megabytes.
+ */
+export const PAGE_EMBEDDING_INSERT_BATCH_ROWS = 500;
 
 @Injectable()
 export class PageEmbeddingRepo {
@@ -218,13 +216,48 @@ export class PageEmbeddingRepo {
    * Bulk-insert chunk rows for a page. The `embedding` value is serialized with
    * `pgvector.toSql` and cast to `vector` so Postgres stores it in the
    * dimension-agnostic `vector` column (any dimension). No-op on an empty array.
+   *
+   * Inserted in batches of {@link PAGE_EMBEDDING_INSERT_BATCH_ROWS} rows (AI-6):
+   * every row binds 12 parameters, and Postgres rejects a statement with more
+   * than 65,535 of them, so a single multi-row INSERT failed for any page of
+   * 5,462+ chunks — AFTER every provider call had been paid for, and the reindex
+   * transaction rolled back. The batches stay atomic: they run in the caller's
+   * transaction, or in one of their own when the caller passes none.
    */
   async insertChunks(
     rows: PageEmbeddingChunkRow[],
     trx?: KyselyTransaction,
   ): Promise<void> {
     if (rows.length === 0) return;
-    const db = dbOrTx(this.db, trx);
+    if (!trx && rows.length > PAGE_EMBEDDING_INSERT_BATCH_ROWS) {
+      await this.db
+        .transaction()
+        .execute((tx) => this.insertChunkBatches(rows, tx));
+      return;
+    }
+    await this.insertChunkBatches(rows, dbOrTx(this.db, trx));
+  }
+
+  private async insertChunkBatches(
+    rows: PageEmbeddingChunkRow[],
+    db: KyselyDB | KyselyTransaction,
+  ): Promise<void> {
+    for (
+      let start = 0;
+      start < rows.length;
+      start += PAGE_EMBEDDING_INSERT_BATCH_ROWS
+    ) {
+      await this.insertChunkBatch(
+        rows.slice(start, start + PAGE_EMBEDDING_INSERT_BATCH_ROWS),
+        db,
+      );
+    }
+  }
+
+  private async insertChunkBatch(
+    rows: PageEmbeddingChunkRow[],
+    db: KyselyDB | KyselyTransaction,
+  ): Promise<void> {
     await db
       .insertInto('pageEmbeddings')
       .values(
@@ -323,67 +356,12 @@ export class PageEmbeddingRepo {
   }
 
   /**
-   * Cosine search over the embeddings, scoped to a workspace AND a set of
-   * spaces the caller may read (see semanticSearch access-scoping). Orders by
-   * `embedding <=> $query` (cosine distance) and joins the page title cheaply.
-   * Returns [] when `spaceIds` is empty (no accessible spaces => no results).
-   *
-   * Because the column is dimension-agnostic (no ANN index), this is a seq scan
-   * with `<=>`. The query MUST only be compared against same-dimension rows —
-   * pgvector raises on a dimension mismatch, which can happen when rows from a
-   * previously configured embedding model still linger. We therefore filter by
-   * `model_dimensions = queryEmbedding.length` so the `<=>` operands always
-   * agree on dimension.
-   */
-  async searchByEmbedding(
-    workspaceId: string,
-    queryEmbedding: number[],
-    spaceIds: string[],
-    limit: number,
-  ): Promise<PageEmbeddingSearchHit[]> {
-    if (spaceIds.length === 0) return [];
-
-    // Serialized + cast query vector reused for the distance expression.
-    const queryVector = sql`${pgvector.toSql(queryEmbedding)}::vector`;
-    // Compare only against rows produced by a model of the SAME dimension.
-    const queryDim = queryEmbedding.length;
-
-    const rows = await this.db
-      .selectFrom('pageEmbeddings as pe')
-      .innerJoin('pages as p', 'p.id', 'pe.pageId')
-      .select([
-        'pe.pageId as pageId',
-        'pe.spaceId as spaceId',
-        'pe.content as content',
-        'p.title as title',
-        sql<number>`pe.embedding <=> ${queryVector}`.as('distance'),
-      ])
-      .where('pe.workspaceId', '=', workspaceId)
-      .where('pe.spaceId', 'in', spaceIds)
-      // Same-dimension only: avoids a pgvector dimension-mismatch error against
-      // rows from a previously configured embedding model.
-      .where('pe.modelDimensions', '=', queryDim)
-      // Exclude chunks whose page is in the trash (defence in depth).
-      .where('p.deletedAt', 'is', null)
-      .orderBy('distance', 'asc')
-      .limit(limit)
-      .execute();
-
-    return rows.map((row) => ({
-      pageId: row.pageId,
-      spaceId: row.spaceId,
-      title: row.title,
-      content: row.content,
-      distance: Number(row.distance),
-    }));
-  }
-
-  /**
    * Count DISTINCT non-deleted pages that have at least one embedding row in this
    * workspace — i.e. how many pages currently have stored embeddings.
    *
-   * NOTE: this counts pages embedded by ANY model dimension, whereas
-   * `searchByEmbedding` only serves rows matching the active model's dimension.
+   * NOTE: this counts pages embedded by ANY model dimension, whereas the vector
+   * arm (`vectorCandidateArm`) only serves rows matching the active model's
+   * dimension.
    * After switching the embedding model, this number can therefore exceed the
    * set of pages actually reachable by search until those pages are re-indexed.
    * It is an indexing-coverage indicator, not an exact searchable-page count.

@@ -1,6 +1,6 @@
 import * as Y from 'yjs';
 
-import { mergeXmlFragments3Way } from '../../../collaboration/merge/yjs-body-merge';
+import { mergeXmlFragments3WayWithStats } from '../../../collaboration/merge/yjs-body-merge';
 
 /**
  * Convergence of a git-ingest write with a live editor ("silent revert").
@@ -104,7 +104,7 @@ describe('git-ingest convergence with an open editor', () => {
     };
     server.on('update', onUpdate);
     server.transact(() =>
-      mergeXmlFragments3Way(
+      mergeXmlFragments3WayWithStats(
         server.getXmlFragment('default'),
         targetFrag,
         baseFrag,

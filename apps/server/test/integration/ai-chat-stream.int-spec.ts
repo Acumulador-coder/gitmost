@@ -172,7 +172,13 @@ describe('AiChatService.stream [integration]', () => {
         sessionId: 'sess-1',
         body: opts.body,
         res: { raw: res } as any,
-        signal: new AbortController().signal,
+        // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+        runHooks: {
+          begin: async () => ({
+            runId: 'run-1',
+            signal: new AbortController().signal,
+          }),
+        },
         model: opts.model as any,
         role: null,
       } as any);
@@ -399,7 +405,13 @@ describe('AiChatService.stream [integration]', () => {
           sessionId: 'sess-1',
           body,
           res: { raw: res } as any,
-          signal: new AbortController().signal,
+          // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+          runHooks: {
+            begin: async () => ({
+              runId: 'run-1',
+              signal: new AbortController().signal,
+            }),
+          },
           model: model as any,
           role: null,
         } as any);

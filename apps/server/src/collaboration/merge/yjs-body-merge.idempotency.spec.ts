@@ -1,6 +1,9 @@
 import * as Y from 'yjs';
 
-import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
+import {
+  mergeXmlFragments,
+  mergeXmlFragments3WayWithStats,
+} from './yjs-body-merge';
 
 /**
  * A page body must not be re-appended on every git-sync reconcile cycle.
@@ -11,10 +14,10 @@ import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
  * If that default were part of the block key, the three-way merge could anchor on
  * nothing and would re-append the trailing unit every cycle, each grown export
  * diverging from the base by one more unit — a self-sustaining loop.
- * `serializeXmlNode` drops every attr equal to its schema default, so a live
- * block compares equal to its git-round-tripped twin and the resync is a no-op.
- * `yjs-body-merge.schema-defaults.spec.ts` covers the rest of the class
- * (image.align, link mark internal, …).
+ * Blocks are keyed by their markdown projection (`blockKey`), which carries no
+ * `indent`, so a live block compares equal to its git-round-tripped twin and the
+ * resync is a no-op. `yjs-body-merge.schema-defaults.spec.ts` covers the rest of
+ * the class (image.align, link mark internal, …).
  *
  * Modelled at the Yjs level: a LIVE fragment whose blocks carry `indent: 0` +
  * block ids, versus a git-derived fragment of the same content with neither, for
@@ -106,7 +109,7 @@ describe('git-sync reconcile import is idempotent (no whole-body duplication)', 
     const before = blockCount(live);
     let applied = -1;
     liveDoc.transact(() => {
-      applied = mergeXmlFragments3Way(live, incoming, base);
+      applied = mergeXmlFragments3WayWithStats(live, incoming, base).applied;
     });
 
     expect(applied).toBe(0);
@@ -127,7 +130,11 @@ describe('git-sync reconcile import is idempotent (no whole-body duplication)', 
     for (let cycle = 0; cycle < 5; cycle++) {
       let applied = -1;
       liveDoc.transact(() => {
-        applied = mergeXmlFragments3Way(live, incomingUnits(), baseUnits());
+        applied = mergeXmlFragments3WayWithStats(
+          live,
+          incomingUnits(),
+          baseUnits(),
+        ).applied;
       });
       expect(applied).toBe(0);
       expect(blockCount(live)).toBe(before);
@@ -168,7 +175,7 @@ describe('git-sync reconcile import is idempotent (no whole-body duplication)', 
 
     const before = blockCount(live);
     liveDoc.transact(() => {
-      mergeXmlFragments3Way(live, incoming, base);
+      mergeXmlFragments3WayWithStats(live, incoming, base);
     });
 
     // The edit landed, and the body did NOT grow (one block changed in place).

@@ -122,6 +122,26 @@ describe('#714 AiChatController.stream — real client disconnect', () => {
     expect(requestStop).toHaveBeenCalledWith('run-new', 'ws1');
   });
 
+  // AI-2: `headersSent` flips inside writeHead, before any frame is on the wire,
+  // so it is not "the client got the chat id" — only the first written frame is.
+  it('stops the run when the client leaves after the headers, before the first frame', async () => {
+    const { requestStop, port } = await serve({
+      stream: async ({ runHooks, res }) => {
+        await runHooks.begin('c-new');
+        res.raw.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.raw.flushHeaders();
+        await closed(res);
+      },
+    });
+    const client = post(port);
+    // The status line + headers arrived, but no frame (no chat id) ever did.
+    client.on('response', () => client.destroy());
+    await new Promise((r) => client.once('close', r));
+    await handled;
+    expect(requestStop).toHaveBeenCalledTimes(1);
+    expect(requestStop).toHaveBeenCalledWith('run-new', 'ws1');
+  });
+
   it('keeps the run when the client leaves after the first frame', async () => {
     const { requestStop, port } = await serve({
       stream: async ({ runHooks, res }) => {

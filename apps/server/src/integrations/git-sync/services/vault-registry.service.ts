@@ -66,6 +66,10 @@ export class VaultRegistryService {
    *     is bare and the engine reads only blobs, and it never treats a mode-120000
    *     tree entry as a page. This keeps any checkout of the vault from
    *     materializing such an entry as a real link.
+   *   - core.hooksPath=<the vault's own hooks directory>, where
+   *     `installPushGuard` writes the pre-receive hook: a `core.hooksPath` in
+   *     the host's global or system config would otherwise point receive-pack
+   *     at another directory and silently switch the push guard off.
    *
    * Each key is read first and written only when its local value differs:
    * every `git config` write takes `config.lock`, and this runs on every
@@ -101,6 +105,7 @@ export class VaultRegistryService {
       ['http.receivepack', 'true'],
       ['http.uploadpack', 'true'],
       ['core.symlinks', 'false'],
+      ['core.hooksPath', `${await vault.gitDir()}/hooks`],
     ];
     // Bound each `git config` (review suggestion): this runs in the request path
     // BEFORE the watchdog, so a wedged git (a stale `config.lock`) would

@@ -10,6 +10,7 @@
  * Style mirrors git.test.ts: real `git` binary, real temp repos under
  * os.tmpdir(), gitAvailable()-gated, temp dirs cleaned in afterEach.
  */
+import './git-env';
 import { execFile } from 'node:child_process';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

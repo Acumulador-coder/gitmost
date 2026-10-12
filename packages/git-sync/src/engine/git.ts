@@ -17,10 +17,13 @@
  *     no exception — even the `git --version` preflight goes through `runRaw`.
  */
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { parsePageFile } from "@docmost/prosemirror-markdown";
+import { MAX_MARKDOWN_BYTES } from "./convert-pool.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,9 +40,48 @@ const GIT_EXEC_TIMEOUT_MS = 120_000;
 // delete a lock a live git process still holds.
 const STALE_LOCK_MIN_AGE_MS = GIT_EXEC_TIMEOUT_MS * 3; // 6 min, >> max git-op duration
 
-// Paths per `cat-file --batch` call in `readFilesAtRef`, so the answer of a
-// large space stays far below the runner's output buffer.
+// The most stdout one git invocation may print (`maxBuffer`). Past it Node kills
+// git, and the output is unusable: `runRaw` throws instead of returning it.
+const GIT_OUTPUT_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * git was stopped before it exited (killed by its timeout or a signal, or cut
+ * off past the output budget), so it has no answer — not even "absent". A
+ * reader that maps its own failures to "absent" must rethrow this one.
+ */
+export class GitStoppedError extends Error {}
+
+// One `cat-file --batch` call of `readFilesAtRef` takes at most this many paths
+// and, unless a single file is bigger, this many bytes of blobs, so its answer
+// stays below GIT_OUTPUT_MAX_BYTES however large the space's files are.
 const READ_BATCH_PATHS = 1000;
+const READ_BATCH_BYTES = GIT_OUTPUT_MAX_BYTES / 2;
+
+/**
+ * What one push to the vault may bring, checked by the pre-receive hook
+ * (PUSH_GUARD_HOOK) before receive-pack updates any ref. For each pushed ref it
+ * counts only the files the ref's new tree ADDS OR CHANGES against the ref's
+ * old tip (a new ref: against the current `main`, or its whole tree when there
+ * is no `main`). What the vault already holds — the export of a space, which
+ * has no page-count limit — is not counted, so a space of any size still takes
+ * a one-line edit. Over budget the push is refused with the reason, so the
+ * engine never takes in a change it cannot process:
+ *   - `files`: the files one push adds or changes, each a page operation of the
+ *     cycle that ingests it;
+ *   - `fileBytes`: a file is read whole by one git call (`git show`,
+ *     `cat-file --batch`), whose output must fit GIT_OUTPUT_MAX_BYTES;
+ *   - `markdownFileBytes`: a `*.md` file is converted whole, so it is held to
+ *     the converter's input budget (MAX_MARKDOWN_BYTES): a bigger page would
+ *     pass the push and then fail its conversion on every cycle;
+ *   - `totalBytes`: bounds what one push brings to disk and to the cycle that
+ *     ingests it (the server also cuts a push's request body at it).
+ */
+export const PUSH_BUDGET = {
+  files: 10_000,
+  fileBytes: 16 * 1024 * 1024,
+  markdownFileBytes: MAX_MARKDOWN_BYTES,
+  totalBytes: 256 * 1024 * 1024,
+} as const;
 
 /** Bot identity used for engine-authored vault commits (SPEC §7.3). */
 export const BOT_AUTHOR_NAME = "Docmost Sync";
@@ -58,19 +100,98 @@ export const LAST_EXPORT_REF = "refs/docmost/last-export";
  * The vault's `pre-receive` hook: refuses a push to the engine's own refs,
  * `refs/docmost/*` (the last-export pointer) and the `docmost` branch name. An
  * edit pushed there never reaches Docmost and would move what the engine diffs
- * against.
+ * against. It also refuses a push that brings more than the `budget`
+ * (PUSH_BUDGET) — counted over the files each ref update adds or changes, not
+ * over the whole tree — naming what is over.
  */
-export const PUSH_GUARD_HOOK = `#!/bin/sh
-# Installed by git-sync: refuse a push to the engine's own refs.
+export function buildPushGuardHook(budget: {
+  files: number;
+  fileBytes: number;
+  markdownFileBytes: number;
+  totalBytes: number;
+}): string {
+  return `#!/bin/sh
+# Installed by git-sync: refuse a push to the engine's own refs, and a push that
+# brings more than the size budget, before receive-pack updates any ref.
+tip=$(git rev-parse --verify --quiet refs/heads/${DEFAULT_BRANCH})
+tab=$(printf '\\t')
+# Print "<id> <limit> <kind> <path>" for one file: a *.md file (also as git
+# quotes an unusual path: "....md") is converted whole, so it is held to the
+# converter's input budget; any other file to the per-file budget.
+limited() {
+  case "$2" in
+    *.md|*'.md"') printf '%s %s md %s\\n' "$1" ${budget.markdownFileBytes} "$2" ;;
+    *) printf '%s %s file %s\\n' "$1" ${budget.fileBytes} "$2" ;;
+  esac
+}
+# The files a ref update brings: those its tree adds or changes against $base,
+# or every file of its tree when $base is empty.
+brought() {
+  if [ -n "$base" ]; then
+    # ":<old mode> <new mode> <old id> <new id> <status>" TAB "<path>"
+    git -c core.quotepath=false diff-tree -r --no-renames --diff-filter=AMT "$base" "$new" |
+      while IFS="$tab" read -r meta path; do
+        set -- $meta
+        limited "$4" "$path"
+      done
+  else
+    # "<mode> <type> <id>" TAB "<path>"
+    git -c core.quotepath=false ls-tree -r "$new" |
+      while IFS="$tab" read -r meta path; do
+        set -- $meta
+        limited "$3" "$path"
+      done
+  fi
+}
 while read -r old new ref; do
   case "$ref" in
     refs/heads/docmost|refs/docmost/*)
       echo "'$ref' is managed by git-sync and cannot be pushed." >&2
       exit 1 ;;
   esac
+  # A deletion (an all-zero new id) brings nothing.
+  case "$new" in *[!0]*) ;; *) continue ;; esac
+  # Measured against the ref's old tip; a new ref (an all-zero old id) against
+  # ${DEFAULT_BRANCH}, or as its whole tree when there is no ${DEFAULT_BRANCH}.
+  base=$old
+  case "$old" in *[!0]*) ;; *) base=$tip ;; esac
+  over=$(brought | git cat-file --batch-check='%(objecttype) %(objectsize) %(rest)' | {
+    files=0
+    total=0
+    while read -r type size limit kind path; do
+      # A submodule entry names a commit, not a file of this repo.
+      [ "$type" = blob ] || continue
+      if [ "$size" -gt "$limit" ]; then
+        if [ "$kind" = md ]; then
+          echo "'$path' is $size bytes (limit $limit per .md file)"
+        else
+          echo "'$path' is $size bytes (limit $limit per file)"
+        fi
+        exit 0
+      fi
+      files=$((files + 1))
+      total=$((total + size))
+      if [ "$files" -gt ${budget.files} ]; then
+        echo "$ref would add or change more than ${budget.files} files (the limit per push)"
+        exit 0
+      fi
+      if [ "$total" -gt ${budget.totalBytes} ]; then
+        echo "$ref would add or change more than ${budget.totalBytes} bytes of files (the limit per push)"
+        exit 0
+      fi
+    done
+  })
+  if [ -n "$over" ]; then
+    echo "git-sync refused the push: $over." >&2
+    exit 1
+  fi
 done
 exit 0
 `;
+}
+
+/** The pre-receive hook `installPushGuard` installs (see `buildPushGuardHook`). */
+export const PUSH_GUARD_HOOK = buildPushGuardHook(PUSH_BUDGET);
 
 /** The lock files the engine's own git operations can leave behind. */
 const ENGINE_LOCKS = [
@@ -167,9 +288,11 @@ export class VaultGit {
   /**
    * The ONE primitive every git invocation in this module flows through. Builds
    * the full argv (`--no-pager -c core.quotepath=false <args>`), env, cwd, and
-   * maxBuffer, runs git, and NEVER throws — it returns the exit info so callers
-   * can treat a non-zero exit as either an error (`run`) or a meaningful state
-   * (e.g. a merge conflict, a porcelain diff that "fails" deliberately).
+   * maxBuffer, runs git, and returns the exit info so callers can treat a
+   * non-zero exit as either an error (`run`) or a meaningful state (e.g. a grep
+   * with no match). It throws when git has no exit status to report: killed by
+   * its timeout or a signal, or stopped because its output overran
+   * GIT_OUTPUT_MAX_BYTES.
    *
    *   - argv: ALWAYS prepends `--no-pager -c core.quotepath=false`, so git never
    *     blocks on a pager and always prints verbatim UTF-8 paths (no octal
@@ -201,9 +324,11 @@ export class VaultGit {
         ["--no-pager", "-c", "core.quotepath=false", ...args],
         {
           // Generous buffer: file listings / porcelain output on a large vault
-          // can be sizable.
+          // can be sizable. Past it the call fails with the reason (below),
+          // never with a cut-off answer; PUSH_BUDGET keeps one file's read
+          // (`fileBytes`) inside it.
           ...(cwd !== undefined ? { cwd } : {}),
-          maxBuffer: 64 * 1024 * 1024,
+          maxBuffer: GIT_OUTPUT_MAX_BYTES,
           timeout: GIT_EXEC_TIMEOUT_MS,
           env: vaultGitEnv(opts?.env),
           encoding: opts?.encoding ?? "utf8",
@@ -219,11 +344,34 @@ export class VaultGit {
       return { code: 0, stdout, stderr };
     } catch (err: unknown) {
       const e = err as {
-        code?: number;
+        code?: number | string | null;
+        killed?: boolean;
+        signal?: string | null;
         stdout?: string;
         stderr?: string;
         message?: string;
       };
+      // Output past the buffer is cut off and git is killed: no exit status to
+      // report, and a caller reading it as one (a grep "no match", a show
+      // "path absent") would act on a wrong answer. Fail with the reason.
+      if (e.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+        throw new GitStoppedError(
+          `git ${args.join(" ")} printed more than its ` +
+            `${GIT_OUTPUT_MAX_BYTES}-byte output budget and was stopped`,
+          { cause: err },
+        );
+      }
+      // Killed by its timeout (or by any signal): git did not exit, so there is
+      // no exit status either — the same wrong answer if read as one.
+      if (e.killed || (typeof e.signal === "string" && e.signal.length > 0)) {
+        throw new GitStoppedError(
+          e.killed
+            ? `git ${args.join(" ")} did not finish within ` +
+                `${GIT_EXEC_TIMEOUT_MS} ms and was killed`
+            : `git ${args.join(" ")} was killed by ${e.signal}`,
+          { cause: err },
+        );
+      }
       return {
         code: typeof e.code === "number" ? e.code : 1,
         stdout: e.stdout ?? "",
@@ -414,7 +562,9 @@ export class VaultGit {
   /**
    * Install PUSH_GUARD_HOOK as the vault's `pre-receive` hook. Written only when
    * it differs, through a rename, so a concurrent receive-pack never runs a
-   * half-written hook.
+   * half-written hook. The temp name is unique per call: two installs running
+   * at once (smart-HTTP requests outside the space lock) never write or rename
+   * the same temp file.
    */
   async installPushGuard(): Promise<void> {
     const hooks = `${await this.gitDir()}/hooks`;
@@ -422,7 +572,7 @@ export class VaultGit {
     const current = await readFile(path, "utf8").catch(() => null);
     if (current === PUSH_GUARD_HOOK) return;
     await mkdir(hooks, { recursive: true });
-    const tmp = `${path}.${process.pid}.tmp`;
+    const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(tmp, PUSH_GUARD_HOOK, { mode: 0o755 });
     await rename(tmp, path);
   }
@@ -484,16 +634,55 @@ export class VaultGit {
   }
 
   /**
-   * The text of each of `paths` at `ref`, read by `cat-file --batch` in chunks
-   * of READ_BATCH_PATHS; a path absent there is left out. Paths come back
+   * The text of each of `paths` at `ref`; a path absent there (or not a file)
+   * is left out. The blob sizes come first (`cat-file --batch-check`), then the
+   * blobs are read by `cat-file --batch` in batches of at most READ_BATCH_PATHS
+   * paths and READ_BATCH_BYTES bytes, so no answer outgrows the output budget
+   * (a single file bigger than READ_BATCH_BYTES is read alone). Paths come back
    * verbatim (one per line, so a path containing a newline is not supported).
    */
   async readFilesAtRef(ref: string, paths: string[]): Promise<Map<string, string>> {
     const out = new Map<string, string>();
+    let batch: string[] = [];
+    let bytes = 0;
     for (let i = 0; i < paths.length; i += READ_BATCH_PATHS) {
-      await this.readBatchAtRef(ref, paths.slice(i, i + READ_BATCH_PATHS), out);
+      const sizes = await this.blobSizesAtRef(ref, paths.slice(i, i + READ_BATCH_PATHS));
+      for (const [path, size] of sizes) {
+        if (
+          batch.length > 0 &&
+          (batch.length >= READ_BATCH_PATHS || bytes + size > READ_BATCH_BYTES)
+        ) {
+          await this.readBatchAtRef(ref, batch, out);
+          batch = [];
+          bytes = 0;
+        }
+        batch.push(path);
+        bytes += size;
+      }
     }
+    if (batch.length > 0) await this.readBatchAtRef(ref, batch, out);
     return out;
+  }
+
+  /** The size of each of `paths` that is a file at `ref` (`cat-file --batch-check`). */
+  private async blobSizesAtRef(
+    ref: string,
+    paths: string[],
+  ): Promise<Map<string, number>> {
+    const r = await this.runRaw(["cat-file", "--batch-check"], {
+      input: paths.map((p) => `${ref}:${p}\n`).join(""),
+    });
+    if (r.code !== 0) {
+      throw new Error(`git cat-file --batch-check at ${ref} failed: ${r.stderr.trim()}`);
+    }
+    // One line per path: `<oid> <type> <size>`, or `<name> missing`.
+    const lines = r.stdout.split("\n");
+    const sizes = new Map<string, number>();
+    paths.forEach((path, i) => {
+      const m = (lines[i] ?? "").match(/^[0-9a-f]+ (\w+) (\d+)$/);
+      if (m && m[1] === "blob") sizes.set(path, Number(m[2]));
+    });
+    return sizes;
   }
 
   /** One `cat-file --batch` over `paths` at `ref`, its blobs added to `out`. */
@@ -762,8 +951,10 @@ export class VaultGit {
       const nul = record.indexOf("\0");
       if (nul < 0 || !record.startsWith(prefix)) continue;
       const path = record.slice(prefix.length, nul);
-      const m = record.slice(nul + 1).match(/^gitmost_id:\s*(.+?)\s*$/);
-      const id = m ? m[1].replace(/^["']|["']$/g, "") : "";
+      // The line goes through the page-file parser as a one-line frontmatter:
+      // one implementation of the id syntax, and linear time (a regex with a
+      // lazy capture before `\s*$` is quadratic on a long whitespace run).
+      const id = parsePageFile(`---\n${record.slice(nul + 1)}\n---\n`).id ?? "";
       if (seen.has(path) || id === "") continue;
       seen.add(path);
       out.push({ path, id });

@@ -99,9 +99,9 @@ export const documentExtensions = [
   Drawio,
   Excalidraw,
   Embed,
-  // Registered server-side so the node survives schema parsing/serialization.
-  // Authoring is gated to admins at the document WRITE paths (see
-  // stripHtmlEmbedNodes usage in persistence/page services), NOT here.
+  // Registered so the node survives schema parsing/serialization. Any member
+  // can insert it when the workspace `htmlEmbed` toggle is on; with the toggle
+  // off, `stripHtmlEmbedNodes` removes it from anonymous public-share reads.
   HtmlEmbed,
   Mention,
   Subpages,

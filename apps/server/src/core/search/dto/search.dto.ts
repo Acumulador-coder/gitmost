@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
 } from 'class-validator';
 
@@ -34,7 +35,7 @@ export class SearchDTO {
   shareId?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUUID()
   creatorId?: string;
 
   @IsOptional()

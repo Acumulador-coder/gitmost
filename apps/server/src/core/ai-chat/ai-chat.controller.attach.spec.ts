@@ -1,5 +1,8 @@
-import { ForbiddenException } from '@nestjs/common';
-import { AiChatController } from './ai-chat.controller';
+import { ForbiddenException, Logger } from '@nestjs/common';
+import {
+  AiChatController,
+  ATTACH_TAIL_WRITE_TIMEOUT_MS,
+} from './ai-chat.controller';
 import type {
   RunStreamAttachment,
   RunStreamCallbacks,
@@ -323,6 +326,77 @@ describe('AiChatController attach endpoint (#184 phase 1.5)', () => {
     expect(attachment.unsubscribe).not.toHaveBeenCalled();
     fireClose(); // socket closed
     expect(attachment.unsubscribe).toHaveBeenCalled();
+  });
+
+  // AI-3: a reader that neither drains nor closes must not park the handler
+  // (and the replay + paused subscriber it pins) forever.
+  it('tears the attach down when the tail is not drained within the deadline', async () => {
+    jest.useFakeTimers();
+    const warn = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    try {
+      const start = jest.fn();
+      const attachment = makeAttachment({ replay: ['f1', 'f2'], start });
+      const { controller } = makeController({ chat: owned, attachment });
+      const { res, raw } = makeRawRes();
+      // The kernel buffer is full and never drains; 'close' never fires either.
+      raw.write.mockImplementation((f: string) => {
+        raw.written.push(f);
+        return false;
+      });
+      const { req } = makeReq();
+      let settled = false;
+      const handling = controller
+        .attachRunStream('c1', undefined, '0', req, res, user, workspace)
+        .then(() => {
+          settled = true;
+        });
+
+      await jest.advanceTimersByTimeAsync(ATTACH_TAIL_WRITE_TIMEOUT_MS - 1);
+      expect(settled).toBe(false); // still waiting for the drain
+      await jest.advanceTimersByTimeAsync(2);
+      await handling;
+
+      expect(raw.written).toEqual(['f1']); // stopped at the undrained write
+      expect(raw.destroy).toHaveBeenCalled(); // write buffer released
+      expect(attachment.unsubscribe).toHaveBeenCalled(); // paused subscriber dropped
+      expect(start).not.toHaveBeenCalled(); // never went live
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('did not drain'),
+      );
+    } finally {
+      warn.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it('a socket that closes mid-tail is torn down without going live', async () => {
+    const start = jest.fn();
+    const attachment = makeAttachment({ replay: ['f1', 'f2'], start });
+    const { controller } = makeController({ chat: owned, attachment });
+    const { res, raw } = makeRawRes();
+    raw.write.mockImplementation((f: string) => {
+      raw.written.push(f);
+      return false;
+    });
+    // The socket closes while the handler waits for the drain.
+    raw.once.mockImplementation((ev: string, fn: () => void) => {
+      if (ev === 'close') setImmediate(fn);
+    });
+    const { req } = makeReq();
+    await controller.attachRunStream(
+      'c1',
+      undefined,
+      '0',
+      req,
+      res,
+      user,
+      workspace,
+    );
+    expect(raw.written).toEqual(['f1']);
+    expect(attachment.unsubscribe).toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
   });
 
   it('onFrame destroys the socket when the buffered length exceeds the cap', async () => {

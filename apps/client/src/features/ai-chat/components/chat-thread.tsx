@@ -176,6 +176,10 @@ interface ChatThreadProps {
    *  for the terminal ROW. `undefined` = no poll result yet (ignored).
    *  Only meaningful while the poll is armed (a poll-bearing recovery). */
   polledRunFact?: { id: string; status: string } | null;
+  /** AI-7: the latest failed degraded poll (HTTP status + reason), null once a
+   *  poll succeeds. Rendered while the poll follows the run (polling /
+   *  stopping) and in the stalled banner, so a failing poll is never silent. */
+  pollFailure?: string | null;
   /** #184: request the server-side stop of this chat's active run. Called with the
    *  resolved chat id when the user presses Stop — aborting only the local SSE is
    *  just a client disconnect, which the server deliberately ignores, so the
@@ -243,6 +247,7 @@ export default function ChatThread({
   onServerChatId,
   onResumeFallback,
   polledRunFact,
+  pollFailure,
   onServerStop,
   pendingUnbindRef,
 }: ChatThreadProps) {
@@ -685,11 +690,6 @@ export default function ChatThread({
       const adopted409 = runFactAdopted409Ref.current;
       runFactAdopted409Ref.current = false;
 
-      // A missing message (a pre-first-frame break) has no visible content.
-      const msgHasVisible = message
-        ? assistantMessageHasVisibleContent(message)
-        : false;
-
       // #488 F1: the SUPERSEDED stream A just finalized (we are still `superseding`
       // and stream B has not been sent yet). Record A's terminal outcome STAMPED —
       // I1 drops it (superseding bumped the epoch), so A cannot drive a false
@@ -785,8 +785,8 @@ export default function ChatThread({
       // Clean finish.
       if (wasObserver) {
         if (mountedRef.current) {
-          const hasVisible = msgHasVisible;
-          if (!hasVisible) {
+          // A missing message (a pre-first-frame break) has no visible content.
+          if (!message || !assistantMessageHasVisibleContent(message)) {
             // Starved replay (the tail carried no new steps). #491 tail-only: the
             // seeded steps 0..N-1 are still on screen (the SDK continuation never
             // wiped them — `start` does not reset parts), so there is nothing to
@@ -1154,6 +1154,21 @@ export default function ChatThread({
 
       {showError && errorView ? (
         <ChatErrorAlert title={errorView.title} detail={errorView.detail} mb="xs" />
+      ) : (phase.name === "polling" || phase.name === "stopping") &&
+        pollFailure ? (
+        // AI-7: the poll that follows the run keeps failing — say so, with the
+        // real cause, while it retries (invariant 10).
+        <Alert variant="light" color="red" p="xs" mb="xs" style={{ flexShrink: 0 }}>
+          <Group gap={8} wrap="nowrap" align="center">
+            <Loader size={14} color="red" style={{ flex: "none" }} />
+            <Text size="sm" lh={1.3}>
+              {t(
+                "Can't reach the server to follow the answer — retrying: {{reason}}",
+                { reason: pollFailure },
+              )}
+            </Text>
+          </Group>
+        </Alert>
       ) : phase.name === "polling" && phase.reason === "disconnect" ? (
         // A live disconnect of a detached run: the degraded poll follows it to
         // terminal from the DB. Keep the recovery visible (invariant 10).
@@ -1161,7 +1176,7 @@ export default function ChatThread({
           <Group gap={8} wrap="nowrap" align="center">
             <Loader size={14} color="gray" style={{ flex: "none" }} />
             <Text size="sm" lh={1.3} c="dimmed">
-              {t("Connection lost — reconnecting…")}
+              {t("Connection lost — following the answer…")}
             </Text>
           </Group>
         </Alert>
@@ -1171,7 +1186,12 @@ export default function ChatThread({
         <Alert variant="light" color="gray" p="xs" mb="xs" style={{ flexShrink: 0 }}>
           <Group gap={8} wrap="nowrap" align="center">
             <Text size="sm" lh={1.3} c="dimmed" style={{ flex: 1 }}>
-              {t("The answer may be incomplete — the run stopped responding.")}
+              {pollFailure
+                ? t(
+                    "The answer may be incomplete — the run stopped responding. Last error: {{reason}}",
+                    { reason: pollFailure },
+                  )
+                : t("The answer may be incomplete — the run stopped responding.")}
             </Text>
             <Button
               size="compact-xs"

@@ -90,6 +90,7 @@ function makeService(opts: {
     pagePermissionRepo as any,
     pageEmbeddingRepo as any,
     embeddingGeneration as any,
+    {} as any, // shareService (no share search here)
   );
 
   // Stub the ranked-ids SQL execution: these tests are about the semantic block,

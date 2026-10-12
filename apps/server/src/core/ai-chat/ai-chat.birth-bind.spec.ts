@@ -17,8 +17,8 @@ import * as metricsRegistry from '../../integrations/metrics/metrics.registry';
  *
  * Drives the real stream() on a bare prototype instance (Object.create) wired
  * with only the collaborators reached before/at the gate, and cuts the turn off
- * right after the gate by making detectPageChange() throw a sentinel. With no
- * runHooks the outer catch just rethrows it.
+ * right after the gate by making detectPageChange() throw a sentinel. The fake
+ * run has no onSettled hook, so the outer catch just rethrows it.
  */
 describe('AiChatService #665 birth page-binding gate (criteria 11 & 12)', () => {
   const SENTINEL = 'STOP_AFTER_BIRTH_BIND';
@@ -75,9 +75,15 @@ describe('AiChatService #665 birth page-binding gate (criteria 11 & 12)', () => 
     res: {
       raw: { write: jest.fn(), writableEnded: false, headersSent: false },
     } as never,
-    signal: new AbortController().signal,
     model: {} as never,
     role: null,
+    // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+    runHooks: {
+      begin: async () => ({
+        runId: 'run-1',
+        signal: new AbortController().signal,
+      }),
+    },
     ...overrides,
   });
 

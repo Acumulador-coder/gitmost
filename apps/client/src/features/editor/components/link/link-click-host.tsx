@@ -7,12 +7,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import {
-  matchPath,
-  Params,
-  useLocation,
-  useNavigate,
-} from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   autoUpdate,
   computePosition,
@@ -43,7 +38,6 @@ import {
 } from "@mantine/core";
 import classes from "./link.module.css";
 import { useTranslation } from "react-i18next";
-import { INTERNAL_LINK_REGEX } from "@/lib/constants";
 import { LinkEditorPanel } from "@/features/editor/components/link/link-editor-panel.tsx";
 import { usePageMetaQuery } from "@/features/page/queries/page-query.ts";
 import { useSharePageQuery } from "@/features/share/queries/share-query.ts";
@@ -60,38 +54,12 @@ import {
   LINK_CLICK_EVENT,
   LinkClickDetail,
 } from "@/features/editor/components/link/link-click-event.ts";
-
-// The host is mounted outside <Routes>, so useParams() is empty here; the
-// route params are matched from the pathname instead.
-const ROUTE_PATTERNS = [
-  "/share/:shareId/p/:pageSlug",
-  "/share/p/:pageSlug",
-  "/s/:spaceSlug/p/:pageSlug",
-];
-
-const parseInternalLink = (
-  href: string,
-  internalAttr?: boolean,
-): { isInternal: boolean; slugId: string | null; label: string } => {
-  if (!href) return { isInternal: !!internalAttr, slugId: null, label: "" };
-
-  const match = INTERNAL_LINK_REGEX.exec(href);
-  if (!match) {
-    if (internalAttr) return { isInternal: true, slugId: null, label: href };
-    return { isInternal: false, slugId: null, label: href };
-  }
-
-  const isExternal = match[2] && match[2] !== window.location.host;
-  const slug = match[5];
-  const slugId = extractPageSlugId(slug);
-  const namePart = slug.split("-").slice(0, -1).join("-");
-
-  return {
-    isInternal: !isExternal,
-    slugId,
-    label: namePart || slug,
-  };
-};
+import {
+  matchLinkRoute,
+  parseInternalLink,
+  resolveLinkHref,
+  sameOriginLinkUrl,
+} from "@/features/editor/components/link/link-href.ts";
 
 type NavigateToLink = (
   href: string,
@@ -307,8 +275,10 @@ function LinkPopover({
     e.preventDefault();
     e.stopPropagation();
 
+    // An internal link is copied as an absolute address only when it really is
+    // on this origin; anything else is copied as written, like an external link.
     const fullUrl = sanitizeUrl(
-      isInternal ? `${window.location.origin}${href}` : href,
+      isInternal ? (sameOriginLinkUrl(href) ?? href) : href,
     );
     void copyToClipboard(fullUrl);
     notifications.show({
@@ -331,13 +301,14 @@ function LinkPopover({
     onClose();
   }, [editor, getLinkPos, onClose]);
 
-  const displayHref = sanitizeUrl(
-    isInternal
-      ? isShareRoute && slugId
-        ? buildSharedPageUrl({ shareId, pageSlugId: slugId, pageTitle })
-        : href
-      : normalizeUrl(href),
-  );
+  const displayHref = resolveLinkHref({
+    href,
+    isInternal,
+    slugId,
+    isShareRoute,
+    shareId,
+    pageTitle,
+  });
 
   const linkTitleInput = (
     <>
@@ -576,13 +547,10 @@ export default function LinkClickHost() {
   const navigate = useNavigate();
   const location = useLocation();
   const isShareRoute = location.pathname.startsWith("/share");
-  const { shareId, pageSlug, spaceSlug } = useMemo((): Params => {
-    for (const pattern of ROUTE_PATTERNS) {
-      const match = matchPath(pattern, location.pathname);
-      if (match) return match.params;
-    }
-    return {};
-  }, [location.pathname]);
+  const { shareId, pageSlug, spaceSlug } = useMemo(
+    () => matchLinkRoute(location.pathname),
+    [location.pathname],
+  );
 
   const [active, setActive] = useState<{
     id: number;

@@ -7,6 +7,7 @@
  *   - a block only git changed       (git != base, live == base) -> take GIT
  *   - a block both sides changed (a real conflict)               -> GIT wins
  *   - inserts/deletes from either side are preserved when unambiguous
+ *   - both sides inserting at the same gap keeps both (live first, then git)
  *
  * Content-agnostic: it works on string keys and returns the merged block order as
  * picks ({ src: 'live'|'target', index }) — the caller (the Yjs applier)
@@ -25,28 +26,19 @@
  * moving the planner there would turn that synchronous merge path async.
  */
 
-import { buildLcsTable } from './lcs';
+import { createDiffBudget, DiffBudget, lcsMatches } from './lcs';
 
-/** Matched index pairs of the longest common subsequence of `a` and `b`. */
-function lcsPairs(a: string[], b: string[]): Array<[number, number]> {
-  const n = a.length;
-  const m = b.length;
-  const dp = buildLcsTable(a, b);
-  const pairs: Array<[number, number]> = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      pairs.push([i, j]);
-      i++;
-      j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      i++;
-    } else {
-      j++;
-    }
-  }
-  return pairs;
+/**
+ * Matched index pairs of the longest common subsequence of `a` and `b`. Every
+ * alignment of one merge spends the same `budget` (see `lcs.ts`); exceeding it
+ * throws `MergeBudgetExceededError` before anything is applied.
+ */
+function lcsPairs(
+  a: string[],
+  b: string[],
+  budget: DiffBudget,
+): Array<[number, number]> {
+  return lcsMatches(a, b, budget);
 }
 
 /** o-index -> matched index in the other side (only for LCS-matched blocks). */
@@ -71,8 +63,8 @@ interface Hunk {
  * Diff `o` against one side as a list of non-overlapping hunks (the base spans
  * the side rewrote/inserted/deleted), derived from their LCS alignment.
  */
-function buildHunks(o: string[], side: string[]): Hunk[] {
-  const pairs = lcsPairs(o, side); // [oIdx, sideIdx] kept (unchanged) blocks
+function buildHunks(o: string[], side: string[], budget: DiffBudget): Hunk[] {
+  const pairs = lcsPairs(o, side, budget); // [oIdx, sideIdx] kept (unchanged) blocks
   const hunks: Hunk[] = [];
   let prevO = -1;
   let prevS = -1;
@@ -93,22 +85,34 @@ function buildHunks(o: string[], side: string[]): Hunk[] {
 }
 
 /**
- * Do two hunks (one per side) touch the same base region? Pure inserts only
- * collide when nested strictly inside the other hunk's base span (or, for two
- * inserts, at the same gap); changes sitting at a shared boundary do not.
+ * Do two hunks (one per side) touch the same base region? A pure insert only
+ * collides when nested strictly inside the other hunk's base span; two pure
+ * inserts never collide (at the same gap both are kept, GL-1), and changes
+ * sitting at a shared boundary do not either.
  */
 function hunksOverlap(a: Hunk, b: Hunk): boolean {
   const aIns = a.oStart === a.oEnd;
   const bIns = b.oStart === b.oEnd;
-  if (aIns && bIns) return a.oStart === b.oStart;
+  if (aIns && bIns) return false;
   if (aIns) return b.oStart < a.oStart && a.oStart < b.oEnd;
   if (bIns) return a.oStart < b.oStart && b.oStart < a.oEnd;
   return Math.max(a.oStart, b.oStart) < Math.min(a.oEnd, b.oEnd);
 }
 
+/**
+ * For a git block that took the place of ONE unchanged base block: that base
+ * block and its live twin (same projection as the base). The applier may then
+ * update the live block in place instead of deleting and re-inserting it.
+ */
+export interface Replaces {
+  base: number;
+  live: number;
+}
+
 interface LocalPick {
   src: 'live' | 'target';
   local: number;
+  replaces?: Replaces;
 }
 
 /**
@@ -123,7 +127,8 @@ function tryMergeRegion(
   o: string[],
   a: string[],
   b: string[],
-  isIgnorable?: (key: string) => boolean,
+  isIgnorable: ((key: string) => boolean) | undefined,
+  budget: DiffBudget,
 ): LocalPick[] | null {
   // Agreement short-circuit (review #11). When live (a) and target (b) are
   // identical, both sides converged on the SAME result — diff3 "agreement", NOT
@@ -135,12 +140,12 @@ function tryMergeRegion(
     return a.map((_v, i) => ({ src: 'live', local: i }) as LocalPick);
   }
 
-  const bHunks = buildHunks(o, b);
+  const bHunks = buildHunks(o, b, budget);
   // A live hunk that only INSERTS ignorable blocks (empty paragraphs, which a
   // base parsed from markdown never has between blocks) is not a human edit. When it
   // collides with a git hunk, drop it, so git's change lands without a false
   // same-block conflict; a non-colliding one is kept as usual.
-  const aHunks = buildHunks(o, a).filter(
+  const aHunks = buildHunks(o, a, budget).filter(
     (ah) =>
       !(
         isIgnorable &&
@@ -159,7 +164,7 @@ function tryMergeRegion(
   }
 
   // Disjoint: live index of each base block that BOTH sides kept (stable).
-  const aKept = matchMap(lcsPairs(o, a)); // base index -> live index
+  const aKept = matchMap(lcsPairs(o, a, budget)); // base index -> live index
 
   const out: LocalPick[] = [];
   let pa = 0;
@@ -184,6 +189,14 @@ function tryMergeRegion(
     // pure-insert (oEnd === oi) is emitted before the side that consumes base oi.
     const aHere = ah !== null && ah.oStart === oi;
     const bHere = bh !== null && bh.oStart === oi;
+    if (aHere && bHere && ah!.oEnd === oi && bh!.oEnd === oi) {
+      // GL-1: both sides inserted at the same gap. Keep both — a block both
+      // inserted once, every other live block before the git blocks around it.
+      out.push(...unionInserts(ah!, a, bh!, b, budget));
+      pa++;
+      pb++;
+      continue;
+    }
     let useA: boolean;
     if (aHere && bHere) {
       useA = ah!.oEnd === oi; // insert side first; otherwise either order is fine
@@ -191,11 +204,57 @@ function tryMergeRegion(
       useA = aHere;
     }
     const h = (useA ? ah : bh) as Hunk;
-    const src: 'live' | 'target' = useA ? 'live' : 'target';
-    for (const idx of h.content) out.push({ src, local: idx });
+    if (useA) {
+      for (const idx of h.content) out.push({ src: 'live', local: idx });
+      pa++;
+    } else {
+      // A git block standing where ONE base block stood (the k-th of the
+      // hunk's span) replaces that block's unchanged live twin.
+      h.content.forEach((idx, k) => {
+        const base = h.oStart + k;
+        out.push(
+          base < h.oEnd
+            ? {
+                src: 'target',
+                local: idx,
+                replaces: { base, live: aKept.get(base) as number },
+              }
+            : { src: 'target', local: idx },
+        );
+      });
+      pb++;
+    }
     oi = h.oEnd;
-    if (useA) pa++;
-    else pb++;
+  }
+  return out;
+}
+
+/**
+ * The union of two pure inserts at the same gap: blocks both sides inserted
+ * (their LCS) appear once, from live; between them, live's own blocks come
+ * before git's.
+ */
+function unionInserts(
+  ah: Hunk,
+  a: string[],
+  bh: Hunk,
+  b: string[],
+  budget: DiffBudget,
+): LocalPick[] {
+  const out: LocalPick[] = [];
+  const aKeys = ah.content.map((i) => a[i]);
+  const bKeys = bh.content.map((j) => b[j]);
+  let i = 0;
+  let j = 0;
+  const common = lcsPairs(aKeys, bKeys, budget);
+  for (const [x, y] of [...common, [aKeys.length, bKeys.length]]) {
+    while (i < x) out.push({ src: 'live', local: ah.content[i++] });
+    while (j < y) out.push({ src: 'target', local: bh.content[j++] });
+    if (x < aKeys.length) {
+      out.push({ src: 'live', local: ah.content[x] });
+      i++;
+      j++;
+    }
   }
   return out;
 }
@@ -203,6 +262,8 @@ function tryMergeRegion(
 export interface Pick {
   src: 'live' | 'target';
   index: number;
+  /** Set on a git block that replaces one unchanged base block (see `Replaces`). */
+  replaces?: Replaces;
 }
 
 /**
@@ -219,34 +280,31 @@ export interface Diff3Result {
 }
 
 /**
- * Three-way merge of base `o`, live `a`, target `b` (arrays of block keys).
- * Returns the merged block order as picks from live/target. Thin wrapper over
- * `diff3PlanWithConflicts` (kept for the existing pure-array callers/tests).
- */
-export function diff3Plan(o: string[], a: string[], b: string[]): Pick[] {
-  return diff3PlanWithConflicts(o, a, b).picks;
-}
-
-/**
- * Like `diff3Plan` but also reports the SAME-BLOCK conflict count (see
- * `Diff3Result`). A region where both the human and git rewrote the same base
- * block cannot be merged automatically; the rule is deterministic — GIT WINS the
- * whole region — but the human's version of those blocks is then absent from the
- * picks, so we count it so the caller can make the loss observable/recoverable
- * rather than silent (the documented conflict contract).
+ * Three-way merge of base `o`, live `a`, target `b` (arrays of block keys):
+ * the merged block order as picks from live/target, plus the SAME-BLOCK
+ * conflict count (see `Diff3Result`). A region where both the human and git
+ * rewrote the same base block cannot be merged automatically; the rule is
+ * deterministic — GIT WINS the whole region — but the human's version of those
+ * blocks is then absent from the picks, so we count it so the caller can make
+ * the loss observable/recoverable rather than silent (the documented conflict
+ * contract).
  *
  * `isIgnorable` marks block keys that are not content (the caller passes the
- * empty-paragraph key): a live-only insert made solely of such blocks never
+ * empty-projection test): a live-only insert made solely of such blocks never
  * counts as a conflict with git.
+ *
+ * `budget` bounds the total alignment work of this plan; when it runs out the
+ * planner throws `MergeBudgetExceededError` (nothing has been applied yet).
  */
 export function diff3PlanWithConflicts(
   o: string[],
   a: string[],
   b: string[],
   isIgnorable?: (key: string) => boolean,
+  budget: DiffBudget = createDiffBudget(),
 ): Diff3Result {
-  const oToA = matchMap(lcsPairs(o, a));
-  const oToB = matchMap(lcsPairs(o, b));
+  const oToA = matchMap(lcsPairs(o, a, budget));
+  const oToB = matchMap(lcsPairs(o, b, budget));
 
   const res: Pick[] = [];
   let conflicts = 0;
@@ -272,14 +330,24 @@ export function diff3PlanWithConflicts(
       a.slice(ai, aEnd),
       b.slice(bi, bEnd),
       isIgnorable,
+      budget,
     );
     if (merged) {
       for (const p of merged) {
-        res.push(
-          p.src === 'live'
-            ? { src: 'live', index: ai + p.local }
-            : { src: 'target', index: bi + p.local },
-        );
+        if (p.src === 'live') {
+          res.push({ src: 'live', index: ai + p.local });
+        } else if (p.replaces) {
+          res.push({
+            src: 'target',
+            index: bi + p.local,
+            replaces: {
+              base: oi + p.replaces.base,
+              live: ai + p.replaces.live,
+            },
+          });
+        } else {
+          res.push({ src: 'target', index: bi + p.local });
+        }
       }
     } else {
       // SAME-BLOCK CONFLICT: count it ONLY when the human side actually had

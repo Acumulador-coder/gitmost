@@ -23,9 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Git sync merges block by block.** In a block both sides changed, git wins and the wiki's text
   stays in page history. A push based on an older `main` is refused as non-fast-forward. Changes
   from git carry a "Git sync" badge in page history.
-- **Git sync status for operators:** `GET /api/git-sync/status` (per-space health),
+- **Git sync status for operators:** `POST /api/git-sync/status` (per-space health),
   `POST /api/git-sync/trigger` (admins; runs one cycle) and the metrics `git_sync_cycles_total{result}`,
   `git_sync_failing_spaces` and `git_sync_push_failing_spaces`.
+- **Git sync limits.** A space with page-level restrictions cannot enable sync and is not served
+  over `/git` (git cannot enforce them). A push is refused past its size and file-count budget
+  (`.md` files are capped), `/git` answers 413 to an oversized request and 503 when too many git
+  processes run; a cycle is stopped after 30 minutes, Markdown conversion runs in worker threads,
+  and pages that fail to export are counted in the space status instead of only logged.
+- **A stalled or disconnected `git` client cannot hold the space lock**: the `git http-backend`
+  process and its children are killed as a group. A server error on `/git` answers 500 instead of
+  401, so git does not drop the saved password.
 - **Recently opened pages stay warm.** Up to five pages left in the last five minutes keep their
   collaboration session, so going back shows an editable body at once. The collab server re-checks
   page access whenever a connected client re-sends its token and closes the page if it was revoked.
@@ -34,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **"Source code" link in the user menu** (AGPL-3.0 §13).
 - `CONTRIBUTING.md`, and `packages/mcp/LICENSE` with the MIT licence of the upstream MCP server it
   was forked from.
+- **"Similar pages" on public share search**, and semantic neighbours in the share assistant's search
+  tool, as in the main search.
 
 ### Changed
 
@@ -45,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin toggle and `AI_CHAT_RESUMABLE_STREAM` are removed.
 - **A dropped AI-chat connection follows the run through the delta poll** instead of re-attaching
   on a 1–16 s backoff ladder. A reloaded tab still live-follows the run; the banner reads
-  "Connection lost — reconnecting…" with no counter or Retry.
+  "Connection lost — following the answer…" with no counter or Retry.
 - **Search says "not found".** `total`, `items` and paging count lexical matches only (semantic
   search still re-ranks them), so a query matching nothing returns `total: 0` instead of 50
   arbitrary pages. Up to five semantic neighbours come back separately as `related` — "Similar pages"
@@ -67,6 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bare repository, the `docmost` branch and `refs/docmost/{pulling,recording,last-pushed}` are
   deleted and `refs/docmost/last-export` is added. The old working-tree files stay on disk and can
   be deleted by hand.
+- **The Docker image runs `tini` as PID 1**, so orphaned child processes such as `git` are reaped
+  instead of piling up as zombies.
 
 ### Removed
 
@@ -101,6 +113,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Closed editors are no longer kept in memory** by their Y.Doc (yjs 13.6.33).
 - **A page without local persistence switches from the read-only copy to the live editor**; it used
   to stay read-only.
+- **Links on public share pages use the share-relative address again**, and a link's stored `class`,
+  `rel`, `target` and `title` no longer reach the DOM; "Copy link" cannot turn into another host.
+- **The public-share token budget counts every completed step**, so a turn the visitor left is still
+  charged for the steps the provider already billed.
+- **A Stop after the first AI-chat step ends the turn once, as aborted**, not also as completed; the
+  turn-end writes finish before the run is settled and the MCP leases are released.
+- **A run-stream reader that stops reading no longer pins server memory**: the attach replay is torn
+  down after 30 s and the client falls back to the delta poll.
+- **Pages of more than ~5,400 chunks are indexed for semantic search**; the embedding write no
+  longer fails on Postgres's parameter limit after all the work was done.
+- **A stale tab can no longer open collaboration sessions with the previous user's token** after a
+  user switch in another tab, and a warm page stays read-only until its edit rights are confirmed.
+- **A failing AI-chat delta poll is shown**: when the poll that follows a dropped run keeps failing,
+  the chat says it cannot reach the server, with the reason, instead of waiting silently.
+
+### Security
+
+- **Public share search no longer returns drafts**: a share that publishes only saved versions
+  answers search with an empty result and a `disabledReason`; search is refused when sharing is off.
+- **Share search result paths stop at the share root**, so no title above the share reaches an
+  anonymous reader.
+- **Collaboration access re-checks are rate-limited per connection and fail closed** on an
+  infrastructure error; a re-sent token of a different user is rejected.
+- **Losing access through a group, space or workspace change closes the pages the user has open**
+  in the editor (in every collaboration process), instead of leaving them editable until reconnect.
+- **Imported Markdown can no longer stall the server**: regular expressions that backtracked
+  quadratically on long whitespace runs were replaced with linear scans.
 
 ## [0.96.0] - 2026-09-21
 

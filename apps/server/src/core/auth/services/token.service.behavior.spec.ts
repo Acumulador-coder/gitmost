@@ -269,6 +269,7 @@ describe('TokenService.generateApiToken (no exp claim ever)', () => {
   function makeRealSignerService() {
     // Give the SHARED jwtService a global expiresIn so a regression (minting
     // through it) would show up as an exp claim.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { JwtService } = require('@nestjs/jwt');
     const sharedJwt = new JwtService({
       secret: APP_SECRET_LOCAL,
@@ -342,6 +343,7 @@ describe('TokenService.generateApiToken (no exp claim ever)', () => {
   });
 
   it('demonstrates the live bug it guards: the SHARED signer WOULD add exp', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { JwtService } = require('@nestjs/jwt');
     const sharedJwt = new JwtService({
       secret: APP_SECRET_LOCAL,

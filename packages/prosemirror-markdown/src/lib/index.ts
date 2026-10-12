@@ -64,6 +64,9 @@ export type { AttachedComment } from "./attached-comment.js";
 export {
   canonicalizeContent,
   docsCanonicallyEqual,
+  markdownBlockKey,
+  isIgnorableBlockKey,
+  docsEqualUpToMarkdown,
 } from "./canonicalize.js";
 export { parsePageFile, serializePageFile } from "./page-file.js";
 

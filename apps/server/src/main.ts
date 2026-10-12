@@ -243,8 +243,9 @@ async function bootstrap() {
   // Nest container so all auth/authz/gating still runs. NOTE: Nest middleware
   // (DomainMiddleware) does NOT run for this raw root route — it is bound to the
   // Nest router under the global '/api' prefix — so request.raw.workspaceId is
-  // NOT populated here; GitHttpService resolves the workspace itself (mirroring
-  // DomainMiddleware). The Fastify wildcard '/git/*' captures the multi-segment
+  // NOT populated here; GitHttpService resolves the workspace itself, through
+  // the same resolveRequestWorkspace helper and cached loader DomainMiddleware
+  // uses. The Fastify wildcard '/git/*' captures the multi-segment
   // subpath; the handler re-parses req.url itself.
   if (gitHttpEnabled) {
     const gitHttpService = app.get(GitHttpService);

@@ -19,7 +19,7 @@ import { AiChatService } from './ai-chat.service';
  *   (a) unwedge the turn (stream() rejects instead of hanging at step 0), and
  *   (b) finalize the run as 'aborted' via the outer catch's onSettled, never
  *       leaving the run row 'running' (which would 409 every later turn).
- * `raceAgainstAbortAndTimeout(toolsFor, effectiveSignal, ...)` rejects the moment
+ * `raceAgainstAbortAndTimeout(toolsFor, runSignal, ...)` rejects the moment
  * the run's signal aborts; the catch re-throws and the outer catch settles the
  * run 'aborted'.
  */
@@ -62,7 +62,7 @@ describe('AiChatService.stream — abort during external-MCP setup finalizes the
   };
 
   // A minimal raw ServerResponse stand-in for the turns that PROCEED past setup
-  // and reach streamText (the deadline + legacy paths). The setup-only abort test
+  // and reach streamText (the deadline path). The setup-only abort test
   // never wires the stream, so it keeps using `{ raw: {} }`.
   function makeRawRes() {
     return {
@@ -121,7 +121,6 @@ describe('AiChatService.stream — abort during external-MCP setup finalizes the
       sessionId: 'sess-1',
       body: body as never,
       res: { raw: {} } as never,
-      signal: new AbortController().signal, // socket signal (distinct from the run)
       model: {} as never,
       role: null,
       runHooks: {
@@ -175,7 +174,6 @@ describe('AiChatService.stream — abort during external-MCP setup finalizes the
       sessionId: 'sess-1',
       body: body as never,
       res: { raw: {} } as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       runHooks: {
@@ -206,7 +204,7 @@ describe('AiChatService.stream — abort during external-MCP setup finalizes the
 
   // Item 2 — the PURE DEADLINE branch (MCP_TOOLSET_BUILD_DEADLINE_MS). `toolsFor`
   // never settles and the run's signal is NOT aborted: the race rejects with a
-  // "setup timed out" error, the catch does NOT re-throw (runId set but signal not
+  // "setup timed out" error, the catch does NOT re-throw (the run signal is not
   // aborted), and the turn PROCEEDS Docmost-only. It must reach streamText (the turn
   // continues, not wedged) and must NOT be finalized 'aborted'.
   it('proceeds Docmost-only (reaches streamText) when the build hits the deadline without an abort', async () => {
@@ -228,7 +226,6 @@ describe('AiChatService.stream — abort during external-MCP setup finalizes the
       sessionId: 'sess-1',
       body: body as never,
       res: makeRawRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       runHooks: {
@@ -251,42 +248,5 @@ describe('AiChatService.stream — abort during external-MCP setup finalizes the
     // The run was NOT finalized as aborted (the deadline is not a Stop) — the setup
     // catch settle path never ran, so onSettled is left to streamText's callbacks.
     expect(onSettled).not.toHaveBeenCalled();
-  });
-
-  // Item 3 — the LEGACY no-runId path. The catch's re-throw is gated on
-  // `runId && effectiveSignal.aborted`. With NO runId (no runHooks) an abort during
-  // setup must NOT re-throw (runId falsy) — the turn warns + proceeds Docmost-only
-  // and streams, and is never finalized 'aborted' via the re-throw. Locks the
-  // `runId &&` half of the guard.
-  it('does NOT re-throw on a setup abort when there is no runId (legacy path proceeds Docmost-only)', async () => {
-    const socketController = new AbortController();
-    // The build hangs; the SOCKET signal (legacy effectiveSignal) aborts mid-build.
-    const toolsFor = jest.fn(() => {
-      setTimeout(() => socketController.abort(new Error('socket closed')), 0);
-      return new Promise(() => {});
-    });
-    const { svc } = makeService({ toolsFor });
-
-    streamTextMock.mockReturnValue(makeStreamResult() as never);
-
-    // No runHooks => runId undefined, effectiveSignal === the socket signal.
-    const promise = svc.stream({
-      user: { id: 'user-1' } as never,
-      workspace: { id: 'ws-1' } as never,
-      sessionId: 'sess-1',
-      body: body as never,
-      res: makeRawRes() as never,
-      signal: socketController.signal,
-      model: {} as never,
-      role: null,
-    });
-
-    // The turn does NOT reject out of setup (no re-throw on the legacy path).
-    await expect(promise).resolves.toBeUndefined();
-
-    // It proceeded Docmost-only and reached streamText — streamText then observes
-    // the already-aborted socket signal via its own abortSignal.
-    expect(toolsFor).toHaveBeenCalledTimes(1);
-    expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
 });

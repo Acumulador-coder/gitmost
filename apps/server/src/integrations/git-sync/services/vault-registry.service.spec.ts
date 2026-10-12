@@ -34,6 +34,8 @@ const mockVaultGit = jest
   .mockImplementation((path: string) => ({
     path,
     ensureRepo: jest.fn().mockResolvedValue(undefined),
+    // A bare vault: its git directory is the vault itself.
+    gitDir: jest.fn().mockResolvedValue(path),
     installPushGuard: jest.fn().mockResolvedValue(undefined),
   }));
 
@@ -67,6 +69,7 @@ const SERVABLE_CONFIG: Record<string, string> = {
   'http.receivepack': 'true',
   'http.uploadpack': 'true',
   'core.symlinks': 'false',
+  'core.hooksPath': '/vaults/space-1/hooks',
 };
 
 function build(dataDir: string): { service: VaultRegistryService } {
@@ -138,6 +141,9 @@ describe('VaultRegistryService', () => {
         // Security-critical: a checkout of the vault never
         // materializes a pushed symlink as a real link.
         ['core.symlinks', 'false'],
+        // Security-critical: a host-wide core.hooksPath cannot switch the
+        // vault's pre-receive guard off.
+        ['core.hooksPath', '/vaults/space-1/hooks'],
       ]);
 
       // Every config write targets THIS vault's cwd and is time-bounded so a

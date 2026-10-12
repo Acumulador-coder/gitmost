@@ -313,7 +313,7 @@ describe("ChatThread — send now", () => {
       });
       await Promise.resolve();
     });
-    expect(screen.queryByText(/reconnecting/i)).toBeNull();
+    expect(screen.queryByText(/following the answer/i)).toBeNull();
     // ...and B was still sent.
     expect(h.state.sendMessage).toHaveBeenCalledWith({ text: "queued text" });
   });
@@ -401,7 +401,7 @@ describe("ChatThread — send now", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(screen.queryByText(/reconnecting/i)).toBeNull();
+    expect(screen.queryByText(/following the answer/i)).toBeNull();
   });
 
   it("#488 review-2: an observer turn's clean finish re-exposes 'Send now' (ownership reset to local)", () => {
@@ -1148,7 +1148,7 @@ describe("ChatThread — live disconnect + stalled", () => {
     // it ("Lost connection to the server"). The FSM phase-gate must let the
     // polling(disconnect) banner WIN over that residual error. MUTATION-VERIFY: revert
     // the errorView phase-gate (show errorView whenever error is set) and the terminal
-    // banner masks "reconnecting…" -> red.
+    // banner masks "following the answer…" -> red.
     const { onResumeFallback, invalidateSpy } = renderLive();
     await disconnect();
     expect(h.state.error).not.toBeNull(); // the SDK error IS set during recovery
@@ -1157,7 +1157,7 @@ describe("ChatThread — live disconnect + stalled", () => {
       queryKey: ["ai-chat-messages", "c1"],
     });
     // Exact text: no attempt counter, no Retry.
-    expect(screen.getByText("Connection lost — reconnecting…")).toBeTruthy();
+    expect(screen.getByText("Connection lost — following the answer…")).toBeTruthy();
     expect(screen.queryByText("Retry")).toBeNull();
     // The terminal "Lost connection… reload" banner must NOT be showing.
     expect(screen.queryByText(/reload and try again/i)).toBeNull();
@@ -1172,7 +1172,7 @@ describe("ChatThread — live disconnect + stalled", () => {
     const { onResumeFallback } = renderLive();
     await disconnect(null); // no assistant message yet (pre-first-frame break)
     expect(onResumeFallback).toHaveBeenCalledWith(true); // armPoll
-    expect(screen.getByText("Connection lost — reconnecting…")).toBeTruthy();
+    expect(screen.getByText("Connection lost — following the answer…")).toBeTruthy();
     expect(
       screen.queryByText("Connection lost — the answer was interrupted."),
     ).toBeNull();
@@ -1219,12 +1219,12 @@ describe("ChatThread — live disconnect + stalled", () => {
     // effect and the banner never clears here -> red.
     const view = renderLive();
     await disconnect();
-    expect(screen.getByText(/reconnecting/i)).toBeTruthy(); // precondition
+    expect(screen.getByText(/following the answer/i)).toBeTruthy(); // precondition
     await act(async () => {
       view.setPolledRunFact(null); // the poll: no active run
       await flushMicrotasks();
     });
-    expect(screen.queryByText(/reconnecting/i)).toBeNull(); // quenched -> idle
+    expect(screen.queryByText(/following the answer/i)).toBeNull(); // quenched -> idle
   });
 
   it("#555 S3: a delta poll's POSITIVE active fact does NOT quench recovery (no over-quench)", async () => {
@@ -1233,11 +1233,11 @@ describe("ChatThread — live disconnect + stalled", () => {
     // against a consume effect that quenches on ANY poll result.
     const view = renderLive();
     await disconnect();
-    expect(screen.getByText(/reconnecting/i)).toBeTruthy();
+    expect(screen.getByText(/following the answer/i)).toBeTruthy();
     act(() => {
       view.setPolledRunFact({ id: "run-1", status: "running" });
     });
-    expect(screen.getByText(/reconnecting/i)).toBeTruthy(); // still recovering
+    expect(screen.getByText(/following the answer/i)).toBeTruthy(); // still recovering
   });
 
   it("#555 S3/F3: the dedupe ref RESETS on poll disarm so a SECOND recovery's negative fact re-quenches", async () => {
@@ -1251,12 +1251,12 @@ describe("ChatThread — live disconnect + stalled", () => {
     const view = renderLive();
     // First recovery: polling, a NEGATIVE poll fact quenches to idle (ref=null).
     await disconnect();
-    expect(screen.getByText(/reconnecting/i)).toBeTruthy();
+    expect(screen.getByText(/following the answer/i)).toBeTruthy();
     await act(async () => {
       view.setPolledRunFact(null);
       await flushMicrotasks();
     });
-    expect(screen.queryByText(/reconnecting/i)).toBeNull();
+    expect(screen.queryByText(/following the answer/i)).toBeNull();
     // The poll DISARMS (no result) -> the dedupe ref must reset to `undefined`.
     act(() => {
       view.setPolledRunFact(undefined);
@@ -1267,14 +1267,14 @@ describe("ChatThread — live disconnect + stalled", () => {
       fireEvent.click(screen.getByTestId("send-btn")); // SEND_LOCAL -> sending
     });
     await disconnect();
-    expect(screen.getByText(/reconnecting/i)).toBeTruthy();
+    expect(screen.getByText(/following the answer/i)).toBeTruthy();
     // The SAME negative fact (null) must re-quench — it would be deduped (null === the
     // stale null from the first recovery) if the ref had NOT reset on disarm.
     await act(async () => {
       view.setPolledRunFact(null);
       await flushMicrotasks();
     });
-    expect(screen.queryByText(/reconnecting/i)).toBeNull();
+    expect(screen.queryByText(/following the answer/i)).toBeNull();
   });
 
   it("a drop on the SECOND turn of a chat stays in polling(disconnect): the stale settled tail in initialRows does NOT settle it", async () => {
@@ -1287,7 +1287,7 @@ describe("ChatThread — live disconnect + stalled", () => {
     fireEvent.click(screen.getByTestId("send-btn")); // the second turn (SEND_LOCAL)
     onResumeFallback.mockClear();
     await disconnect();
-    expect(screen.getByText("Connection lost — reconnecting…")).toBeTruthy();
+    expect(screen.getByText("Connection lost — following the answer…")).toBeTruthy();
     expect(onResumeFallback).toHaveBeenCalledWith(true); // poll armed
     expect(onResumeFallback).not.toHaveBeenCalledWith(false); // ...and not disarmed
   });
@@ -1338,7 +1338,7 @@ describe("ChatThread — live disconnect + stalled", () => {
     expect(setMessagesMock.mock.invocationCallOrder[mergeIdx]).toBeLessThan(
       fallbackMock.mock.invocationCallOrder[disarmIdx],
     );
-    expect(screen.queryByText(/reconnecting/i)).toBeNull();
+    expect(screen.queryByText(/following the answer/i)).toBeNull();
   });
 
   it("during polling(disconnect) the composer stays in streaming mode, and Stop requests the server stop", async () => {
@@ -1369,7 +1369,7 @@ describe("ChatThread — live disconnect + stalled", () => {
     expect(
       screen.getByText("Connection lost — the answer was interrupted."),
     ).toBeTruthy();
-    expect(screen.queryByText(/reconnecting/i)).toBeNull();
+    expect(screen.queryByText(/following the answer/i)).toBeNull();
     expect(onResumeFallback).not.toHaveBeenCalledWith(true);
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
@@ -1387,7 +1387,7 @@ describe("ChatThread — live disconnect + stalled", () => {
       await flushMicrotasks();
     });
     expect(view.onResumeFallback).toHaveBeenCalledWith(false); // idle -> disarmed
-    expect(screen.queryByText(/reconnecting/i)).toBeNull();
+    expect(screen.queryByText(/following the answer/i)).toBeNull();
     expect(
       screen.getByText("Connection lost — the answer was interrupted."),
     ).toBeTruthy();

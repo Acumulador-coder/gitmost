@@ -1,4 +1,4 @@
-import { diff3Plan, type Pick } from './three-way-merge';
+import { diff3PlanWithConflicts, type Pick } from './three-way-merge';
 
 // Materialize a plan into the merged key sequence for assertion.
 function apply(plan: Pick[], live: string[], target: string[]): string[] {
@@ -6,9 +6,9 @@ function apply(plan: Pick[], live: string[], target: string[]): string[] {
 }
 
 const merge = (o: string[], a: string[], b: string[]): string[] =>
-  apply(diff3Plan(o, a, b), a, b);
+  apply(diff3PlanWithConflicts(o, a, b).picks, a, b);
 
-describe('diff3Plan red-team #9 (human edit + adjacent git insert)', () => {
+describe('diff3PlanWithConflicts red-team #9 (human edit + adjacent git insert)', () => {
   it('keeps human block-2 edit AND applies git insert of 2.5', () => {
     // base:   1 2 3
     // live:   1 H 3   (human rewrote block 2)

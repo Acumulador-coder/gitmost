@@ -10,7 +10,4 @@
 export type Settings = {
   docmostSpaceId: string;
   vaultPath: string;
-  pollIntervalMs: number;
-  debounceMs: number;
-  logLevel: 'debug' | 'info' | 'warn' | 'error';
 };

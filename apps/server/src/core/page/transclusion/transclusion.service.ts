@@ -711,12 +711,10 @@ export class TransclusionService {
       throw new NotFoundException('Sync block not found');
     }
 
-    let content: unknown;
-    let copies: ReturnType<typeof rewriteAttachmentsForUnsync>['copies'];
-    ({ content, copies } = rewriteAttachmentsForUnsync(
+    const { content, copies } = rewriteAttachmentsForUnsync(
       transclusion.content,
       () => uuid7(),
-    ));
+    );
 
     if (copies.length > 0) {
       const oldIds = copies.map((c) => c.oldAttachmentId);

@@ -1,4 +1,8 @@
-import { PageEmbeddingRepo } from './page-embedding.repo';
+import {
+  PAGE_EMBEDDING_INSERT_BATCH_ROWS,
+  PageEmbeddingRepo,
+  PageEmbeddingChunkRow,
+} from './page-embedding.repo';
 import type { KyselyDB } from '../../types/kysely.types';
 import {
   DummyDriver,
@@ -7,35 +11,6 @@ import {
   PostgresIntrospector,
   PostgresQueryCompiler,
 } from 'kysely';
-
-/**
- * Unit test for the pure access-scoping branch of searchByEmbedding: when the
- * caller has NO accessible spaces (`spaceIds` empty), the method must early-
- * return [] WITHOUT touching the database. We inject a db whose query builder
- * throws if invoked, so any DB access fails the test.
- *
- * NOTE: the dimension-mixing case (filter by model_dimensions) needs a live
- * pgvector-enabled Postgres and is intentionally NOT covered here — it requires
- * a real DB and is out of scope for this pure unit test.
- */
-describe('PageEmbeddingRepo.searchByEmbedding', () => {
-  it('early-returns [] for empty spaceIds without any DB call', async () => {
-    const throwingDb = {
-      selectFrom: () => {
-        throw new Error('DB should not be queried for empty spaceIds');
-      },
-    } as unknown as KyselyDB;
-
-    const repo = new PageEmbeddingRepo(throwingDb);
-    const result = await repo.searchByEmbedding(
-      'ws-1',
-      [0.1, 0.2, 0.3],
-      [],
-      10,
-    );
-    expect(result).toEqual([]);
-  });
-});
 
 /**
  * Recording Kysely (DummyDriver wired to the Postgres query compiler): compiles
@@ -159,5 +134,72 @@ describe('PageEmbeddingRepo.deleteOtherGenerations (#599)', () => {
     ).resolves.toBe(0);
 
     expect(compiled).toHaveLength(0);
+  });
+});
+
+/**
+ * AI-6 — every row binds 12 parameters and Postgres rejects a statement with more
+ * than 65,535, so one multi-row INSERT failed for a page of 5,462+ chunks (after
+ * every provider call was paid for). insertChunks must split the rows into
+ * batches that each stay under the limit, keep their order, and stay atomic.
+ */
+describe('PageEmbeddingRepo.insertChunks batching (AI-6)', () => {
+  const PG_MAX_PARAMS = 65_535;
+
+  function rows(n: number): PageEmbeddingChunkRow[] {
+    return Array.from({ length: n }, (_, i) => ({
+      pageId: 'page-1',
+      workspaceId: 'ws-1',
+      spaceId: 'space-1',
+      attachmentId: null,
+      chunkIndex: i,
+      chunkStart: i * 10,
+      chunkLength: 10,
+      content: `chunk ${i}`,
+      modelName: 'm',
+      modelDimensions: 2,
+      fingerprint: 'fp',
+      embedding: [0.1, 0.2],
+    }));
+  }
+
+  it('splits a 6,000-chunk page into INSERTs that each bind fewer than 65,535 parameters, in order', async () => {
+    const { db, compiled } = makeRecordingDb();
+    const repo = new PageEmbeddingRepo(db as unknown as KyselyDB);
+
+    await repo.insertChunks(rows(6000));
+
+    const inserts = compiled.filter((q) => /^insert into/i.test(q.sql));
+    expect(inserts).toHaveLength(Math.ceil(6000 / PAGE_EMBEDDING_INSERT_BATCH_ROWS));
+    for (const q of inserts) {
+      expect(q.parameters.length).toBeLessThan(PG_MAX_PARAMS);
+    }
+    // Every row is inserted exactly once, in the caller's order: the chunkIndex
+    // values bound across all batches are 0..5999.
+    const perRow = inserts[0].parameters.length / PAGE_EMBEDDING_INSERT_BATCH_ROWS;
+    const chunkIndexes = inserts.flatMap((q) =>
+      q.parameters.filter((_, i) => i % perRow === 4),
+    );
+    expect(chunkIndexes).toEqual(Array.from({ length: 6000 }, (_, i) => i));
+  });
+
+  it('wraps the batches in a transaction of its own when the caller passes none', async () => {
+    const { db } = makeRecordingDb();
+    const transaction = jest.spyOn(db, 'transaction');
+    const repo = new PageEmbeddingRepo(db as unknown as KyselyDB);
+
+    await repo.insertChunks(rows(PAGE_EMBEDDING_INSERT_BATCH_ROWS + 1));
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a page that fits in one batch to a single INSERT', async () => {
+    const { db, compiled } = makeRecordingDb();
+    const repo = new PageEmbeddingRepo(db as unknown as KyselyDB);
+
+    await repo.insertChunks(rows(3));
+
+    expect(compiled).toHaveLength(1);
+    expect(compiled[0].sql).toMatch(/^insert into "pageEmbeddings"/i);
   });
 });

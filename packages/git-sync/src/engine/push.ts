@@ -28,12 +28,13 @@
  */
 import {
   type DocmostMdMeta,
-  markdownToProseMirror,
   parsePageFile,
 } from "@docmost/prosemirror-markdown";
 import type { GitSyncClient } from "./client.types.js";
 import type { DiffEntry } from "./git.js";
-import { VaultGit, DEFAULT_BRANCH } from "./git.js";
+import { VaultGit, DEFAULT_BRANCH, GitStoppedError } from "./git.js";
+import { CycleAbortedError, throwIfAborted } from "./abort.js";
+import { markdownToProseMirror } from "./convert-pool.js";
 import { stabilizePageBody } from "./stabilize.js";
 import { type Settings } from "./settings.js";
 
@@ -552,6 +553,12 @@ export interface ApplyPushDeps {
   baseRef: string;
   /** Warning channel (a create that could not be compared for adoption). */
   warn?: (line: string) => void;
+  /**
+   * The cycle's AbortSignal (lost lock, deadline). Checked before every page
+   * operation and handed to every conversion: aborted, the apply stops with a
+   * `CycleAbortedError`.
+   */
+  signal?: AbortSignal;
 }
 
 /** A file a create gave a page (a fresh page or an adopted one). */
@@ -633,6 +640,10 @@ export interface ApplyPushResult {
  * FAIL-SAFE / per-page isolation (SPEC §12 resumability). Each page's operation
  * is wrapped in its own try/catch: a single failing page is recorded in
  * `failures[]` (with its kind + pageId/path(s) + error) and the batch CONTINUES.
+ *
+ * CANCELLATION. `deps.signal` is checked before every page operation; an abort
+ * throws a `CycleAbortedError` out of the batch (it is not a per-page failure).
+ * No ref has moved yet, so the next cycle applies the same changes again.
  */
 export async function applyPushActions(
   deps: ApplyPushDeps,
@@ -652,6 +663,7 @@ export async function applyPushActions(
   // 1. UPDATES — collab/Yjs write path (SPEC §2/§15.6), never a raw overwrite.
   //    Each update is isolated: a thrown page is recorded and the batch goes on.
   for (const u of actions.updates) {
+    throwIfAborted(deps.signal, `before pushing the update of ${u.path}`);
     try {
       // Push the CLEAN body only (no `gitmost_id` frontmatter): the frontmatter
       // is engine metadata, never page content.
@@ -748,6 +760,7 @@ export async function applyPushActions(
   const createdIdByPath = new Map<string, string>();
   const createPaths = new Set(actions.creates.map((x) => x.path));
   for (const c of orderedCreates) {
+    throwIfAborted(deps.signal, `before pushing the create of ${c.path}`);
     try {
       const body = parsePageFile(await deps.readFile(c.path)).body;
       // Derive create args from the PATH (native-Obsidian, SPEC §5): title from
@@ -811,12 +824,16 @@ export async function applyPushActions(
       }
       created++;
     } catch (err: unknown) {
+      // An abort (the adopt check's conversions honour the signal) ends the
+      // push, it is not this page's failure.
+      if (err instanceof CycleAbortedError) throw err;
       failures.push({ kind: "create", path: c.path, error: errMessage(err) });
     }
   }
 
   // 3. DELETES — soft-delete to Trash (SPEC §8), reversible. Isolated per page.
   for (const d of actions.deletes) {
+    throwIfAborted(deps.signal, `before pushing the delete of ${d.path}`);
     try {
       await client.deletePage(d.pageId);
       deleted++;
@@ -899,6 +916,7 @@ export async function applyPushActions(
         });
         continue;
       }
+      throwIfAborted(deps.signal, `before pushing the move of ${c.newPath}`);
       // Track which op is in flight so a failure is attributed to the op that
       // ACTUALLY threw: for a page needing both, a move that succeeds then a
       // rename that throws must be recorded as `rename`, not `move`.
@@ -952,7 +970,10 @@ export async function applyPushActions(
  * "\n"), the trailing form `serializePageFile` writes.
  */
 function normalizeTrailingWhitespace(text: string): string {
-  const body = text.replace(/[\s\uFEFF]+$/, "");
+  // `trimEnd` strips exactly the regex `\s` set (U+FEFF included) in linear
+  // time; a `/[\s\uFEFF]+$/` replace retries its whitespace run from every
+  // start position, quadratic on a long whitespace run followed by more text.
+  const body = text.trimEnd();
   return body.length > 0 ? `${body}\n` : "\n";
 }
 
@@ -965,10 +986,11 @@ function normalizeTrailingWhitespace(text: string): string {
  * Adopting a page writes the file's body into it, so the body check keeps that
  * from changing anything the page holds: a page that only looks like such a
  * create (restored from the trash, or every page of a re-made vault) keeps its
- * own text. A body the converter cannot take is never adopted.
+ * own text. A body the converter cannot take is never adopted. The
+ * conversions run on the converter pool and honour `deps.signal`.
  */
 async function isUnfinishedCreate(
-  deps: Pick<ApplyPushDeps, "client" | "warn">,
+  deps: Pick<ApplyPushDeps, "client" | "warn" | "signal">,
   pageId: string,
   path: string,
   body: string,
@@ -978,13 +1000,18 @@ async function isUnfinishedCreate(
   const live = await deps.client.getPageJson(pageId);
   if (live.lastUpdatedSource !== "git-sync") return false;
   try {
-    const pageBody = await stabilizePageBody(live.content);
+    const pageBody = await stabilizePageBody(live.content, deps.signal);
     if (pageBody.trim().length === 0) return true;
-    const gitBody = await stabilizePageBody(await markdownToProseMirror(body));
+    const gitBody = await stabilizePageBody(
+      await markdownToProseMirror(body, undefined, deps.signal),
+      deps.signal,
+    );
     return (
       normalizeTrailingWhitespace(gitBody) === normalizeTrailingWhitespace(pageBody)
     );
   } catch (err) {
+    // An abort is not "cannot compare": it must not turn into a new page.
+    if (err instanceof CycleAbortedError) throw err;
     deps.warn?.(
       `push: could not compare ${path} with page ${pageId}; creating a new ` +
         `page for it: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
@@ -1145,8 +1172,9 @@ async function resolveParentPageIdViaTree(
       side === "current"
         ? await deps.readFile(parentFile)
         : await deps.git.showFileAtRef(deps.baseRef, parentFile);
-  } catch {
-    // Parent folder file missing/unreadable at that side -> treat as ROOT.
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
+    // Parent folder file missing at that side -> treat as ROOT.
     return null;
   }
   if (text === null) return null; // showFileAtRef returns null when absent.
@@ -1173,7 +1201,8 @@ async function formerFolderPageId(
   try {
     await deps.readFile(parentFile);
     return null;
-  } catch {
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
     // The folder note is gone: read it where git added the file.
   }
   const added = await deps.git.commitAddingPath(DEFAULT_BRANCH, path);
@@ -1202,7 +1231,8 @@ async function metaAtViaTree(
       side === "current"
         ? await deps.readFile(path)
         : await deps.git.showFileAtRef(deps.baseRef, path);
-  } catch {
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
     return null;
   }
   if (text === null) return null;
@@ -1247,6 +1277,8 @@ export interface PushDeps {
   symlinks?: ReadonlySet<string>;
   /** Structured logger (a recorder in tests). */
   log: (line: string) => void;
+  /** The cycle's AbortSignal, handed to `applyPushActions` (see there). */
+  signal?: AbortSignal;
 }
 
 /** The structured outcome of a `runPush` cycle (returned + summarized). */
@@ -1467,6 +1499,7 @@ export async function runPush(
       spaceId: settings.docmostSpaceId,
       baseRef: base.sha,
       warn: log,
+      signal: deps.signal,
     },
     actions,
   );
@@ -1498,7 +1531,8 @@ async function readMetaCurrent(
   let text: string;
   try {
     text = await readFile(path);
-  } catch {
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
     return null; // absent on `main` (e.g. a D row's path) -> no current meta.
   }
   return nativeMeta(text, path, spaceId);
@@ -1514,7 +1548,8 @@ async function readMetaPrev(
   let text: string | null;
   try {
     text = await deps.git.showFileAtRef(baseRef, path);
-  } catch {
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
     return null;
   }
   if (text === null) return null; // path absent at the base ref.

@@ -208,6 +208,9 @@ export class CollaborationGateway {
     eventName: TName,
     documentName: string,
     payload: Parameters<CollabEventHandlers[TName]>[1],
+    // Stops the event at its next step when aborted; the handler must accept
+    // it (see RedisSyncExtension.handleEvent).
+    signal?: AbortSignal,
   ): ReturnType<CollabEventHandlers[TName]> {
     if (this.redisSync) {
       // Normal path: the Redis bridge routes the event to the instance that owns
@@ -217,6 +220,7 @@ export class CollaborationGateway {
         eventName,
         documentName,
         payload,
+        signal,
       ) as ReturnType<CollabEventHandlers[TName]>;
     }
 
@@ -232,8 +236,9 @@ export class CollaborationGateway {
       const handler = handlers[eventName] as (
         documentName: string,
         payload: unknown,
+        signal?: AbortSignal,
       ) => ReturnType<CollabEventHandlers[TName]>;
-      return handler(documentName, payload);
+      return handler(documentName, payload, signal);
     }
 
     // Collaboration was never initialized (no live instance). Fail loudly rather
@@ -292,6 +297,10 @@ export class CollaborationGateway {
    *
    * Without redis there is a single instance, so the write runs locally — which
    * is already the owning (and only) instance the editor is connected to.
+   *
+   * An aborted `signal` rejects with its reason and stops the write, on the
+   * owning instance too, at its next step before the merge transaction (the
+   * merge itself is atomic: once it ran, the write is done).
    */
   async writePageBody(
     documentName: string,
@@ -300,18 +309,20 @@ export class CollaborationGateway {
       baseProsemirrorJson?: unknown;
       userId: string;
     },
+    signal?: AbortSignal,
   ): Promise<void> {
     if (this.redisSync) {
       await this.handleYjsEvent(
         'gitSyncWriteBody',
         documentName,
         payload as any,
+        signal,
       );
       return;
     }
     await this.collabEventsService
       .getHandlers(this.hocuspocus)
-      .gitSyncWriteBody(documentName, payload as any);
+      .gitSyncWriteBody(documentName, payload as any, signal);
   }
 
   /*

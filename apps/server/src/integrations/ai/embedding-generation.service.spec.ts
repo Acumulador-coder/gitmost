@@ -59,8 +59,7 @@ function makeLockDb(locked: boolean, failUnlock = false) {
       // The try-lock's result; the unlock's is ignored by the service.
       return { rows: [{ locked }] as unknown as R[] };
     },
-    // eslint-disable-next-line @typescript-eslint/require-await
-    async *streamQuery() {
+    streamQuery() {
       throw new Error('not used');
     },
   };

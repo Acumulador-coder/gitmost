@@ -6,7 +6,10 @@ import {
 } from '@docmost/git-sync';
 
 import { tiptapExtensions } from '../collaboration.util';
-import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
+import {
+  mergeXmlFragments,
+  mergeXmlFragments3WayWithStats,
+} from './yjs-body-merge';
 
 /**
  * Callout pages through the ACTUAL live merge path (no body duplication on
@@ -70,6 +73,10 @@ async function gitRoundTrip(content: unknown[]): Promise<any[]> {
   return json.content;
 }
 
+// markdownToProseMirror runs on a converter worker thread; its cold start
+// (jsdom + the converter) is paid here, not inside the first case's timeout.
+beforeAll(() => markdownToProseMirror(''), 120_000);
+
 describe('git-sync callout merge is idempotent + non-destructive (QA #119)', () => {
   for (const type of ['info', 'note', 'warning', 'danger', 'success', 'default']) {
     it(`callout(${type}) resyncs with 0 ops and never strips the body`, async () => {
@@ -93,11 +100,11 @@ describe('git-sync callout merge is idempotent + non-destructive (QA #119)', () 
       for (let cycle = 0; cycle < 4; cycle++) {
         let a = -1;
         liveDoc.transact(() => {
-          a = mergeXmlFragments3Way(
+          a = mergeXmlFragments3WayWithStats(
             live,
             toYdoc(gitContent).getXmlFragment('default'),
             toYdoc(gitContent).getXmlFragment('default'),
-          );
+          ).applied;
         });
         expect(a).toBe(0);
         expect(live.toArray().length).toBe(before);
@@ -126,7 +133,7 @@ describe('git-sync callout merge is idempotent + non-destructive (QA #119)', () 
     const liveDoc = toYdoc(editor);
     const live = liveDoc.getXmlFragment('default');
     liveDoc.transact(() => {
-      mergeXmlFragments3Way(
+      mergeXmlFragments3WayWithStats(
         live,
         toYdoc(gitContent).getXmlFragment('default'),
         toYdoc(baseContent).getXmlFragment('default'),

@@ -17,6 +17,7 @@ import { jsonArrayFrom, jsonObjectFrom } from 'kysely/helpers/postgres';
 import { SpaceMemberRepo } from '@docmost/db/repos/space/space-member.repo';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EventName } from '../../../common/events/event.contants';
+import type { ProvenanceSource } from '../../../core/auth/dto/jwt-payload';
 import {
   TreeUpdateSnapshot,
   toTreeNodeSnapshot,
@@ -388,7 +389,7 @@ export class PageRepo {
     // data plane (e.g. git-sync), stamp `lastUpdatedSource` so the change-listener
     // loop-guard recognizes it as its own write and does not schedule an echo
     // cycle. Omitted for ordinary user deletes (column keeps its prior value).
-    lastUpdatedSource?: string,
+    lastUpdatedSource?: ProvenanceSource,
   ): Promise<void> {
     const currentDate = new Date();
     const readDb = dbOrTx(this.db, existingTrx);
@@ -498,7 +499,7 @@ export class PageRepo {
     // See removePage: stamp `lastUpdatedSource` for automated (git-sync) restores
     // so the change-listener loop-guard skips the echo cycle. Omitted for
     // ordinary user restores.
-    lastUpdatedSource?: string,
+    lastUpdatedSource?: ProvenanceSource,
   ): Promise<void> {
     // First, check if the page being restored has a deleted parent
     const pageToRestore = await this.db

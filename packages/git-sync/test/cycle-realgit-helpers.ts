@@ -4,6 +4,7 @@
  * Docmost client, small git shell helpers, and `setupVault` — a vault plus a
  * clone where a "human" commits and pushes, as a user of the /git host does.
  */
+import "./git-env";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -39,9 +40,6 @@ export function makeSettings(vaultPath: string): Settings {
   return {
     docmostSpaceId: "space-1",
     vaultPath,
-    pollIntervalMs: 15000,
-    debounceMs: 2000,
-    logLevel: "info",
   } as Settings;
 }
 

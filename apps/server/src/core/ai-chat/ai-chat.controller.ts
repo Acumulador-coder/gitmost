@@ -72,10 +72,25 @@ import {
 import { startSseHeartbeat } from './sse-resilience';
 
 /**
+ * Deadline for writing the attach tail: the whole replay must reach the socket
+ * within this window. A reader that never drains (zero TCP window, a client that
+ * neither reads nor closes) would otherwise park the handler forever, pinning the
+ * replay snapshot (up to the ring cap), the paused subscriber and the socket's
+ * write buffer, and the attach route lets one user open 60 of those a minute. A
+ * healthy client drains the tail (<= the 4MB ring cap) in well under a second; on
+ * expiry the stream is torn down and the client falls back to its delta poll, as
+ * on a dropped live stream.
+ */
+export const ATTACH_TAIL_WRITE_TIMEOUT_MS = 30_000;
+
+/**
  * Write the attach tail to the hijacked socket respecting drain: each `write()`
- * that returns false is followed by awaiting 'drain'. Bails immediately if the
- * socket ended/errored mid-write. Frames the paused registry subscriber buffers
- * meanwhile are delivered by start().
+ * that returns false is followed by awaiting 'drain', raced against
+ * 'close'/'error' and the time left to the tail deadline, so the loop never
+ * parks. Frames the paused registry subscriber buffers meanwhile are delivered
+ * by start(). Returns 'written' (the whole tail is on the socket), 'closed' (the
+ * socket ended or errored) or 'timeout' (the deadline passed first); on anything
+ * but 'written' the caller tears the attachment down.
  */
 async function writeTailRespectingDrain(
   raw: {
@@ -86,28 +101,41 @@ async function writeTailRespectingDrain(
     removeListener?(event: string, cb: () => void): unknown;
   },
   frames: string[],
-): Promise<void> {
+): Promise<'written' | 'closed' | 'timeout'> {
+  const deadline = Date.now() + ATTACH_TAIL_WRITE_TIMEOUT_MS;
   for (const frame of frames) {
-    if (raw.writableEnded || raw.destroyed) return;
+    if (raw.writableEnded || raw.destroyed) return 'closed';
     const ok = raw.write(frame);
     if (!ok) {
-      // Kernel buffer full — wait for drain (or an early close/error) before the
-      // next chunk, so a slow reader never forces the whole tail into memory.
-      // Remove ALL three listeners once any fires, so a many-chunk tail with
+      // Kernel buffer full — wait for drain (or an early close/error, or the
+      // deadline) before the next chunk, so a slow reader never forces the whole
+      // tail into memory and a non-reader never parks the handler. Remove ALL
+      // listeners and the timer once any fires, so a many-chunk tail with
       // repeated backpressure never leaks (MaxListenersExceededWarning).
-      await new Promise<void>((resolve) => {
-        const finish = (): void => {
-          raw.removeListener?.('drain', finish);
-          raw.removeListener?.('close', finish);
-          raw.removeListener?.('error', finish);
-          resolve();
-        };
-        raw.once('drain', finish);
-        raw.once('close', finish);
-        raw.once('error', finish);
-      });
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return 'timeout';
+      const outcome = await new Promise<'drained' | 'closed' | 'timeout'>(
+        (resolve) => {
+          const timer = setTimeout(() => finish('timeout'), remaining);
+          timer.unref?.();
+          const finish = (result: 'drained' | 'closed' | 'timeout'): void => {
+            clearTimeout(timer);
+            raw.removeListener?.('drain', onDrain);
+            raw.removeListener?.('close', onClosed);
+            raw.removeListener?.('error', onClosed);
+            resolve(result);
+          };
+          const onDrain = (): void => finish('drained');
+          const onClosed = (): void => finish('closed');
+          raw.once('drain', onDrain);
+          raw.once('close', onClosed);
+          raw.once('error', onClosed);
+        },
+      );
+      if (outcome !== 'drained') return outcome;
     }
   }
+  return 'written';
 }
 
 /**
@@ -537,7 +565,24 @@ export class AiChatController {
       // Write the tail in chunks respecting drain (not a synchronous blast, which
       // was half the OOM). Frames the paused subscriber buffers meanwhile are
       // drained by start() below; its cap is the backstop for a stalled socket.
-      await writeTailRespectingDrain(res.raw, attachment.replay);
+      const tail = await writeTailRespectingDrain(res.raw, attachment.replay);
+      if (tail !== 'written') {
+        // The socket closed mid-tail, or the reader never drained within the
+        // deadline (AI-3): tear down instead of going live — drop the paused
+        // subscriber and destroy the socket so its write buffer is released
+        // (end() would keep the unflushed bytes queued behind a dead reader).
+        if (tail === 'timeout') {
+          this.logger.warn(
+            `run-stream attach for chat ${chatId}: the client did not drain the ` +
+              `${attachment.replay.length}-frame tail within ` +
+              `${ATTACH_TAIL_WRITE_TIMEOUT_MS}ms; closing the attach stream`,
+          );
+        }
+        attachment.unsubscribe();
+        stopHeartbeat();
+        res.raw.destroy();
+        return;
+      }
       if (attachment.finished) {
         if (!res.raw.writableEnded) res.raw.end();
         return;
@@ -722,6 +767,21 @@ export class AiChatController {
     // before that, it can never address this run, so the server stops it.
     const isNewChat = !body.chatId;
     let newChatRun: { runId: string; chatId: string } | undefined;
+    // Whether that first frame has been written to the socket. NOT
+    // `res.raw.headersSent`: it flips synchronously inside writeHead, before any
+    // frame is on the wire, so a client that leaves between the status line and
+    // the first frame looked "served" and its run kept editing pages after the
+    // Stop it could never send. The first body write after hijack is the SDK's
+    // `start` frame (the heartbeat only starts 15s later), so the flag flips on
+    // the first `write()` that reaches a still-open socket; the wrapper then
+    // removes itself.
+    let firstFrameWritten = false;
+    const rawWrite = res.raw.write;
+    res.raw.write = function (this: typeof res.raw, ...args: unknown[]) {
+      if (!res.raw.destroyed) firstFrameWritten = true;
+      res.raw.write = rawWrite;
+      return (rawWrite as (...a: unknown[]) => boolean).apply(this, args);
+    } as typeof res.raw.write;
     const stopUnaddressableRun = (run: { runId: string; chatId: string }) => {
       this.logger.warn(
         `AI chat stream: client left before new chat ${run.chatId} reached it; stopping run ${run.runId}`,
@@ -739,14 +799,12 @@ export class AiChatController {
         // #184 phase 1.5: register the run-stream entry at BEGIN (before any
         // frame) so a tab that attaches in the begin->seed window finds an entry
         // to wait on.
-        if (handle?.runId) {
-          this.streamRegistry?.open(chatId, handle.runId);
-          if (isNewChat) {
-            newChatRun = { runId: handle.runId, chatId };
-            // #714: the client left before the run existed (onClose had nothing
-            // to stop yet, or fired before its listener was attached).
-            if (res.raw.destroyed) stopUnaddressableRun(newChatRun);
-          }
+        this.streamRegistry?.open(chatId, handle.runId);
+        if (isNewChat) {
+          newChatRun = { runId: handle.runId, chatId };
+          // #714: the client left before the run existed (onClose had nothing
+          // to stop yet, or fired before its listener was attached).
+          if (res.raw.destroyed) stopUnaddressableRun(newChatRun);
         }
         return handle;
       },
@@ -766,12 +824,9 @@ export class AiChatController {
     // runs Fastify has consumed the POST body, so `req.raw` is already closed and
     // its 'close' never fires on a later disconnect. `close` also fires on normal
     // completion, so only act when the response has not finished writing.
-    // `controller` is never aborted: the run-wrapped turn is governed by the run's
-    // own signal (explicit Stop); it only fills the stream's required `signal` arg.
-    const controller = new AbortController();
     const onClose = (): void => {
       if (res.raw.writableEnded) return;
-      if (isNewChat && !res.raw.headersSent) {
+      if (isNewChat && !firstFrameWritten) {
         // #714: no frame went out, so the client never got the new chat id.
         // Before begin there is no run yet — begin stops it (res.raw.destroyed).
         if (newChatRun) stopUnaddressableRun(newChatRun);
@@ -808,7 +863,6 @@ export class AiChatController {
         sessionId,
         body,
         res,
-        signal: controller.signal,
         model,
         role,
         // #487: the turn is always run-wrapped.

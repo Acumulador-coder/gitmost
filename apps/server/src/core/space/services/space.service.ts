@@ -30,6 +30,10 @@ import {
   AUDIT_SERVICE,
   IAuditService,
 } from '../../../integrations/audit/audit.service';
+import {
+  GIT_SYNC_RESTRICTED_SPACE_REASON,
+  GitSyncRestrictionsService,
+} from '../../../integrations/git-sync/services/git-sync-restrictions.service';
 
 @Injectable()
 export class SpaceService {
@@ -43,6 +47,7 @@ export class SpaceService {
     @InjectQueue(QueueName.ATTACHMENT_QUEUE) private attachmentQueue: Queue,
     @Inject(AUDIT_SERVICE) private readonly auditService: IAuditService,
     private readonly environmentService: EnvironmentService,
+    private readonly gitSyncRestrictions: GitSyncRestrictionsService,
   ) {}
 
   async createSpace(
@@ -128,6 +133,20 @@ export class SpaceService {
       !this.environmentService.isGitSyncEnabled()
     ) {
       throw new BadRequestException('Git sync is disabled on this server');
+    }
+
+    // git-sync cannot enforce page-level restrictions (a clone exposes every
+    // page to every space member), so it refuses a space that has any.
+    if (
+      updateSpaceDto.gitSyncEnabled === true &&
+      (await this.gitSyncRestrictions.spaceHasRestrictedPages(
+        updateSpaceDto.spaceId,
+        workspaceId,
+      ))
+    ) {
+      throw new BadRequestException(
+        `Git sync cannot be enabled for this space: ${GIT_SYNC_RESTRICTED_SPACE_REASON}`,
+      );
     }
 
     if (updateSpaceDto?.slug) {

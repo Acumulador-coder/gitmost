@@ -78,6 +78,15 @@ export type RSAMessageCustomEventComplete = {
   error?: string;
 };
 
+// The origin's caller aborted a custom event it started: the owner aborts the
+// handler's signal (a handler stops at its next step; one already done is not
+// undone). `replyTo` + `replyId` name the event like its start message does.
+export type RSAMessageCustomEventAbort = {
+  type: 'customEventAbort';
+  replyTo: string;
+  replyId: number;
+};
+
 export type RSAMessage =
   | RSAMessageProxy
   | RSAMessageCloseProxy
@@ -87,7 +96,8 @@ export type RSAMessage =
   | RSAMessagePong
   | RSAMessageSend
   | RSAMessageCustomEventStart
-  | RSAMessageCustomEventComplete;
+  | RSAMessageCustomEventComplete
+  | RSAMessageCustomEventAbort;
 
 // @ts-ignore
 export type Pack = (msg: RSAMessage) => string | Buffer<ArrayBufferLike>;
@@ -103,7 +113,11 @@ type CustomEventName = string;
 
 export type CustomEvents = Record<
   CustomEventName,
-  (documentName: string, payload: unknown) => Promise<unknown>
+  (
+    documentName: string,
+    payload: unknown,
+    signal?: AbortSignal,
+  ) => Promise<unknown>
 >;
 
 export interface Configuration<TCE> {

@@ -9,6 +9,7 @@ import { buildSharedPageUrl } from "@/features/page/page.utils.ts";
 import { getPageIcon } from "@/lib";
 import { useTranslation } from "react-i18next";
 import { shareSearchSpotlightStore } from "@/features/search/constants.ts";
+import { IPageSearch } from "@/features/search/types/search.types";
 import DOMPurify from "dompurify";
 
 interface ShareSearchSpotlightProps {
@@ -24,9 +25,7 @@ export function ShareSearchSpotlight({ shareId }: ShareSearchSpotlightProps) {
     shareId,
   });
 
-  const pages = (
-    searchResults && searchResults.length > 0 ? searchResults : []
-  ).map((page) => (
+  const toAction = (page: IPageSearch) => (
     <Spotlight.Action
       key={page.id}
       component={Link}
@@ -59,7 +58,14 @@ export function ShareSearchSpotlight({ shareId }: ShareSearchSpotlightProps) {
         </div>
       </Group>
     </Spotlight.Action>
-  ));
+  );
+
+  const pages = (searchResults?.items ?? []).map(toAction);
+  // #701: semantically similar pages that do NOT match the query — shown apart
+  // from the matches, as in the in-app search.
+  const relatedPages = (searchResults?.related ?? []).map(toAction);
+  // A share whose search is disabled answers with the reason instead.
+  const disabledReason = searchResults?.disabledReason;
 
   return (
     <>
@@ -78,15 +84,36 @@ export function ShareSearchSpotlight({ shareId }: ShareSearchSpotlightProps) {
           leftSection={<IconSearch size={20} stroke={1.5} />}
         />
         <Spotlight.ActionsList>
-          {query.length === 0 && pages.length === 0 && (
-            <Spotlight.Empty>{t("Start typing to search...")}</Spotlight.Empty>
-          )}
+          {disabledReason ? (
+            <Spotlight.Empty>
+              {t(
+                "Search is unavailable on this share because it publishes only saved versions.",
+              )}
+            </Spotlight.Empty>
+          ) : (
+            <>
+              {query.length === 0 && pages.length === 0 && (
+                <Spotlight.Empty>
+                  {t("Start typing to search...")}
+                </Spotlight.Empty>
+              )}
 
-          {query.length > 0 && pages.length === 0 && (
-            <Spotlight.Empty>{t("No results found...")}</Spotlight.Empty>
-          )}
+              {query.length > 0 && pages.length === 0 && (
+                <Spotlight.Empty>{t("No results found...")}</Spotlight.Empty>
+              )}
 
-          {pages.length > 0 && pages}
+              {pages.length > 0 && pages}
+
+              {relatedPages.length > 0 && (
+                <>
+                  <Text size="xs" c="dimmed" px="sm" pt="sm" pb={4}>
+                    {t("Similar pages")}
+                  </Text>
+                  {relatedPages}
+                </>
+              )}
+            </>
+          )}
         </Spotlight.ActionsList>
       </Spotlight.Root>
     </>

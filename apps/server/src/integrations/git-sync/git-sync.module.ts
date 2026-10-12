@@ -7,6 +7,7 @@ import { PageModule } from '../../core/page/page.module';
 import { AuthModule } from '../../core/auth/auth.module';
 import { GitmostDataSourceService } from './services/gitmost-datasource.service';
 import { GitSyncOrchestrator } from './services/git-sync.orchestrator';
+import { GitSyncRestrictionsService } from './services/git-sync-restrictions.service';
 import { SpaceLockService } from './services/space-lock.service';
 import { VaultRegistryService } from './services/vault-registry.service';
 import { PageChangeListener } from './listeners/page-change.listener';
@@ -64,6 +65,7 @@ export class GitSyncModule {
         ? [
             GitmostDataSourceService,
             GitSyncOrchestrator,
+            GitSyncRestrictionsService,
             SpaceLockService,
             VaultRegistryService,
             PageChangeListener,
@@ -73,8 +75,9 @@ export class GitSyncModule {
           ]
         : [],
       // Exported so the raw Fastify route registered in main.ts can resolve the
-      // handler from the Nest container (app.get(GitHttpService)).
-      exports: enabled ? [GitHttpService] : [],
+      // handler from the Nest container (app.get(GitHttpService)), and so the
+      // restricted-pages predicate can be resolved outside this module.
+      exports: enabled ? [GitHttpService, GitSyncRestrictionsService] : [],
     };
   }
 }

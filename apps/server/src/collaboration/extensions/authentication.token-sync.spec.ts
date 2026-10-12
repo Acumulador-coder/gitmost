@@ -21,7 +21,10 @@ import {
 } from '@hocuspocus/provider';
 import { WebSocket, WebSocketServer } from 'ws';
 import * as Y from 'yjs';
-import { AuthenticationExtension } from './authentication.extension';
+import {
+  ACCESS_DENIED_REASON,
+  AuthenticationExtension,
+} from './authentication.extension';
 import { SpaceRole } from '../../common/helpers/types/permission';
 import { JwtType } from '../../core/auth/dto/jwt-payload';
 
@@ -33,6 +36,7 @@ const SPACE_ID = 'space-1';
 
 describe('AuthenticationExtension.onTokenSync (#709 warm-return access re-check)', () => {
   let ext: AuthenticationExtension;
+  let verifyJwt: jest.Mock;
   let spaceMemberRepo: { getUserSpaceRoles: jest.Mock };
   let pagePermissionRepo: { canUserEditPage: jest.Mock };
   let loggerError: jest.SpyInstance;
@@ -60,15 +64,14 @@ describe('AuthenticationExtension.onTokenSync (#709 warm-return access re-check)
       }),
     };
 
+    verifyJwt = jest.fn().mockResolvedValue({
+      sub: USER_ID,
+      workspaceId: WORKSPACE_ID,
+      type: JwtType.COLLAB,
+      principal: 'session',
+    });
     ext = new AuthenticationExtension(
-      {
-        verifyJwt: jest.fn().mockResolvedValue({
-          sub: USER_ID,
-          workspaceId: WORKSPACE_ID,
-          type: JwtType.COLLAB,
-          principal: 'session',
-        }),
-      } as any,
+      { verifyJwt } as any,
       {
         findById: jest.fn().mockResolvedValue({
           id: USER_ID,
@@ -84,6 +87,9 @@ describe('AuthenticationExtension.onTokenSync (#709 warm-return access re-check)
           workspaceId: WORKSPACE_ID,
           deletedAt: null,
         }),
+        findManyByIds: jest
+          .fn()
+          .mockResolvedValue([{ id: PAGE_ID, spaceId: SPACE_ID }]),
       } as any,
       spaceMemberRepo as any,
       pagePermissionRepo as any,
@@ -240,17 +246,169 @@ describe('AuthenticationExtension.onTokenSync (#709 warm-return access re-check)
     await expectSocketStillOpen();
   });
 
-  it('non-HttpException during the re-check → document stays open, ERROR logged', async () => {
+  it('non-HttpException during the re-check → fail closed: CLOSE "Access re-check failed", ERROR logged (CO-3)', async () => {
     const dbDown = new Error('db down');
     pagePermissionRepo.canUserEditPage.mockRejectedValueOnce(dbDown);
+    const closed = nextClose();
     await tokenSync();
-    await editAndAwaitAck('survived-db-blip');
 
-    expect(closeEvents).toEqual([]);
+    // Not "Unauthorized": the client must not treat an outage as a revocation.
+    expect(await closed).toEqual({
+      code: 1000,
+      reason: 'Access re-check failed',
+    });
     expect(loggerError).toHaveBeenCalledWith(
       expect.objectContaining({ err: dbDown, pageId: PAGE_ID }),
       expect.any(String),
     );
+    await expectSocketStillOpen();
+  });
+
+  it('a re-check with no answer by the deadline → fail closed, ERROR logged (CO-3)', async () => {
+    (ext as any).recheckDeadlineMs = 50;
+    pagePermissionRepo.canUserEditPage.mockReturnValueOnce(
+      new Promise(() => undefined),
+    );
+    const closed = nextClose();
+    await tokenSync();
+
+    expect(await closed).toEqual({
+      code: 1000,
+      reason: 'Access re-check failed',
+    });
+    expect(loggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ pageId: PAGE_ID }),
+      expect.any(String),
+    );
+  });
+
+  it('a token of another principal → CLOSE "Unauthorized", no access lookup (CO-3)', async () => {
+    verifyJwt.mockResolvedValueOnce({
+      sub: 'user-2',
+      workspaceId: WORKSPACE_ID,
+      type: JwtType.COLLAB,
+      principal: 'session',
+    });
+    const lookups = spaceMemberRepo.getUserSpaceRoles.mock.calls.length;
+    const closed = nextClose();
+    await tokenSync();
+
+    expect(await closed).toEqual({ code: 1000, reason: 'Unauthorized' });
+    expect(spaceMemberRepo.getUserSpaceRoles.mock.calls.length).toBe(lookups);
+  });
+
+  it('a token flood runs ONE re-check at a time, rate-limited, with the latest token (CO-1)', async () => {
+    // Long enough that all 500 frames arrive within one interval.
+    (ext as any).recheckMinIntervalMs = 1_000;
+    const before = verifyJwt.mock.calls.length;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    pagePermissionRepo.canUserEditPage.mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight--;
+      return { hasAnyRestriction: false, canAccess: true, canEdit: true };
+    });
+
+    // Each frame carries the next token: token-1 … token-500.
+    let sent = 0;
+    provider.configuration.token = () => `token-${++sent}`;
+    for (let i = 0; i < 500; i++) void provider.sendToken();
+    const deadline = Date.now() + 5_000;
+    while (verifyJwt.mock.calls.length < before + 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    // One more interval: nothing else was queued.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+    const tokens = verifyJwt.mock.calls.slice(before).map(([token]) => token);
+    expect(tokens).toEqual(['token-1', 'token-500']);
+    expect(maxInFlight).toBe(1);
+    await editAndAwaitAck('still-writable-after-flood');
+    expect(closeEvents).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a page event',
+      (e: AuthenticationExtension) =>
+        e.onPagesAccessChanged({ pageIds: [PAGE_ID] }),
+    ],
+    ['a space deletion', (e: AuthenticationExtension) => e.onSpaceDeleted()],
+    [
+      "an access change of the page's space",
+      (e: AuthenticationExtension) =>
+        e.onCollabAccessChanged({
+          workspaceId: WORKSPACE_ID,
+          spaceId: SPACE_ID,
+          userIds: [USER_ID],
+        }),
+    ],
+  ])(
+    'access revoked, then %s → CLOSE "Unauthorized" without any token from the client (CO-2)',
+    async (_event, emit) => {
+      spaceMemberRepo.getUserSpaceRoles.mockResolvedValue([]);
+      const tokenChecks = verifyJwt.mock.calls.length;
+      const closed = nextClose();
+      await emit(ext);
+
+      expect(await closed).toEqual({ code: 1000, reason: 'Unauthorized' });
+      // The connection's own principal was re-checked: no token involved.
+      expect(verifyJwt.mock.calls.length).toBe(tokenChecks);
+      await expectSocketStillOpen();
+    },
+  );
+
+  it('a page event for another page leaves the connection alone (CO-2)', async () => {
+    spaceMemberRepo.getUserSpaceRoles.mockResolvedValue([]);
+    await ext.onPagesAccessChanged({
+      pageIds: ['00000000-0000-4000-8000-000000000000'],
+    });
+    await editAndAwaitAck('untouched');
+    expect(closeEvents).toEqual([]);
+  });
+
+  // A second client opening the document afresh, as a reconnect does; resolves
+  // with the reason the provider surfaces from the server's permission-denied
+  // auth message (`authenticationFailed`).
+  async function freshConnectionDenialReason(): Promise<string> {
+    const freshSocket = new HocuspocusProviderWebsocket({
+      url,
+      WebSocketPolyfill: WebSocket,
+    });
+    const fresh = new HocuspocusProvider({
+      websocketProvider: freshSocket,
+      name: DOC_NAME,
+      token: 'collab-token',
+      document: new Y.Doc(),
+    });
+    const failed = new Promise<string>((resolve) =>
+      fresh.on('authenticationFailed', ({ reason }) => resolve(reason)),
+    );
+    fresh.attach();
+    try {
+      return await failed;
+    } finally {
+      fresh.destroy();
+      freshSocket.destroy();
+    }
+  }
+
+  it('a fresh connection denied the page → authenticationFailed with reason ACCESS_DENIED_REASON', async () => {
+    spaceMemberRepo.getUserSpaceRoles.mockResolvedValue([]);
+
+    expect(await freshConnectionDenialReason()).toBe(ACCESS_DENIED_REASON);
+    // The literal the client keys on (page-session-cache.ts).
+    expect(ACCESS_DENIED_REASON).toBe('access-denied');
+  });
+
+  it('a fresh connection whose access lookup fails → the default reason "permission-denied", not a denial', async () => {
+    pagePermissionRepo.canUserEditPage.mockRejectedValueOnce(
+      new Error('db down'),
+    );
+
+    expect(await freshConnectionDenialReason()).toBe('permission-denied');
   });
 
   it("does not mutate the live connection's connectionConfig", async () => {

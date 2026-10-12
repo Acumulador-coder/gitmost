@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 // Import via the package barrel to also assert the symbols are re-exported.
-import { canonicalizeContent, docsCanonicallyEqual } from 'docmost-client';
+import {
+  canonicalizeContent,
+  docsCanonicallyEqual,
+  docsEqualUpToMarkdown,
+  isIgnorableBlockKey,
+  markdownBlockKey,
+} from 'docmost-client';
 
 describe('canonicalizeContent', () => {
   it('strips node-level attrs.id, recursively', () => {
@@ -298,5 +304,85 @@ describe('docsCanonicallyEqual', () => {
     };
     const b = { type: 'text', text: 'x' };
     expect(docsCanonicallyEqual(a, b)).toBe(false);
+  });
+});
+
+// The defaults come from the converter schema, not from a hand-kept list.
+describe('canonicalizeContent schema defaults', () => {
+  const doc = (content: any[]) => ({ type: 'doc', content });
+
+  it('drops a default the schema declares beyond the old hand list', () => {
+    const cell = (attrs?: any) => ({
+      type: 'tableCell',
+      ...(attrs ? { attrs } : {}),
+      content: [{ type: 'paragraph' }],
+    });
+    expect(
+      docsCanonicallyEqual(
+        doc([{ type: 'tableRow', content: [cell({ colspan: 1, rowspan: 1 })] }]),
+        doc([{ type: 'tableRow', content: [cell()] }]),
+      ),
+    ).toBe(true);
+    expect(
+      docsCanonicallyEqual(
+        doc([{ type: 'callout', attrs: { type: 'info' }, content: [] }]),
+        doc([{ type: 'callout', content: [] }]),
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps a non-default value of such an attr', () => {
+    expect(
+      docsCanonicallyEqual(
+        doc([{ type: 'callout', attrs: { type: 'warning' }, content: [] }]),
+        doc([{ type: 'callout', content: [] }]),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('markdownBlockKey / docsEqualUpToMarkdown', () => {
+  const p = (text: string, attrs?: any) => ({
+    type: 'paragraph',
+    ...(attrs ? { attrs } : {}),
+    content: text ? [{ type: 'text', text }] : [],
+  });
+  const doc = (...content: any[]) => ({ type: 'doc', content });
+
+  it('projects a block to its markdown; an empty paragraph is ignorable', () => {
+    expect(markdownBlockKey(p('Hello'))).toContain('Hello');
+    expect(isIgnorableBlockKey(markdownBlockKey(p('Hello')))).toBe(false);
+    expect(isIgnorableBlockKey(markdownBlockKey(p('')))).toBe(true);
+  });
+
+  it('is true for docs differing only in what markdown cannot carry', () => {
+    const table = (attrs: any) => ({
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [
+            { type: 'tableCell', attrs, content: [p('cell')] },
+          ],
+        },
+      ],
+    });
+    expect(
+      docsEqualUpToMarkdown(
+        doc(
+          p('one', { id: 'a', indent: 2 }),
+          table({ colwidth: [200], backgroundColor: '#ff0' }),
+          p(''),
+        ),
+        doc(p('one'), table({})),
+      ),
+    ).toBe(true);
+  });
+
+  it('is false for a text change or a block reorder', () => {
+    expect(docsEqualUpToMarkdown(doc(p('one')), doc(p('two')))).toBe(false);
+    expect(
+      docsEqualUpToMarkdown(doc(p('a'), p('b')), doc(p('b'), p('a'))),
+    ).toBe(false);
   });
 });

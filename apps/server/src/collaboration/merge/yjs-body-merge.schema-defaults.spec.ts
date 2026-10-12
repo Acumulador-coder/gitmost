@@ -2,7 +2,10 @@ import { TiptapTransformer } from '@hocuspocus/transformer';
 import * as Y from 'yjs';
 
 import { tiptapExtensions } from '../collaboration.util';
-import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
+import {
+  mergeXmlFragments,
+  mergeXmlFragments3WayWithStats,
+} from './yjs-body-merge';
 
 /**
  * A block must key the same whether an attribute carries its editor-ext schema
@@ -15,9 +18,9 @@ import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
  * `highlight.colorName` defaults to null, so it is normalized for free; the
  * schema-derived normalization stays idempotent.
  *
- * Defaults come from the actual ProseMirror schema (getSchema of the server
- * tiptapExtensions); any element- or mark-attribute equal to its default (or
- * null/undefined) is dropped from the key, so an unchanged resync applies 0 ops.
+ * The block comparison key is the block's markdown projection (`blockKey`),
+ * which no materialized default reaches, so a live block compares equal to its
+ * git-round-tripped twin and an unchanged resync applies 0 ops.
  */
 
 type Attrs = Record<string, unknown>;
@@ -118,7 +121,7 @@ describe('git-sync reconcile is idempotent for schema-default attrs (image/link/
     const before = blockCount(live);
     let applied = -1;
     liveDoc.transact(() => {
-      applied = mergeXmlFragments3Way(live, incoming, base);
+      applied = mergeXmlFragments3WayWithStats(live, incoming, base).applied;
     });
 
     expect(applied).toBe(0);
@@ -159,7 +162,11 @@ describe('git-sync reconcile is idempotent for schema-default attrs (image/link/
     for (let cycle = 0; cycle < 5; cycle++) {
       let applied = -1;
       liveDoc.transact(() => {
-        applied = mergeXmlFragments3Way(live, incoming(), base());
+        applied = mergeXmlFragments3WayWithStats(
+          live,
+          incoming(),
+          base(),
+        ).applied;
       });
       expect(applied).toBe(0);
       expect(blockCount(live)).toBe(before);
@@ -175,7 +182,7 @@ describe('git-sync reconcile is idempotent for schema-default attrs (image/link/
     const incoming = fragmentOf([incomingUnit]).frag;
 
     liveDoc.transact(() => {
-      mergeXmlFragments3Way(live, incoming, base);
+      mergeXmlFragments3WayWithStats(live, incoming, base);
     });
 
     const img = live
@@ -277,11 +284,11 @@ describe('git-sync reconcile is idempotent through the real toYdoc materializati
     const before = live.toArray().length;
     let applied = -1;
     liveDoc.transact(() => {
-      applied = mergeXmlFragments3Way(
+      applied = mergeXmlFragments3WayWithStats(
         live,
         targetDoc.getXmlFragment('default'),
         baseDoc.getXmlFragment('default'),
-      );
+      ).applied;
     });
 
     expect(applied).toBe(0);

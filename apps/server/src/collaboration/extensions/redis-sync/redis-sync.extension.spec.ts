@@ -201,4 +201,67 @@ describe('RedisSyncExtension custom-event error propagation', () => {
     await expect(promise).resolves.toEqual({ echoed: { foo: 1 } });
     expect(unhandled).toHaveLength(0);
   });
+
+  it('an aborted origin call rejects at once with the reason and aborts the remote handler', async () => {
+    const bus = new FakeRedisBus();
+    bus.locks.set('collabLock:page.x', 'owner');
+    let ownerSignal: AbortSignal | undefined;
+    let release!: () => void;
+    makeExtension(bus, 'owner', {
+      slow: (_doc: string, _payload: any, signal?: AbortSignal) => {
+        ownerSignal = signal;
+        return new Promise<void>((resolve) => (release = resolve));
+      },
+    } as any);
+    const origin = makeExtension(bus, 'origin', {
+      slow: async () => undefined,
+    });
+
+    const controller = new AbortController();
+    const promise = (origin as any).handleEvent(
+      'slow',
+      'page.x',
+      {},
+      controller.signal,
+    );
+    const settled = promise.then(
+      () => ({ ok: true as const }),
+      (e: unknown) => ({ ok: false as const, error: e }),
+    );
+    await flush();
+    expect(ownerSignal?.aborted).toBe(false);
+
+    const reason = new Error('write deadline passed');
+    controller.abort(reason);
+    await flush();
+
+    expect(await settled).toEqual({ ok: false, error: reason });
+    expect(ownerSignal?.aborted).toBe(true);
+    // The owner's late reply finds no pending entry and is dropped.
+    release();
+    await flush();
+    expect((origin as any).pendingReplies).toEqual({});
+    expect(unhandled).toHaveLength(0);
+  });
+
+  it('a lost reply rejects with an Error naming the event, the document and the owner', async () => {
+    const bus = new FakeRedisBus();
+    bus.locks.set('collabLock:page.x', 'owner'); // nobody answers as 'owner'
+    const origin = makeExtension(bus, 'origin', { ok: async () => undefined });
+
+    const promise = (origin as any).handleEvent('ok', 'page.x', {});
+    const settled = promise.then(
+      () => ({ ok: true as const }),
+      (e: unknown) => ({ ok: false as const, error: e }),
+    );
+    await flush();
+    jest.advanceTimersByTime(30_000);
+
+    const result: any = await settled;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error.message).toBe(
+      'collab event "ok" for page.x: no reply from the owning instance owner within 30000 ms',
+    );
+  });
 });

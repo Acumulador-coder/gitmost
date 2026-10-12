@@ -15,6 +15,7 @@ import { Node, Schema } from '@tiptap/pm/model';
 import { updateYFragment } from 'y-prosemirror';
 import * as Y from 'yjs';
 import { Logger } from '@nestjs/common';
+import type { Hocuspocus } from '@hocuspocus/server';
 
 export const tiptapExtensions = documentExtensions;
 
@@ -103,7 +104,7 @@ export function jsonToText(
   // Same steps as tiptap's generateText(), minus its getSchema() on every call:
   // building the schema costs ~3.5 ms, and the embedding chunker calls this once
   // per block, so a 9000-block page blocked the event loop for ~33 s.
-  const schema = getTextSchema();
+  const schema = getDocumentSchema();
   const contentNode = Node.fromJSON(schema, tiptapJson);
   if (options?.deterministic) {
     return getText(contentNode, {
@@ -120,15 +121,20 @@ export function jsonToText(
   });
 }
 
-let textSchema: Schema | null = null;
+let documentSchema: Schema | null = null;
 
-function getTextSchema(): Schema {
-  textSchema ??= getSchema(tiptapExtensions);
-  return textSchema;
+/**
+ * The ProseMirror schema of `tiptapExtensions`, built once: building it costs
+ * milliseconds, and the text serializer, `jsonToNode` and the git-sync block
+ * merge all need it per call.
+ */
+export function getDocumentSchema(): Schema {
+  documentSchema ??= getSchema(tiptapExtensions);
+  return documentSchema;
 }
 
 export function jsonToNode(tiptapJson: JSONContent) {
-  const schema = getSchema(tiptapExtensions);
+  const schema = getDocumentSchema();
   try {
     return Node.fromJSON(schema, tiptapJson);
   } catch (error) {
@@ -146,6 +152,44 @@ export function jsonToNode(tiptapJson: JSONContent) {
 
 export function getPageId(documentName: string) {
   return documentName.split('.')[1];
+}
+
+/**
+ * Whether `documentName` is `page.<uuid>` with the page's canonical lower-case
+ * uuid — the ONE document name of a page (CO-7). `getPageId` also resolves
+ * aliases (a slugId, an upper-case uuid, any prefix), each of which hocuspocus
+ * would open as a SEPARATE Y.Doc of the same page.
+ */
+export function isCanonicalPageDocumentName(documentName: string): boolean {
+  return /^page\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    documentName,
+  );
+}
+
+/**
+ * Hocuspocus's PRIVATE debounce id of a document's pending `onStoreDocument`
+ * (`storeDocumentHooks` in @hocuspocus/server). It is not public API, so it is
+ * written down only here; a spec against a real Hocuspocus instance fails when
+ * the library changes it.
+ */
+export function storeDebounceId(documentName: string): string {
+  return `onStoreDocument-${documentName}`;
+}
+
+/**
+ * Run a document's pending DEBOUNCED store now, if one is pending: the same
+ * scheduled payload (so the edit keeps its own context/actor), with the timer
+ * cleared. Resolves `false` when nothing was pending; rejects with the store's
+ * own error (the caller logs it).
+ */
+export async function flushPendingStore(
+  instance: Hocuspocus,
+  documentName: string,
+): Promise<boolean> {
+  const id = storeDebounceId(documentName);
+  if (!instance?.debouncer?.isDebounced(id)) return false;
+  await instance.debouncer.executeNow(id);
+  return true;
 }
 
 export function isEmptyParagraphDoc(tiptapJson: JSONContent): boolean {

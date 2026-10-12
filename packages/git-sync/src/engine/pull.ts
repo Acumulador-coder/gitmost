@@ -25,6 +25,7 @@ import {
   type DeletionDecision,
 } from "./reconcile.js";
 import { stabilizePageBody } from "./stabilize.js";
+import { CycleAbortedError, throwIfAborted } from "./abort.js";
 
 // Number of pages fetched/stabilized concurrently. Bounded so a large space
 // does not open thousands of simultaneous requests/conversions at once.
@@ -265,6 +266,22 @@ export interface ExportTreeDeps {
   client: Pick<GitSyncClient, "getPageJson">;
   git: Pick<VaultGit, "hashObject" | "buildTree">;
   log: (line: string) => void;
+  /**
+   * The cycle's AbortSignal: checked before each page is fetched and handed to
+   * every conversion. An abort stops the export with a `CycleAbortedError`.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * A live page the export could not place (its fetch, its conversion — over the
+ * JSON budget, past its deadline, a converter error — or its blob write
+ * failed). It does not reach git this cycle and is retried the next.
+ */
+export interface PullFailure {
+  pageId: string;
+  /** The error message captured from the thrown error. */
+  error: string;
 }
 
 /** What one export changes in its start tree. */
@@ -301,6 +318,10 @@ export interface ExportTreeResult {
    * layout path is pinned.
    */
   failedPageIds: string[];
+  /** Pages whose fetch, conversion or blob write failed (pinned ones not counted). */
+  failed: number;
+  /** The first of the `failed` pages and its reason (absent when none failed). */
+  firstFailure?: PullFailure;
 }
 
 /**
@@ -316,7 +337,7 @@ export async function buildExportTree(
   deps: ExportTreeDeps,
   plan: ExportTreePlan,
 ): Promise<ExportTreeResult> {
-  const { client, git, log } = deps;
+  const { client, git, log, signal } = deps;
   const pinned = plan.pinned ?? new Set<string>();
   const blobs = new Map<string, string>();
   const failedPageIds = new Set<string>();
@@ -329,6 +350,8 @@ export async function buildExportTree(
     (p) => p.blob === undefined && !failedPageIds.has(p.pageId),
   );
   let written = 0;
+  let failed = 0;
+  let firstFailure: PullFailure | undefined;
   let completed = 0;
   let nextIndex = 0;
 
@@ -337,15 +360,22 @@ export async function buildExportTree(
       const page = await client.getPageJson(p.pageId);
       // Native-Obsidian format: a minimal `gitmost_id` frontmatter + the fixpoint
       // markdown body; title/parent/space are derived from the path.
-      const text = serializePageFile(page.id, await stabilizePageBody(page.content));
+      const text = serializePageFile(
+        page.id,
+        await stabilizePageBody(page.content, signal),
+      );
       blobs.set(p.pageId, await git.hashObject(text));
       written++;
     } catch (err) {
+      // An abort ends the export, it is not this page's failure.
+      if (err instanceof CycleAbortedError) throw err;
       failedPageIds.add(p.pageId);
-      log(
-        `pull: failed page ${p.pageId}: ` +
-          (err instanceof Error ? err.message : String(err)),
-      );
+      failed++;
+      const error = err instanceof Error ? err.message : String(err);
+      firstFailure ??= { pageId: p.pageId, error };
+      // Every failed page is named here; the cycle WARNs the count and the
+      // first one.
+      log(`pull: failed page ${p.pageId}: ${error}`);
     } finally {
       completed++;
       if (completed % PROGRESS_EVERY === 0) {
@@ -357,14 +387,18 @@ export async function buildExportTree(
     while (true) {
       const i = nextIndex++;
       if (i >= toFetch.length) return;
+      throwIfAborted(signal, `before exporting page ${toFetch[i].pageId}`);
       await fetchOne(toFetch[i]);
     }
   };
-  await Promise.all(
+  // Every runner is waited for, an aborted one included, so no fetch or blob
+  // write is still running when the export has stopped.
+  const runs = await Promise.allSettled(
     Array.from({ length: Math.min(CONCURRENCY, toFetch.length) || 1 }, () =>
       runner(),
     ),
   );
+  for (const run of runs) if (run.status === "rejected") throw run.reason;
 
   const placed = new Map<string, { relPath: string; blob: string }>();
   for (const p of plan.pages) {
@@ -401,5 +435,7 @@ export async function buildExportTree(
     movedApplied,
     deleted,
     failedPageIds: [...failedPageIds],
+    failed,
+    ...(firstFailure ? { firstFailure } : {}),
   };
 }

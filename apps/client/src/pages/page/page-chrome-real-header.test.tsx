@@ -38,7 +38,11 @@ vi.mock("@/features/page/queries/page-query", () => {
     isPending: false,
   });
   return {
-    usePageQuery: () => pageQueryState,
+    // A settled response here is the one this view fetched after mounting.
+    usePageQuery: () => ({
+      ...pageQueryState,
+      isFetchedAfterMount: !pageQueryState.isLoading,
+    }),
     usePageMetaQuery: () => pageQueryState,
     usePageBreadcrumbsQuery: () => ({ data: undefined }),
     useCreatePageMutation: noop,

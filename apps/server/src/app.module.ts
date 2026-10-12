@@ -34,6 +34,7 @@ import { AiModule } from './integrations/ai/ai.module';
 import { AiChatModule } from './core/ai-chat/ai-chat.module';
 import { MetricsModule } from './integrations/metrics/metrics.module';
 import { ClientTelemetryModule } from './core/telemetry/client-telemetry.module';
+import { CollabAccessPublisher } from './collaboration/collab-access-relay';
 
 const enterpriseModules = [];
 try {
@@ -111,6 +112,9 @@ try {
       provide: APP_INTERCEPTOR,
       useClass: AuditActorInterceptor,
     },
+    // The access events emitted here reach the separate collab process (see
+    // collab-access-relay.ts).
+    CollabAccessPublisher,
   ],
 })
 export class AppModule {}

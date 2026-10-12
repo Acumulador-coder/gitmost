@@ -17,11 +17,14 @@ export {
   serializeDocmostMarkdownBody,
   parseDocmostMarkdown,
   convertProseMirrorToMarkdown,
-  markdownToProseMirror,
   canonicalizeContent,
   docsCanonicallyEqual,
 } from "@docmost/prosemirror-markdown";
 export type { DocmostMdMeta } from "@docmost/prosemirror-markdown";
+// The converter's markdownToProseMirror, same signature, run on the converter
+// worker pool (input budget + deadline) so a big page never blocks the
+// caller's event loop.
+export { markdownToProseMirror } from "./engine/convert-pool.js";
 
 // Pure engine (no IO): reconcile planner, vault layout, sanitize, stabilize,
 // loop-guard body hash.
@@ -64,6 +67,7 @@ export {
   BOT_AUTHOR_EMAIL,
   DEFAULT_BRANCH,
   LAST_EXPORT_REF,
+  PUSH_BUDGET,
 } from "./engine/git.js";
 export type { DiffEntry, CommitOptions, TreeEntry } from "./engine/git.js";
 
@@ -80,6 +84,7 @@ export type {
   ExportTreeDeps,
   ExportTreePlan,
   ExportTreeResult,
+  PullFailure,
 } from "./engine/pull.js";
 
 export {
@@ -109,6 +114,9 @@ export type {
 } from "./engine/push.js";
 
 export type { Settings } from "./engine/settings.js";
+
+// What a cycle stopped by its AbortSignal throws.
+export { CycleAbortedError } from "./engine/abort.js";
 
 export { runCycle, prepareVault } from "./engine/cycle.js";
 export type {

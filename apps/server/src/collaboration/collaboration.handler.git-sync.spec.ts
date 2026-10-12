@@ -1,27 +1,18 @@
 // Exercises the REAL `gitSyncWriteBody` collab handler (the owner-routed body
-// write the data-loss fix introduces). The handler imports the editor graph via
-// collaboration.util / yjs.util (tiptapExtensions -> editor-ext -> react-dom,
-// unloadable under jest's node env, same coupling noted in
-// gitmost-datasource.service.spec.ts), so we stub those + the transformer. The
-// stubbed toYdoc builds paragraph blocks straight from the ProseMirror JSON so
-// we can assert convergence on real text.
+// write the data-loss fix introduces). The transformer is stubbed: its toYdoc
+// builds paragraph blocks straight from the ProseMirror JSON, so we can assert
+// convergence on real text; `inEditorShape` is stubbed to match (no trailing
+// paragraph or ids are added).
 jest.mock('./collaboration.util', () => ({
-  tiptapExtensions: [],
+  ...jest.requireActual('./collaboration.util'),
   inEditorShape: (json: any) => json,
-  getPageId: (name: string) => name.replace(/^page\./, ''),
-  prosemirrorNodeToYElement: jest.fn(),
-  // Same rule as the real helper: exactly one paragraph with no content.
-  isEmptyParagraphDoc: (json: any) =>
-    json?.type === 'doc' &&
-    json.content?.length === 1 &&
-    json.content[0]?.type === 'paragraph' &&
-    !json.content[0].content?.length,
 }));
 jest.mock('./yjs.util', () => ({
   setYjsMark: jest.fn(),
   updateYjsMarkAttribute: jest.fn(),
 }));
 jest.mock('@hocuspocus/transformer', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const Yjs = require('yjs');
   return {
     TiptapTransformer: {
@@ -64,6 +55,9 @@ jest.mock('@hocuspocus/transformer', () => {
 
 import * as Y from 'yjs';
 import { CollaborationHandler } from './collaboration.handler';
+
+// The page's canonical document name (gitSyncWriteBody refuses any other).
+const DOC = 'page.5b0c4e0a-3f7d-4c1e-9a2b-6d8e1f0a2c3b';
 
 const pmDoc = (...paras: string[]) => ({
   type: 'doc',
@@ -110,6 +104,7 @@ function fakeHocuspocus(initial: { text: string; id: string }[]) {
   });
 
   const openDirectConnection = jest.fn(async () => ({
+    document: shared,
     // DirectConnection.transact runs the fn directly against the Document (no
     // wrapping Y transaction), exactly like @hocuspocus/server.
     transact: async (fn: (doc: Y.Doc) => void) => fn(shared),
@@ -129,7 +124,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
     const handlers = handler.getHandlers(hocuspocus);
 
     // git changed block 1 beta -> beta2; base is the pre-change content.
-    await handlers.gitSyncWriteBody('page.x', {
+    await handlers.gitSyncWriteBody(DOC, {
       prosemirrorJson: pmDoc('alpha', 'beta2'),
       baseProsemirrorJson: pmDoc('alpha', 'beta'),
       userId: 'svc-user',
@@ -157,7 +152,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
     Y.applyUpdate(shared, Y.encodeStateAsUpdate(editor), 'editor');
 
     const handler = new CollaborationHandler();
-    await handler.getHandlers(hocuspocus).gitSyncWriteBody('page.x', {
+    await handler.getHandlers(hocuspocus).gitSyncWriteBody(DOC, {
       prosemirrorJson: pmDoc('alpha', 'beta2'),
       baseProsemirrorJson: pmDoc('alpha', 'beta'),
       userId: 'svc-user',
@@ -208,6 +203,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
       }),
     };
     const openDirectConnection = jest.fn(async () => ({
+    document: shared,
       transact: async (fn: (doc: Y.Doc) => void) => {
         order.push('merge');
         fn(shared);
@@ -217,7 +213,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
     const hocuspocus = { openDirectConnection, debouncer } as any;
 
     const handler = new CollaborationHandler();
-    await handler.getHandlers(hocuspocus).gitSyncWriteBody('page.x', {
+    await handler.getHandlers(hocuspocus).gitSyncWriteBody(DOC, {
       prosemirrorJson: pmDoc('alpha', 'beta2'), // git changes block 1
       baseProsemirrorJson: pmDoc('alpha', 'beta'),
       userId: 'svc-user',
@@ -242,7 +238,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
       executeNow,
     };
     const handler = new CollaborationHandler();
-    await handler.getHandlers(hocuspocus).gitSyncWriteBody('page.x', {
+    await handler.getHandlers(hocuspocus).gitSyncWriteBody(DOC, {
       prosemirrorJson: pmDoc('a', 'b'),
       userId: 'svc-user',
     });
@@ -256,7 +252,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
     const handler = new CollaborationHandler();
 
     await expect(
-      handler.getHandlers(hocuspocus).gitSyncWriteBody('page.x', {
+      handler.getHandlers(hocuspocus).gitSyncWriteBody(DOC, {
         prosemirrorJson: { __throw: true } as any,
         userId: 'svc-user',
       }),
@@ -276,7 +272,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
     const handler = new CollaborationHandler();
 
     await expect(
-      handler.getHandlers(hocuspocus).gitSyncWriteBody('page.x', {
+      handler.getHandlers(hocuspocus).gitSyncWriteBody(DOC, {
         prosemirrorJson: pmDoc(''),
         userId: 'svc-user',
       }),
@@ -294,7 +290,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
     const handler = new CollaborationHandler();
 
     await expect(
-      handler.getHandlers(hocuspocus).gitSyncWriteBody('page.x', {
+      handler.getHandlers(hocuspocus).gitSyncWriteBody(DOC, {
         prosemirrorJson: pmDoc(''),
         userId: 'svc-user',
       }),
@@ -308,7 +304,7 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
       const { hocuspocus } = fakeHocuspocus([{ text: 'alpha', id: 'p1' }]);
       await new CollaborationHandler()
         .getHandlers(hocuspocus)
-        .gitSyncWriteBody('page.x', { userId: 'svc-user', ...payload });
+        .gitSyncWriteBody(DOC, { userId: 'svc-user', ...payload });
       return hocuspocus.openDirectConnection.mock.calls[0][1];
     };
 
@@ -340,13 +336,48 @@ describe('CollaborationHandler.gitSyncWriteBody (owner-routed body write)', () =
     ).toBe(false);
   });
 
+  it.each([
+    'page.slug1234',
+    'page.5B0C4E0A-3F7D-4C1E-9A2B-6D8E1F0A2C3B',
+    'x.5b0c4e0a-3f7d-4c1e-9a2b-6d8e1f0a2c3b',
+  ])('refuses the non-canonical document name %s (CO-7, live untouched)', async (name) => {
+    const { hocuspocus, shared } = fakeHocuspocus([{ text: 'alpha', id: 'p1' }]);
+    await expect(
+      new CollaborationHandler().getHandlers(hocuspocus).gitSyncWriteBody(name, {
+        prosemirrorJson: pmDoc('alpha', 'beta'),
+        userId: 'svc-user',
+      }),
+    ).rejects.toThrow(/not the canonical page\.<uuid>/);
+    expect(hocuspocus.openDirectConnection).not.toHaveBeenCalled();
+    expect(texts(shared.getXmlFragment('default'))).toEqual(['alpha']);
+  });
+
+  it('an aborted signal stops the write before the merge (live untouched)', async () => {
+    const { hocuspocus, shared } = fakeHocuspocus([{ text: 'alpha', id: 'p1' }]);
+    const controller = new AbortController();
+    const reason = new Error('write deadline passed');
+    controller.abort(reason);
+
+    await expect(
+      new CollaborationHandler()
+        .getHandlers(hocuspocus)
+        .gitSyncWriteBody(
+          DOC,
+          { prosemirrorJson: pmDoc('alpha', 'beta'), userId: 'svc-user' },
+          controller.signal,
+        ),
+    ).rejects.toBe(reason);
+    expect(hocuspocus.openDirectConnection).not.toHaveBeenCalled();
+    expect(texts(shared.getXmlFragment('default'))).toEqual(['alpha']);
+  });
+
   it('falls back to a 2-way merge when no base is supplied', async () => {
     const { hocuspocus, shared, editor } = fakeHocuspocus([
       { text: 'alpha', id: 'p1' },
     ]);
     const handler = new CollaborationHandler();
 
-    await handler.getHandlers(hocuspocus).gitSyncWriteBody('page.x', {
+    await handler.getHandlers(hocuspocus).gitSyncWriteBody(DOC, {
       prosemirrorJson: pmDoc('alpha', 'gamma'),
       userId: 'svc-user',
     });

@@ -37,6 +37,7 @@ describe('#487 AiChatController.stream — gate + supersede', () => {
         end: jest.fn(),
         statusCode: 200,
         flushHeaders: jest.fn(),
+        write: jest.fn(() => true),
       },
       hijack: jest.fn(),
       status: jest.fn().mockReturnThis(),
@@ -274,12 +275,13 @@ describe('#487 AiChatController.stream — gate + supersede', () => {
     type Drive = {
       goneBeforeBegin?: boolean;
       headersSent?: boolean;
+      firstFrame?: boolean;
       close?: boolean;
     };
 
     // Run one turn: optionally mark the socket gone before begin, run begin, then
-    // (optionally) send headers and fire the response 'close'. Returns the
-    // requestStop mock.
+    // (optionally) send headers, write the first frame and fire the response
+    // 'close'. Returns the requestStop mock.
     async function runTurn(body: Record<string, unknown>, opts: Drive) {
       const { controller, aiChatService, aiChatRunService } = makeController(
         {},
@@ -292,6 +294,7 @@ describe('#487 AiChatController.stream — gate + supersede', () => {
         if (opts.goneBeforeBegin) (res.raw as any).destroyed = true;
         await runHooks.begin('c-new');
         if (opts.headersSent) res.raw.headersSent = true;
+        if (opts.firstFrame) (res.raw as any).write('data: {"type":"start"}\n\n');
         if (opts.close) onClose()();
       });
       await controller.stream(req as never, res as never, user, workspace);
@@ -311,8 +314,18 @@ describe('#487 AiChatController.stream — gate + supersede', () => {
       expect(requestStop).toHaveBeenCalledWith('run-new', 'ws1');
     });
 
-    it('keeps the run when the first frame already went out', async () => {
+    // AI-2: the headers alone (headersSent) are not the chat id — only a frame is.
+    it('stops the run when only the headers went out before the client left', async () => {
       const requestStop = await runTurn({}, { headersSent: true, close: true });
+      expect(requestStop).toHaveBeenCalledTimes(1);
+      expect(requestStop).toHaveBeenCalledWith('run-new', 'ws1');
+    });
+
+    it('keeps the run when the first frame already went out', async () => {
+      const requestStop = await runTurn(
+        {},
+        { headersSent: true, firstFrame: true, close: true },
+      );
       expect(requestStop).not.toHaveBeenCalled();
     });
 

@@ -82,6 +82,7 @@ describe('buildExportTree', () => {
       movedApplied: 1,
       deleted: 1,
       failedPageIds: [],
+      failed: 0,
     });
     const c = g.changes();
     expect(c['A.md']).toBe('---\ngitmost_id: p1\n---\n\np1\n');

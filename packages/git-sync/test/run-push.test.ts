@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runPush } from '../src/engine/push';
+import { GitStoppedError } from '../src/engine/git';
 import type { PushDeps } from '../src/engine/push';
 import type { Settings } from '../src/engine/settings';
 import { serializePageFile } from '@docmost/prosemirror-markdown';
@@ -23,9 +24,6 @@ function makeSettings(): Settings {
   return {
     docmostSpaceId: 'space-1',
     vaultPath: '/vault',
-    pollIntervalMs: 15000,
-    debounceMs: 2000,
-    logLevel: 'info',
   };
 }
 
@@ -354,5 +352,23 @@ describe('runPush --apply — applyPushActions edge branches', () => {
     expect(client.createPage).toHaveBeenCalledTimes(1);
     expect((client.createPage as any).mock.calls[0][0]).toBe('Orphan'); // title=filename
     expect(res.applied?.created).toBe(1);
+  });
+});
+
+describe('runPush — a stopped git is not an absent file', () => {
+  it('fails instead of reading a killed `git show` of a deleted file as "absent"', async () => {
+    const { git } = makeGit({
+      changes: [{ status: 'D', path: 'Doc.md' }],
+      prevTree: { 'Doc.md': fileFor('p-1') },
+    });
+    // The file is gone from HEAD (a real absence); reading its pre-image at the
+    // base is what gets killed.
+    git.showFileAtRef = vi.fn(async (ref: string) => {
+      if (ref === BASE) throw new GitStoppedError('git show was killed');
+      return null;
+    });
+    const { deps } = makeDeps(git);
+
+    await expect(runPush(deps, { dryRun: true })).rejects.toBeInstanceOf(GitStoppedError);
   });
 });
