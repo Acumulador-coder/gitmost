@@ -12,9 +12,7 @@ import {
 // The REAL StaticModule resolves the client bundle from its own compiled location
 // (apps/client/dist) and REWRITES index.html in place (window.CONFIG injection), so
 // point it at a throwaway dir: that lets the integration test below drive the actual
-// module (onModuleInit → the actual route registration + the actual catch-all
-// handler) instead of a hand-built lookalike that could not catch a regression in
-// the module itself.
+// module (onModuleInit → route registration + the catch-all handler).
 const mockClientDistPath = fs.mkdtempSync(
   join(os.tmpdir(), 'static-module-dist-'),
 );
@@ -57,8 +55,8 @@ describe('resolveStaticAssetHeaders', () => {
 });
 
 // Integration test proving the ACTUAL response header emitted by @fastify/static
-// with the exact registration options StaticModule uses. This is the regression
-// guard for #452: without `cacheControl: false`, @fastify/static writes its own
+// with the exact registration options StaticModule uses. Without
+// `cacheControl: false`, @fastify/static writes its own
 // `Cache-Control: public, max-age=0` AFTER the setHeaders callback, overwriting
 // the immutable header — the /assets/ assertion below would then fail.
 describe('static.module @fastify/static registration (integration)', () => {
@@ -189,13 +187,10 @@ describe('shouldServeSpaShell (#636)', () => {
   });
 });
 
-// End-to-end proof of the acceptance criteria against the REAL StaticModule: its
-// onModuleInit registers @fastify/static + the SPA catch-all on a real Fastify
-// instance, and every assertion below goes through the module's OWN handler. This
-// is the regression guard for the fix itself — delete the `shouldServeSpaShell`
-// gate from static.module.ts and this describe goes red. (A hand-built lookalike
-// route in the spec could not do that: it would keep passing with the module
-// broken.)
+// End-to-end check against the REAL StaticModule: its onModuleInit registers
+// @fastify/static + the SPA catch-all on a real Fastify instance, and every
+// assertion below goes through the module's OWN handler, so removing the
+// `shouldServeSpaShell` gate from static.module.ts turns this describe red.
 describe('StaticModule.onModuleInit — the real SPA catch-all (#636, integration)', () => {
   let app: FastifyInstance;
 
@@ -271,9 +266,9 @@ describe('StaticModule.onModuleInit — the real SPA catch-all (#636, integratio
     '//.well-known/oauth-protected-resource',
     '///.well-known/oauth-protected-resource',
     // A `..` smuggled in percent-encoded: Fastify decodes the `%2f` but does NOT
-    // collapse the dot-segment it creates, so `params['*']` is `/a/../.well-known/x`
-    // — a path the SPA shell used to be served for. shouldServeSpaShell resolves the
-    // dot-segments itself, which is what makes these 404.
+    // collapse the dot-segment it creates, so `params['*']` is `/a/../.well-known/x`.
+    // shouldServeSpaShell resolves the dot-segments itself, which is what makes
+    // these 404.
     '/a/..%2f.well-known/x',
     '/a/..%2F.well-known/oauth-protected-resource',
     '/a/..%2f..%2f.well-known/security.txt',
@@ -283,7 +278,7 @@ describe('StaticModule.onModuleInit — the real SPA catch-all (#636, integratio
     expect(res.headers['content-type']).toContain('application/json');
     expect(res.headers['content-type']).not.toContain('text/html');
     // The body must PARSE as JSON — this is exactly what the MCP client's
-    // discovery does, and what used to blow up on the SPA's HTML.
+    // discovery does.
     expect(JSON.parse(res.body)).toEqual({ error: 'Not found' });
     expect(res.body).not.toContain('<!doctype html>');
   });

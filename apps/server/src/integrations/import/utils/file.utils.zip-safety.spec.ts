@@ -3,8 +3,7 @@ import { isEntryPathSafe } from './file.utils';
 
 /**
  * Unit tests for isEntryPathSafe: the pure zip-slip / path-traversal guard
- * extracted from extractZipInternal. The contract reproduced from the
- * production inline check is, in order:
+ * used by extractZipInternal. The contract is, in order:
  *   1. strip leading slashes from the entry name;
  *   2. reject names that fail yauzl.validateFileName (relative `..` segments,
  *      backslashes, drive letters, etc.);

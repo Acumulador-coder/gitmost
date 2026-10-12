@@ -1,12 +1,10 @@
-// Mock collab regression for the #260 data-loss bug: the MCP must open every
-// collaboration document by the page's CANONICAL UUID (`page.<uuid>`) — the same
-// name the web editor uses — even when the agent supplies a public slugId.
+// Mock collab regression: the MCP must open every collaboration document by the
+// page's CANONICAL UUID (`page.<uuid>`) — the same name the web editor uses —
+// even when the agent supplies a public slugId.
 //
-// Root cause: the agent commonly passes a 10-char slugId (from URLs/listings) as
-// pageId. The web tab opens `page.<uuid>`, but the MCP used to pass the slugId
-// straight into the collab doc name (`page.<slugId>`), so one DB page ended up
-// with TWO independent Yjs documents whose debounced stores clobbered each other
-// — the agent's edit was silently lost on reload.
+// The agent commonly passes a 10-char slugId (from URLs/listings) as pageId.
+// Opening `page.<slugId>` would give one DB page TWO independent Yjs documents
+// whose debounced stores clobber each other, silently losing the agent's edit.
 //
 // We stand up a real Hocuspocus server (like ambiguous-node-id.test.mjs) and
 // capture the EXACT documentName each connection requests via onLoadDocument.
@@ -299,13 +297,13 @@ test("repeated slugId edits reuse ONE live collab session and resolve the UUID o
   );
 });
 
-// PR#265 reviewer finding F1. replaceImage is the one path where the resolved
+// replaceImage is the one path where the resolved
 // UUID gates BOTH (a) the collab-doc OPEN (mutateLiveContentUnlocked ->
 // page.<uuid>) AND (b) the per-page mutex key withPageLock(uuid). The lock
 // serializes the whole scan -> upload -> write against other writes to the same
-// page (which now also lock by the resolved UUID), closing a TOCTOU/orphan-
-// attachment window. A regression that re-keys this lock by the raw slugId would
-// desync it from mutatePageContent's UUID key and silently reopen that window.
+// page (which also lock by the resolved UUID), closing a TOCTOU/orphan-
+// attachment window. Keying this lock by the raw slugId would desync it from
+// mutatePageContent's UUID key and silently reopen that window.
 // This test pins both invariants and FAILS under either regression:
 //   - open by slugId  -> assertion (a) sees page.<slug> in docNames;
 //   - lock by slugId   -> assertion (b)'s UUID-keyed probe is no longer blocked.
@@ -352,7 +350,7 @@ test("replaceImage opens by the resolved UUID AND keys its page lock by that UUI
   // queued; it cannot run until the lock frees. The contention here is pure
   // in-memory promise-chain microtask scheduling (no timers, no socket I/O), so
   // a single macrotask flush is a sufficient and deterministic observation.
-  // If replaceImage were reverted to lock by the slugId, the UUID chain would be
+  // If replaceImage locked by the slugId, the UUID chain would be
   // free and this probe would run during the flush -> probeRan === true -> FAIL.
   let probeRan = false;
   const probeDone = withPageLock(UUID, async () => {

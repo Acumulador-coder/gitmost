@@ -18,7 +18,7 @@ import { envInt } from './env-int.js';
 vi.setConfig({ testTimeout: 60000 });
 
 // ---------------------------------------------------------------------------
-// #351 PR 2 — GENERATIVE round-trip over NESTED (whole-document) docs produced
+// GENERATIVE round-trip over NESTED (whole-document) docs produced
 // by the ContentMatch random walk (doc-generator.ts). The invariants mirror the
 // flat suite, plus a parser-fuzz totality property (P4):
 //
@@ -72,26 +72,6 @@ describe('#351 nested generative round-trip — generator validity', () => {
   });
 });
 
-// ── STATUS: P1/P2/P3/P4 all GREEN. The nested generator originally surfaced a
-// batch of real converter bugs; all were fixed in the serializer/parser (see the
-// #351 hand-off). For the record, the classes it found and that are now fixed:
-//   • Loose (multi-block) list items / task items / callouts / details bodies were
-//     joined with a single "\n", so every block after the first merged into the
-//     first paragraph on re-parse (silent content loss) — now blank-line separated.
-//   • Paragraph `textAlign` was dropped inside a TIGHT list item (no <p> host).
-//   • A nested codeBlock lost its trailing newline on the raw-HTML path.
-//   • Media (embed/video/youtube/drawio/excalidraw) inside `columns` churned a
-//     default `data-align` and coerced embed's numeric width/height to strings.
-//   • pageBreak / pageEmbed / subpages / transclusion were dropped when nested in
-//     blockquote / callout / details / list item (standalone-comment position).
-//   • Callouts nested in a list item or a blockquote (`  > [!type]` / `> > [!type]`)
-//     were re-parsed as plain blockquotes (prefix-unaware callout preprocessor).
-//   • Two adjacent sibling lists sharing a marker family (bulletList/taskList →
-//     `<ul>`; orderedList → `<ol>`) merged into one list on re-parse — and for the
-//     cross-type case (taskList beside bulletList) the merged `<ul>` LOST every
-//     taskItem checkbox. The serializer now emits a `<!-- -->` separator between
-//     such adjacent lists (markdown-converter.ts renderBlockChildren), so they stay
-//     distinct and round-trip; the generator therefore emits them freely again.
 describe('#351 nested generative round-trip — properties', () => {
   it('P1 — semantic round-trip: docsCanonicallyEqual(mdToPm(pmToMd(d)), d)', async () => {
     await fc.assert(

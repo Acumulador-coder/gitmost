@@ -7,9 +7,8 @@ import {
 
 // ---------------------------------------------------------------------------
 // Media / atom node round-trip coverage (audio, video, pdf, attachment, embed,
-// youtube). The existing specs (corpus + property test) exercise the EXPORT
-// direction of these nodes only; their parseHTML branches (the INVERSE parse of
-// the exported HTML) are otherwise unprotected. Each test runs the full
+// youtube), covering their parseHTML branches (the INVERSE parse of the
+// exported form), which the corpus + property tests do not. Each test runs the full
 // export -> import -> export pipeline and pins:
 //   - the exact md1 byte string the converter emits,
 //   - whether md2 is byte-stable (md2 === md1) or grows by a materialized
@@ -52,7 +51,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8 image-form: `![](src)` + the ALWAYS-emitted `audio`
+    // Image-form: `![](src)` + the ALWAYS-emitted `audio`
     // discriminator carrying the other attrs as JSON (numerics stringified).
     expect(md1).toBe('![](/a.mp3)<!--audio {"attachmentId":"att-7","size":"9001"}-->');
     // Byte-stable: a second export reproduces the first exactly.
@@ -87,7 +86,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8 image-form: align="center" (the schema default) is OMITTED,
+    // Image-form: align="center" (the schema default) is OMITTED,
     // so the whole optional set except align rides in the `video` comment JSON.
     expect(md1).toBe(
       '![](/v.mp4)<!--video {"alt":"clip","attachmentId":"att-1","width":"640","height":"480","size":"1234","aspectRatio":"1.777"}-->',
@@ -113,7 +112,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     const doc = mkDoc([{ type: 'video', attrs: { src: '/v.mp4' } }]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8: the comment is the type discriminator, so it is emitted even
+    // The comment is the type discriminator, so it is emitted even
     // with no extra attrs (name-only). Without it a bare `![](src)` would be read
     // as an `image`. align="center" default is omitted, so the form is byte-stable
     // (unlike the old div-form, which gained data-align="center" on import).
@@ -139,7 +138,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8 link-form: `[name](src)` + the `pdf` discriminator; the id
+    // Link-form: `[name](src)` + the `pdf` discriminator; the id
     // link (attachmentId) is data-loss-critical and rides in the comment JSON.
     expect(md1).toBe('[d.pdf](/d.pdf)<!--pdf {"attachmentId":"att-9"}-->');
     expect(md2).toBe(md1);
@@ -171,7 +170,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8 link-form: url is the target, name the visible text, and
+    // Link-form: url is the target, name the visible text, and
     // mime/size/attachmentId ride in the `attachment` discriminator comment.
     expect(md1).toBe(
       '[f.zip](/f.zip)<!--attachment {"mime":"application/zip","size":"512","attachmentId":"att-3"}-->',
@@ -207,7 +206,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8 link-form: provider is the visible text; the non-default
+    // Link-form: provider is the visible text; the non-default
     // align/width/height (defaults center/800/600) ride in the comment JSON.
     expect(md1).toBe(
       '[iframe](https://x.com/e)<!--embed {"align":"left","width":"600","height":"400"}-->',
@@ -231,7 +230,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8: align/width/height are all at their schema defaults
+    // Align/width/height are all at their schema defaults
     // (center/800/600), so the discriminator is name-only. Unlike the old
     // div-form (which grew three data-* attrs on import), the md-form OMITS the
     // defaults on BOTH exports, so it is byte-stable from export #1.
@@ -264,7 +263,7 @@ describe('media atom round-trip (audio/video/pdf/attachment/embed/youtube)', () 
     ]);
     const { md1, md2, doc2 } = await roundTrip(doc);
 
-    // #293 canon #8 image-form: width/height ride in the `youtube` comment.
+    // Image-form: width/height ride in the `youtube` comment.
     expect(md1).toBe(
       '![](https://youtu.be/abc)<!--youtube {"width":"560","height":"315"}-->',
     );

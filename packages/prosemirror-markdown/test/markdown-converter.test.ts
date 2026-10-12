@@ -60,7 +60,7 @@ describe('convertProseMirrorToMarkdown', () => {
     });
 
     it('code + another mark nests the code span INSIDE the emphasis (#515)', () => {
-      // #515: the schema's `code` mark no longer declares `excludes: "_"`, so a
+      // The schema's `code` mark does not declare `excludes: "_"`, so a
       // run legitimately carries code together with bold (CommonMark parses
       // ``**`x`**`` as <strong><code>x</code></strong>). The backtick span is the
       // INNERMOST wrapper and the other marks are applied around it, in the
@@ -413,7 +413,7 @@ describe('convertProseMirrorToMarkdown', () => {
       const out = convertProseMirrorToMarkdown(
         doc(para({ type: 'mathInline', attrs: { text: 'a < b' } })),
       );
-      // #293 canon #6: readable `$…$` form; the LaTeX is verbatim (no HTML
+      // Readable `$…$` form; the LaTeX is verbatim (no HTML
       // attribute escaping of < or & in the fence form).
       expect(out).toBe('$a < b$');
       expect(out).not.toContain('&lt;');
@@ -424,7 +424,7 @@ describe('convertProseMirrorToMarkdown', () => {
       const out = convertProseMirrorToMarkdown(
         doc({ type: 'mathBlock', attrs: { text: 'x > y & z' } }),
       );
-      // #293 canon #6: `$$\n<latex>\n$$`. The LaTeX is verbatim inside the fence
+      // `$$\n<latex>\n$$`. The LaTeX is verbatim inside the fence
       // (plain markdown, so & is NOT entity-escaped as it would be in an attr).
       expect(out).toBe('$$\nx > y & z\n$$');
       expect(out).not.toContain('&amp;');
@@ -455,7 +455,7 @@ describe('convertProseMirrorToMarkdown', () => {
           attrs: { url: '/files/x.zip', name: 'x.zip', mime: 'application/zip', size: 99 },
         }),
       );
-      // #293 canon #8: url is the markdown target, name is the visible link text,
+      // url is the markdown target, name is the visible link text,
       // and every other attr rides in the ALWAYS-emitted `attachment` comment.
       expect(out).toBe(
         '[x.zip](/files/x.zip)<!--attachment {"mime":"application/zip","size":"99"}-->',
@@ -561,8 +561,8 @@ describe('convertProseMirrorToMarkdown', () => {
       // indented exactly 4 spaces (prefix.length 3 + 1), NOT 3. Block children are
       // blank-line separated (loose list) per the #351 fix.
       expect(out).toContain('10. j\n\n    1. x');
-      // Guard against the off-by-one (3-space) regression that would re-parse
-      // the sublist as loose/sibling content on import.
+      // A 3-space indent under "10." would re-parse the sublist as
+      // loose/sibling content on import.
       expect(out).not.toContain('10. j\n\n   1. x');
       // And the single-digit items keep the narrower 3-column marker (no body
       // continuation here, but the marker itself must stay "1. ".."9. ").

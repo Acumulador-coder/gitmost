@@ -4,15 +4,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-// Issue #449, invariant 2 ("no-await-окно"): the atomicity of the
+// Invariant: the atomicity of the
 // read -> transform -> write section in CollabSession.mutate depends on there
 // being NO `await` (nor any other async yield point) between
 // `TiptapTransformer.fromYdoc` and `applyDocToFragment`. Yjs applies queued
 // remote updates only when the event loop yields, so an accidental await in that
-// window would let a concurrent human edit interleave and be clobbered (#152).
+// window would let a concurrent human edit interleave and be clobbered.
 //
-// That was an invariant enforced only by a comment. This test turns a violation
-// RED: it reads the SOURCE of collab-session.ts, extracts the block delimited by
+// This test reads the SOURCE of collab-session.ts, extracts the block delimited by
 // the machine-readable BEGIN/END markers, and asserts no async boundary appears
 // inside it. Introducing an `await` (or `for await`, or `yield`) between the
 // markers fails this test.

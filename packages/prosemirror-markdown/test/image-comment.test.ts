@@ -5,15 +5,15 @@ import { convertProseMirrorToMarkdown } from '../src/lib/markdown-converter.js';
 import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 
 // ---------------------------------------------------------------------------
-// #293 canon #4: images ALWAYS serialize as `![alt](src)`. Non-default attrs
+// Images ALWAYS serialize as `![alt](src)`. Non-default attrs
 // ride along in an attached `<!--img {…}-->` comment on the SAME line, which the
 // importer materializes back onto the <img> before generateJSON drops it. An
 // attr equal to the schema default is NOT emitted. The image align default is
-// unified to "center" (matching editor-ext), so bare/center images stay clean
+// "center" (matching editor-ext), so bare/center images stay clean
 // and only a genuinely non-default alignment (left/right) emits a comment.
 //
-// In raw-HTML contexts (inside a column / spanned cell) the prior `<img …>` form
-// is kept; comments are dropped by the DOM parse stage there.
+// In raw-HTML contexts (inside a column / spanned cell) the `<img …>` form is
+// used; comments are dropped by the DOM parse stage there.
 // ---------------------------------------------------------------------------
 
 const doc = (...nodes: any[]) => ({ type: 'doc', content: nodes });
@@ -166,7 +166,7 @@ describe('#293 canon #4 — image serialization + attached img-comment', () => {
     expect(img.attrs.caption).toBe('Рис. 1');
   });
 
-  // MANDATORY (#293 canon #4): a caption containing the comment-closing `-->`
+  // MANDATORY: a caption containing the comment-closing `-->`
   // must be encoded so it can never break the HTML comment; JSON.parse restores
   // it byte-exact on import.
   it('a caption containing `-->` is escaped, does not break the comment, and round-trips byte-exact', async () => {

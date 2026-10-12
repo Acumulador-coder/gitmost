@@ -1,4 +1,4 @@
-// #487 F4 — the WRITE-side cancellation safe-point.
+// The WRITE-side cancellation safe-point.
 //
 // Every content-mutating collab write (collaboration.mutatePageContent and the
 // reentrant twin client.mutateLiveContentUnlocked used by replaceImage) checks

@@ -34,7 +34,7 @@ async function run() {
     console.error("Uncaught exception:", error);
   });
 
-  // Teardown hook (issue #400): destroy every cached live CollabSession on exit
+  // Teardown hook: destroy every cached live CollabSession on exit
   // so a hanging session does not keep a doc loaded on the server (which would
   // also defer the server's afterUnloadDocument cleanup). `exit` runs the
   // synchronous idempotent teardown; SIGINT/SIGTERM also run it, then exit.

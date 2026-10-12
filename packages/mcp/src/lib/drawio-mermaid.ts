@@ -1,6 +1,5 @@
-// Pure Mermaid `flowchart` -> graph-JSON parser for `drawioFromMermaid` (issue
-// #425, stage 3, OPTIONAL). The escape clause in the issue: convert WITHOUT
-// Electron/draw.io-CLI, so a pure text parser only. It handles the common wiki
+// Pure Mermaid `flowchart` -> graph-JSON parser for `drawioFromMermaid`: a pure
+// text parser, no Electron/draw.io-CLI. It handles the common wiki
 // flowchart subset — node shapes, labelled/dashed edges, subgraphs (-> groups),
 // and the direction header — and emits a Graph the drawioFromGraph pipeline
 // renders as an EDITABLE draw.io diagram. Anything beyond flowchart (sequence /

@@ -4,10 +4,10 @@ import assert from "node:assert/strict";
 import { searchInDoc } from "../../build/lib/page-search.js";
 
 // ---------------------------------------------------------------------------
-// #659: searchInPage (literal mode) must match text THROUGH invisible characters
+// searchInPage (literal mode) must match text THROUGH invisible characters
 // — soft hyphen U+00AD, NBSP, zero-width chars and collapsed whitespace runs —
-// exactly like editPageText already does after #658, while keeping plain-text
-// matches byte-identical to the pre-#659 output. Regex mode does NOT fold.
+// exactly like editPageText does, while plain-text matches stay byte-identical
+// to the unfolded result. Regex mode does NOT fold.
 // ---------------------------------------------------------------------------
 
 const SHY = "­"; // U+00AD soft hyphen (deleted by the fold)
@@ -65,8 +65,8 @@ test("#659 zero-width space is folded like SHY", () => {
   assert.equal(res.matches[0].match, `ab${ZWSP}cd`);
 });
 
-// Criterion 3 (regression): plain text with no invisibles is byte-identical to
-// the current behavior — same hits AND no `folded` field.
+// Plain text with no invisibles gets the unfolded result — same hits AND no
+// `folded` field.
 test("#659 plain text regression: no invisibles -> byte-identical hits, no folded flag", () => {
   const d = doc(
     para("p1", text("The cat sat on the cat mat.")),
@@ -116,7 +116,7 @@ test("#659 case-only difference does NOT set folded", () => {
 });
 
 // Criterion 5: regex mode does NOT fold — a plain pattern does not match across
-// a SHY-separated string (behaves exactly as before #659).
+// a SHY-separated string.
 test("#659 regex mode does not fold: plain pattern misses a SHY-separated run", () => {
   const d = doc(para("p1", text(`в люд${SHY}ях`)));
   // Literal mode finds it (fold); regex mode does not.
@@ -152,7 +152,7 @@ test("#659 empty fold-guard: a SHY-only query raises the empty-query error", () 
   assert.throws(() => searchInDoc(d, `${SHY}${ZWSP}`), /query is empty/i);
 });
 
-// Consistency with editPageText (#658): a single folded pass finds plain AND
+// Consistency with editPageText: a single folded pass finds plain AND
 // folded occurrences without double-counting overlaps. A query that occurs once
 // clean and once folded in a block reports total:2 (not 3).
 test("#659 no exact-vs-fold double counting within a block", () => {

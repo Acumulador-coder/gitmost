@@ -1,5 +1,5 @@
 /**
- * #647 §G/§H — thrown by the guarded page-content writes (`updatePageJson` /
+ * Thrown by the guarded page-content writes (`updatePageJson` /
  * `updatePageMarkdown`) when the server-side write-CAS rejects the write because
  * the page changed since the agent read it (HTTP 409 from `/pages/update`).
  *

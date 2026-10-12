@@ -370,7 +370,7 @@ test("#494: evicting a busy session when all are busy rejects the write as INDET
   });
 });
 
-// #494 — a session whose open() has NOT resolved yet (state "connecting") sits in
+// A session whose open() has NOT resolved yet (state "connecting") sits in
 // the registry between `sessions.set(key)` and `await session.open()`, but it is
 // NOT an idle eviction victim: its write has not even started, and a parallel
 // acquire for a DIFFERENT page that interleaves across that await must not destroy
@@ -476,20 +476,18 @@ test("replaceImage-shaped flow: acquire under an EXTERNAL page lock does not dea
   );
 });
 
-// --- #439: the collab-token cache is what makes the session cache ACTUALLY hit ---
+// --- the collab-token cache is what makes the session cache ACTUALLY hit ---
 //
-// WHY these two tests exist (the #435 incident): the session registry keys on
-// (wsUrl, pageId, token) for identity isolation, but BOTH production token
-// sources mint a FRESH JWT on every call (the in-app provider re-signs a JWT
-// whose iat/exp changes every second; the external MCP POSTs /auth/collab-token
-// per call). The fresh token per call made the session-registry key unstable,
-// so the prod hit-rate was 0% — connect storms, 25s timeouts, zombie sessions —
-// while every other test in this file stayed green because they pass a FIXED
-// "tok" string. The #439 fix is the per-client collab-token cache
-// (DocmostClient.getCollabTokenWithReauth + MCP_COLLAB_TOKEN_TTL_MS); these
-// tests drive the token through it with a source that returns a DIFFERENT
-// fresh JWT per mint, exactly like prod, so a regression in EITHER the token
-// cache or the registry keying turns them red.
+// The session registry keys on (wsUrl, pageId, token) for identity isolation,
+// but BOTH production token sources mint a FRESH JWT on every call (the in-app
+// provider re-signs a JWT whose iat/exp changes every second; the external MCP
+// POSTs /auth/collab-token per call). Without the per-client collab-token cache
+// (DocmostClient.getCollabTokenWithReauth + MCP_COLLAB_TOKEN_TTL_MS) the key is
+// unstable and the session cache never hits — which the other tests in this
+// file cannot see because they pass a FIXED "tok" string. These tests drive the
+// token through the cache with a source that returns a DIFFERENT fresh JWT per
+// mint, like prod, so a regression in EITHER the token cache or the registry
+// keying turns them red.
 //
 // getCollabTokenWithReauth is TS-private, but the compiled JS exposes it; the
 // tests call it directly because that is exactly the per-op composition of the
@@ -552,7 +550,7 @@ test("#439 negative control: token cache OFF (TTL=0) reproduces the #435 churn �
     "a full reconnect per op — the #435 storm in miniature",
   );
   // The first session lingers under its now-unreachable key until its idle
-  // TTL — the zombie-session symptom of the incident.
+  // TTL (a zombie session).
   assert.equal(__sessionCountForTests(), 2);
 });
 

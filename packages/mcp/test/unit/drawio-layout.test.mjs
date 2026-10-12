@@ -1,4 +1,4 @@
-// Unit tests for the ELK auto-layout (issue #424, part 4). Acceptance #3: a
+// Unit tests for the ELK auto-layout. A
 // 10+ node graph with rough/overlapping coordinates, laid out with ELK, has no
 // bbox overlaps and produces no quality warnings.
 import { test } from "node:test";

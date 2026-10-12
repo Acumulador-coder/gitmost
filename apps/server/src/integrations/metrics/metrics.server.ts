@@ -39,7 +39,7 @@ let metricsServer: Server | null = null;
 /**
  * Interface the metrics endpoint binds to. Defaults to LOOPBACK (127.0.0.1) so
  * the unauthenticated `/metrics` surface is NOT exposed on all interfaces by
- * default — the old `0.0.0.0` bind put an auth-less endpoint on every interface.
+ * default.
  * Deployments where the scraper runs in a SEPARATE container (and reaches this as
  * `docmost:9464`) set `METRICS_BIND=0.0.0.0`, ideally together with METRICS_TOKEN
  * and/or a private network so the port is not world-readable.

@@ -1,5 +1,5 @@
-// Unit tests for the drawioShapes verified-stencil catalog (issue #424).
-// Covers acceptance #1: a "lambda" query returns a valid mxgraph.aws4 icon with
+// Unit tests for the drawioShapes verified-stencil catalog: a "lambda" query
+// returns a valid mxgraph.aws4 icon with
 // the right service/resource pattern + sizes; a blocklisted stencil query
 // returns its working replacement.
 import { test } from "node:test";

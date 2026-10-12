@@ -51,7 +51,7 @@ export interface AttrMatrixEntry {
   /** A representative NON-default value to exercise (must survive verbatim). */
   nonDefault: unknown;
   /**
-   * Marks the attr as a member of the EMPTY-STRING class the fix targets: a
+   * Marks the attr as a member of the EMPTY-STRING class: a
    * string attr whose schema default is `null`/absent and whose parseHTML
    * coerces `"" -> default` (image `alt`, video `alt` via aria-label,
    * pdf/attachment `name`, attachment `mime`). Set true to also
@@ -300,10 +300,10 @@ export function unstableCombos(report: MatrixReport): ComboResult[] {
 // types an alt in the editor, then deletes it, and Tiptap's
 // `updateAttributes({ alt: "" })` persists a literal `alt: ""` in the stored
 // JSON. There is no absent-vs-"" distinction in the DOM once serialized, so the
-// fix's `getAttribute("alt") || null` coercion canonicalizes BOTH to the
-// default (`null`).
+// `getAttribute("alt") || null` coercion canonicalizes BOTH to the default
+// (`null`).
 //
-// Consequence — and this is CORRECT, not a bug: a doc carrying an explicit `""`
+// Consequence (intended): a doc carrying an explicit `""`
 // converges to the default on the FIRST round-trip (a ONE-TIME diff: `"" ->
 // null`), then is byte-stable from the SECOND round-trip on (idempotent). So
 // this state must be pinned with a DIFFERENT contract than the matrix's:
@@ -312,9 +312,8 @@ export function unstableCombos(report: MatrixReport): ComboResult[] {
 //   - DO assert the first pass converges to the default AND the second pass is
 //     idempotent (rt2 deep-equals rt1).
 //
-// A future sync/QA pass diffing stored pages will see this one-time `"" -> null`
-// normalization exactly once per affected node; it is the converter canon, not
-// corruption, and must not be flagged as data loss.
+// A sync diffing stored pages sees this `"" -> null` normalization once per
+// affected node; it is not data loss.
 // ---------------------------------------------------------------------------
 
 /** Result of the third-state ("explicit empty string") convergence probe. */

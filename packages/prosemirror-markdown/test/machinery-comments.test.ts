@@ -6,7 +6,7 @@ import { convertProseMirrorToMarkdown } from '../src/lib/markdown-converter.js';
 import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 import { standaloneCommentFor } from '../src/lib/attached-comment.js';
 
-// #293 canon decision #5: `subpages` and `pageBreak` serialize as STANDALONE
+// `subpages` and `pageBreak` serialize as STANDALONE
 // HTML comments on their own line —
 //   <!--subpages-->            <!--subpages {"recursive":true}-->   <!--pagebreak-->
 // — invisible in any markdown renderer, yet round-tripping (the importer
@@ -146,11 +146,10 @@ describe('position legality / fail-open (#293 #5)', () => {
 });
 
 describe('multi-node document order across standalone comments (#293 #5)', () => {
-  // The riskiest part of the parser change: a LEADING standalone comment is
-  // parsed at document level (outside <body>) and must be re-inserted into the
-  // body in document order, interleaved correctly with real block content. A
-  // MID-document comment (pageBreak here) exercises the in-body branch. This
-  // locks the ordering the review flagged as covered only by manual checks.
+  // A LEADING standalone comment is parsed at document level (outside <body>)
+  // and must be re-inserted into the body in document order, interleaved
+  // correctly with real block content. A MID-document comment (pageBreak here)
+  // exercises the in-body branch.
   const topTypes = (d: any) => (d.content || []).map((n: any) => n.type);
 
   it('leading + mid + trailing standalone comments keep document order', async () => {

@@ -1,4 +1,4 @@
-// Pure-TS schematic SVG preview for draw.io diagrams (issue #423, stage 1).
+// Pure-TS schematic SVG preview for draw.io diagrams.
 //
 // HARD CONSTRAINT: no backend rendering. This is a dependency-free string
 // builder — given the parsed mxGraph cells it draws a rough schematic (rects,

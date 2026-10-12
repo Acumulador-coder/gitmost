@@ -1,13 +1,11 @@
-// Shared client context + core seams (issue #450). The abstract base of the
-// DocmostClient mixin chain: it owns ALL shared instance state (the axios
-// client, apiUrl, auth tokens, the resolvePageId cache, the collab-token cache,
-// the sandbox/metrics sinks) and the core HTTP/auth/pagination/write seams every
-// domain module builds on. Domain modules are mixins layered on top; the final
-// DocmostClient (client.ts) assembles them. Extracted VERBATIM from the original
-// monolith — only field/seam visibility was widened from `private` to
-// `protected` so sibling mixins can reach the shared state through `this`, and
-// the cross-module methods that live in other mixins are declared `abstract`
-// here so `this.<method>` type-checks. No behaviour changed.
+// Shared client context: the abstract base of the DocmostClient mixin chain.
+// It owns all shared instance state (the axios client, apiUrl, auth tokens, the
+// resolvePageId and collab-token caches, the sandbox/metrics sinks) and the core
+// HTTP/auth/pagination/write seams every domain module builds on. Domain modules
+// are mixins layered on top and client.ts assembles them. Fields are `protected`
+// so sibling mixins reach the shared state through `this`, and cross-module
+// methods that live in other mixins are declared `abstract` here so
+// `this.<method>` type-checks.
 import axios, { AxiosInstance } from "axios";
 import FormData from "form-data";
 import {
@@ -33,7 +31,7 @@ import {
 } from "./errors.js";
 import { GetPageConversionCache } from "./getpage-cache.js";
 
-// A generic mixin base constructor (issue #450). Each domain mixin is a factory
+// A generic mixin base constructor. Each domain mixin is a factory
 // `<T extends GConstructor<DocmostClientContext>>(Base: T) => class extends Base`
 // so the mixins compose into one prototype chain sharing this context.
 export type GConstructor<T = {}> = abstract new (...args: any[]) => T;
@@ -50,8 +48,8 @@ export type GConstructor<T = {}> = abstract new (...args: any[]) => T;
  * returns INSTEAD of calling `POST /auth/collab-token`. The internal per-user
  * agent path uses this to hand the client a provenance collab token (signed
  * `actor:'agent'`+`aiChatId`), so agent content edits are attributed without a
- * spoofable client-side field. When absent the client keeps the original
- * `/auth/collab-token` path (service-account/stdio unchanged).
+ * spoofable client-side field. When absent the client calls
+ * `/auth/collab-token` (service-account/stdio).
  *
  * Housed here (not in index.ts) so client.ts has no type dependency on index.ts;
  * index.ts re-exports it for the package's public surface.
@@ -74,15 +72,14 @@ export type DocmostMcpConfig = { apiUrl: string } & (
     // Optional blob sandbox sink. Present only where the stash tool is wired;
     // when absent, stashPage throws a clear "not configured" error. The
     // optional `has`/`evict` probes let stashPage keep its mirror counts honest
-    // under the store's FIFO eviction (see stashPage); older sinks omit them.
+    // under the store's FIFO eviction (see stashPage).
     //
-    // `maxBytes` / `maxImageBytes` (#613) are the sink's REAL per-blob caps —
-    // the host reads them from its own configuration (on the Docmost server:
-    // SANDBOX_MAX_BYTES / SANDBOX_MAX_IMAGE_BYTES, which an operator may raise)
-    // and passes them in, so downloadFile pre-checks and error messages quote
-    // the values the sink will ACTUALLY enforce instead of a compile-time guess.
-    // Omitted by a standalone/stdio host (or an older binding) → downloadFile
-    // falls back to the upstream DEFAULTS (8 MiB / 20 MiB).
+    // `maxBytes` / `maxImageBytes` are the sink's real per-blob caps — the host
+    // reads them from its own configuration (on the Docmost server:
+    // SANDBOX_MAX_BYTES / SANDBOX_MAX_IMAGE_BYTES) and passes them in, so
+    // downloadFile pre-checks and error messages quote the limits the sink
+    // actually enforces. Omitted by a standalone/stdio host → downloadFile uses
+    // the upstream defaults (8 MiB / 20 MiB).
     sandbox?: {
       put: SandboxPut;
       has?: (uri: string) => boolean;
@@ -103,28 +100,24 @@ export type DocmostMcpConfig = { apiUrl: string } & (
 
 
 /**
- * Collab-token cache TTL in milliseconds (issue #435). Read fresh from the
- * environment on every mint — like collab-session.ts readConfig — so tests and a
- * live rollback can change it without reloading the module.
+ * Collab-token cache TTL in milliseconds. Read from the environment on every
+ * mint — like collab-session.ts readConfig — so tests can change it without
+ * reloading the module.
  *
- * Why a cache at all: the live CollabSession registry (#400/#431) keys sessions
- * on (wsUrl, pageId, collabToken) for identity isolation (invariant 4). But BOTH
- * collab-token sources mint a FRESH token per mutation — the in-app provider
- * re-signs a JWT whose iat/exp (seconds) changes every second, and the external
- * MCP POSTs /auth/collab-token each call — so the token in the key changed on
- * every op and the session was almost never reused (connect-storms, 25s
- * timeouts, zombie sessions). Caching the token per-client keeps the key stable
- * across a burst of mutations so ONE session is reused.
+ * The CollabSession registry keys sessions on (wsUrl, pageId, collabToken) for
+ * identity isolation, but both collab-token sources mint a fresh token per
+ * mutation (the in-app provider re-signs a JWT whose iat/exp change every
+ * second; the external MCP POSTs /auth/collab-token each call). Caching the
+ * token per client keeps the key stable across a burst of mutations so one
+ * session is reused.
  *
- * Default 5 min: well under the 24h collab-token lifetime AND <= the collab
- * session max-age (10 min, MCP_COLLAB_SESSION_MAX_AGE_MS), so the
- * permission-staleness window is not widened beyond what #431 already accepted.
- * The rollback knob is an EXPLICIT 0 (or a negative number): that DISABLES the
- * cache — an exact fetch-per-call legacy path, mirroring how idleMs<=0 disables
- * the session cache. Unset OR unparseable (e.g. a typo like "5min", "abc") falls
- * back to the 5-min default with the cache ON — parseInt yields NaN, which is
- * treated as "not configured", not as "disabled". So to turn the cache off you
- * must set the value to exactly 0, not to garbage.
+ * Default 5 min: well under the 24h collab-token lifetime and <= the collab
+ * session max-age (10 min, MCP_COLLAB_SESSION_MAX_AGE_MS), so it does not widen
+ * the permission-staleness window. An explicit 0 (or a negative number)
+ * disables the cache (fetch per call), mirroring how idleMs<=0 disables the
+ * session cache. Unset or unparseable (e.g. "5min") falls back to the 5-min
+ * default with the cache on — parseInt yields NaN, treated as "not configured".
+ * To turn the cache off, set exactly 0.
  */
 function readCollabTokenTtlMs(): number {
   const raw = parseInt(process.env.MCP_COLLAB_TOKEN_TTL_MS ?? "", 10);
@@ -132,9 +125,9 @@ function readCollabTokenTtlMs(): number {
 }
 
 /**
- * Accessible-space index cache TTL in milliseconds (issue #534). Read fresh from
- * the environment on every access — mirroring readCollabTokenTtlMs above — so a
- * test or a live rollback can change it without reloading the module.
+ * Accessible-space index cache TTL in milliseconds. Read from the environment on
+ * every access — like readCollabTokenTtlMs above — so tests can change it
+ * without reloading the module.
  *
  * The index (see getAccessibleSpaceIndex) is fetched ONLY on the enrich-on-404
  * slow path to turn an opaque "Space permissions not found" 404 into a factual
@@ -150,7 +143,7 @@ function readSpacesCacheTtlMs(): number {
 }
 
 /**
- * #654 — read-your-own-writes window in milliseconds. After a write to page P
+ * Read-your-own-writes window in milliseconds. After a write to page P
  * the client marks P `recentlyWritten` for this long; a structural read of P
  * within the window sets the `preferLive` hint so the server serves the live
  * (acked-but-maybe-unflushed) content instead of the debounce-stale DB row.
@@ -158,8 +151,8 @@ function readSpacesCacheTtlMs(): number {
  * Default 60_000 (> Hocuspocus maxDebounce=45_000 + slack): once the window
  * lapses the DB row is guaranteed to reflect the store, so the hint is pointless
  * and is dropped (the read reverts to the cheap DB path, no owner probe). Read
- * fresh from the env on every access (mirroring the caches above) so a rollback
- * can change it without reloading the module. Unset/unparseable (NaN) or a
+ * fresh from the env on every access (like the caches above) so it can change
+ * without reloading the module. Unset/unparseable (NaN) or a
  * non-positive value falls back to the 60s default.
  */
 function readRyowWindowMs(): number {
@@ -224,7 +217,7 @@ export abstract class DocmostClientContext {
   // resolvePageId), so only slugId->uuid entries are stored/read here.
   protected pageIdCache = new Map<string, string>();
 
-  // #654 — recently-written pages for read-your-own-writes: maps a page's
+  // Recently-written pages for read-your-own-writes: maps a page's
   // canonical UUID to the wall-clock time its RYOW window EXPIRES. Written by
   // rememberWrite on every content mutation whose verify reports a real change;
   // read by shouldPreferLive to decide the opt-in `preferLive` freshness hint.
@@ -234,16 +227,16 @@ export abstract class DocmostClientContext {
   // so the map cannot grow unbounded on a long-lived stdio client.
   protected recentlyWritten = new Map<string, number>();
 
-  // Collab-token cache (issue #435): the last minted collab token plus the
-  // wall-clock time it was minted, so a burst of content mutations reuses ONE
-  // token and therefore ONE live CollabSession (whose registry key includes the
-  // token — #400 invariant 4). Per-instance: a DocmostClient is built per
-  // user/per chat request, so a cached token can never leak across identities.
-  // Reset whenever the client's identity changes (login() / this.token cleared);
-  // bypassed on a forced refresh (the 401/403 reauth path). null = no token yet.
+  // Collab-token cache: the last minted collab token plus the wall-clock time it
+  // was minted, so a burst of content mutations reuses one token and therefore
+  // one live CollabSession (whose registry key includes the token). Per-instance:
+  // a DocmostClient is built per user/per chat request, so a cached token can
+  // never leak across identities. Reset whenever the client's identity changes
+  // (login() / this.token cleared); bypassed on a forced refresh (the 401/403
+  // reauth path). null = no token yet.
   protected collabTokenCache: { token: string; mintedAt: number } | null = null;
 
-  // Accessible-space index cache + single-flight (issue #534). TWO separate
+  // Accessible-space index cache + single-flight. TWO separate
   // fields, mirroring loginPromise (in-flight dedup) vs collabTokenCache
   // (persistent value):
   //   - spaceIndexCache: the last SUCCESSFULLY-FETCHED, COMPLETE index plus the
@@ -264,35 +257,34 @@ export abstract class DocmostClientContext {
   } | null = null;
   protected spaceIndexInFlight: Promise<AccessibleSpaceIndex> | null = null;
 
-  // Content-addressed conversion cache for getPage (issue #479). Keyed on
+  // Content-addressed conversion cache for getPage. Keyed on
   // (canonical pageId, updatedAt, optionsHash) -> the converted Markdown, so a
   // re-read of an UNCHANGED page skips the expensive convertProseMirrorToMarkdown
   // tree walk. Per-instance (a DocmostClient is built per user / per chat), so a
   // cached conversion can never leak across identities. See getpage-cache.ts.
   protected getPageCache = new GetPageConversionCache();
 
-  // #487: an OPTIONAL abort signal the in-app tool host sets before each tool
-  // call (a composite of the turn's Stop signal + a per-call wall-clock cap). It
-  // is checked at safe-points BETWEEN the sequential HTTP calls of a paginated
-  // read (paginateAll) and just before the atomic collab commit of a write (the
+  // An optional abort signal the in-app tool host sets before each tool call (a
+  // composite of the turn's Stop signal + a per-call wall-clock cap). It is
+  // checked at safe-points between the sequential HTTP calls of a paginated read
+  // (paginateAll) and just before the atomic collab commit of a write (the
   // mutatePage/replacePage/mutateLiveContentUnlocked seams), so a Stop / cap
-  // stops the NEXT network call from STARTING. An already-started single call may
-  // still land — a documented limitation (#487).
+  // stops the next network call from starting. An already-started single call
+  // may still land.
   //
-  // SINGLE-WRITER by phase-1 assumption: exactly one DocmostClient is built per
-  // turn and shared by every tool call; the host sets this per call and does NOT
-  // restore the prior value on unwind (set-and-leave) — a fresh client per turn
-  // plus overwrite-by-the-next-call keeps it correct, and leaving a settled
-  // call's signal in place is what makes a discarded race-loser throw on its
-  // next safe-point. If the model emits PARALLEL in-app
-  // tool calls they share this one field, so the per-call CAP of one call is not
-  // guaranteed to bound another's in-flight pagination — but every composite the
-  // host sets carries the SAME turn Stop signal, so a Stop still aborts whichever
-  // signal is current. #487.
+  // Single writer: exactly one DocmostClient is built per turn and shared by
+  // every tool call; the host sets this per call and does not restore the prior
+  // value on unwind (set-and-leave) — a fresh client per turn plus
+  // overwrite-by-the-next-call keeps it correct, and leaving a settled call's
+  // signal in place is what makes a discarded race-loser throw on its next
+  // safe-point. Parallel in-app tool calls share this one field, so one call's
+  // per-call cap does not bound another's in-flight pagination — but every
+  // composite carries the same turn Stop signal, so a Stop still aborts
+  // whichever signal is current.
   protected toolAbortSignal: AbortSignal | null = null;
 
   /**
-   * #487: set (or clear with null) the in-app tool abort signal governing the
+   * Set (or clear with null) the in-app tool abort signal governing the
    * NEXT client call's safe-points. The host wraps each in-app tool call: it sets
    * the composite (Stop + per-call cap) here before invoking the tool and leaves
    * it in place afterwards (set-and-leave, NOT restored) — the next call
@@ -409,7 +401,7 @@ export abstract class DocmostClientContext {
       },
     );
 
-    // Diagnostics interceptor (issue #437). Registered AFTER the re-login
+    // Diagnostics interceptor. Registered AFTER the re-login
     // interceptor so a successful re-login retry (which resolves to a real
     // response) is never seen here as an error; only a genuine failure reaches
     // this rejection handler. It reformats error.message IN PLACE (see
@@ -427,7 +419,7 @@ export abstract class DocmostClientContext {
   }
 
 
-  // --- Cross-module seams (issue #450) -----------------------------------
+  // --- Cross-module seams ---------------------------------------------------
   // A method in one domain mixin sometimes calls a PROTECTED method owned by
   // another mixin (e.g. nodes-write -> validateDocUrls in doc-validate). Those
   // callees are `protected`, so they cannot be surfaced through the public
@@ -562,16 +554,14 @@ export abstract class DocmostClientContext {
    * behaviour for collab-token requests: ensure a token, try once, and on an
    * expired-token auth error perform a fresh login and retry exactly once.
    *
-   * Collab-token cache (issue #435): both sources — the getCollabToken provider
-   * (in-app agent) AND the REST /auth/collab-token endpoint (external MCP) — mint
-   * a FRESH token per call, whose string therefore changes every op. Since the
-   * live CollabSession registry keys on the token string (#400/#431 invariant 4),
-   * that churned the key and defeated session reuse. So we cache the last minted
-   * token per-client for readCollabTokenTtlMs() and hand it back for a burst of
-   * mutations, keeping the session key stable. `forceRefresh` bypasses the cache
-   * (the 401/403 reauth retry uses it, so the retry cannot be handed the same
-   * stale token that just failed — otherwise reauth would be a no-op). TTL 0
-   * disables the cache: exact fetch-per-call legacy behaviour.
+   * Collab-token cache: both sources — the getCollabToken provider (in-app
+   * agent) and the REST /auth/collab-token endpoint (external MCP) — mint a
+   * fresh token per call, and the live CollabSession registry keys on the token
+   * string. So the last minted token is cached per client for
+   * readCollabTokenTtlMs() and handed back for a burst of mutations, keeping the
+   * session key stable. `forceRefresh` bypasses the cache (the 401/403 reauth
+   * retry uses it, so the retry is not handed the same stale token that just
+   * failed). TTL 0 disables the cache (fetch per call).
    */
   protected async getCollabTokenWithReauth(
     forceRefresh = false,
@@ -630,10 +620,9 @@ export abstract class DocmostClientContext {
   }
 
   /**
-   * Store a freshly minted collab token in the per-client cache (issue #435) and
-   * return it unchanged. No-op write when the cache is disabled (ttl<=0) or the
-   * token is empty, so a disabled cache is exact fetch-per-call legacy behaviour
-   * and a bad token is never cached.
+   * Store a freshly minted collab token in the per-client cache and return it
+   * unchanged. No-op write when the cache is disabled (ttl<=0) or the token is
+   * empty, so a disabled cache fetches per call and a bad token is never cached.
    */
   protected rememberCollabToken(token: string, ttl: number): string {
     if (ttl > 0 && typeof token === "string" && token.length > 0) {
@@ -660,17 +649,15 @@ export abstract class DocmostClientContext {
 
   /**
    * Run a collab write and, on a Hocuspocus HANDSHAKE auth failure, self-heal
-   * once (#486). Symmetric to the HTTP-401 path in getCollabTokenWithReauth: the
-   * REST interceptor and login() already drop the cached collab token on a 401/
-   * 403, but a rejected WEBSOCKET handshake left the stale token in the cache, so
-   * every subsequent mutation kept re-presenting the same bad token for up to the
-   * collab-token TTL (minutes) with no self-heal. Here, when the write rejects
-   * with the tagged collab-auth error, we invalidate the cached token and retry
-   * the write EXACTLY once with a force-refreshed token. Not a loop: a second
-   * failure (or any non-auth error) propagates unchanged.
+   * once. Symmetric to the HTTP-401 path in getCollabTokenWithReauth: the REST
+   * interceptor and login() drop the cached collab token on a 401/403, but a
+   * rejected WEBSOCKET handshake would otherwise leave the stale token cached
+   * and re-presented on every mutation for up to the collab-token TTL. When the
+   * write rejects with the tagged collab-auth error, we invalidate the cached
+   * token and retry the write EXACTLY once with a force-refreshed token. Not a
+   * loop: a second failure (or any non-auth error) propagates unchanged.
    *
-   * `write` receives the token to use, so the retry can hand it a genuinely fresh
-   * one rather than re-running with the same stale string.
+   * `write` receives the token to use, so the retry runs with the fresh one.
    */
   protected async writeWithCollabAuthRetry<T>(
     collabToken: string,
@@ -722,15 +709,13 @@ export abstract class DocmostClientContext {
     collabToken: string,
     transform: (liveDoc: any) => any | null,
   ): Promise<MutationResult> {
-    // Reuse a live CollabSession for the page (issue #400) instead of opening a
-    // fresh provider per op. acquireCollabSession does NOT take the per-page
-    // lock — the caller (replaceImage) already holds ONE withPageLock across its
+    // Reuse a live CollabSession for the page instead of opening a fresh
+    // provider per op. acquireCollabSession does NOT take the per-page lock —
+    // the caller (replaceImage) already holds ONE withPageLock across its
     // scan -> upload -> write sequence, and the mutex is not reentrant, so
     // taking it here would deadlock. The synchronous read->write section and the
-    // unsyncedChanges/connectionLost ack logic live in CollabSession.mutate,
-    // preserved verbatim from the old inline machine (incl. the #152 structural
-    // diff that keeps a live editor's cursor anchored).
-    // Wrap in the collab-auth self-heal (#486): a rejected WS handshake drops the
+    // unsyncedChanges/connectionLost ack logic live in CollabSession.mutate.
+    // Wrapped in the collab-auth self-heal: a rejected WS handshake drops the
     // cached collab token and retries once with a fresh one (the retry passes the
     // refreshed token down to acquireCollabSession via `token`).
     const result = await this.writeWithCollabAuthRetry(
@@ -763,11 +748,10 @@ export abstract class DocmostClientContext {
 
   /**
    * Generic pagination handler for Docmost API endpoints. Thin wrapper over
-   * paginateAllWithMeta that discards the `truncated` flag — the historical
-   * contract every caller (getSpaces, etc.) relies on. Callers that need to KNOW
-   * whether the result set was complete (e.g. #534's getAccessibleSpaceIndex,
-   * which must not assert "spaceId missing" against a truncated list) call
-   * paginateAllWithMeta directly.
+   * paginateAllWithMeta that discards the `truncated` flag. Callers that need
+   * to know whether the result set was complete (e.g.
+   * getAccessibleSpaceIndex, which must not assert "spaceId missing" against a
+   * truncated list) call paginateAllWithMeta directly.
    */
   async paginateAll<T = any>(
     endpoint: string,
@@ -854,7 +838,7 @@ export abstract class DocmostClientContext {
   }
 
   /**
-   * The set of spaces the current token can access (issue #534), fetched from the
+   * The set of spaces the current token can access, fetched from the
    * single source of truth — the `/spaces` listing — with a per-instance
    * short-TTL cache and single-flight dedup. Used ONLY by the enrich-on-404 slow
    * path (withSpaceAccessDiagnostics), so the happy path incurs ZERO extra
@@ -925,7 +909,7 @@ export abstract class DocmostClientContext {
    * Wrap a client method whose 404 means "the supplied spaceId is not accessible"
    * and, ONLY on that 404, replace the opaque server text ("Space permissions not
    * found") with a factual, actionable message naming the spaceId and the spaces
-   * the token can actually see (issue #534). A HINT layered on top of the
+   * the token can actually see. A HINT layered on top of the
    * backend, which stays authoritative — so it FAILS OPEN on ANY uncertainty:
    * every branch below that is not a confident "this spaceId is genuinely
    * missing" rethrows the ORIGINAL server error unchanged. The happy path returns
@@ -987,7 +971,7 @@ export abstract class DocmostClientContext {
   /**
    * Raw page info including the ProseMirror JSON content and slugId.
    *
-   * With `format:"text"` (#502) the server instead renders `content` as a flat,
+   * With `format:"text"` the server instead renders `content` as a flat,
    * deterministic text string (its `jsonToText` path — the SAME serializer that
    * feeds search), so the MCP text read reuses the server's ONE serializer
    * rather than shipping a second one. Every other caller omits `format` and
@@ -1023,10 +1007,9 @@ export abstract class DocmostClientContext {
    * SAME name the web editor always uses (`page.${page.id}`).
    *
    * The agent commonly passes a 10-char public slugId (from URLs/listings) as
-   * the pageId. The web editor opens the collab doc by UUID, but the MCP used to
-   * pass that slugId straight into the collab doc name (`page.<slugId>`). For one
-   * DB row that produced TWO independent Yjs documents whose debounced stores
-   * clobbered each other — the agent's edit was silently lost (#260).
+   * the pageId. Naming the collab doc `page.<slugId>` would create a second,
+   * independent Yjs document for the same DB row, and the two debounced stores
+   * would clobber each other — the agent's edit would be silently lost.
    *
    * A UUID input short-circuits with no network round-trip. A slugId is resolved
    * once via getPageRaw and cached (both slugId->uuid and uuid->uuid), so
@@ -1034,7 +1017,7 @@ export abstract class DocmostClientContext {
    */
   protected async resolvePageId(pageId: string): Promise<PageId> {
     // This is the ONE canonicalization seam, so it is where the `PageId` brand
-    // is minted (#435). The value is validated here — a UUID input by isUuid, a
+    // is minted. The value is validated here — a UUID input by isUuid, a
     // resolved id as the server's own page.id — so the downstream write path
     // (withPageLock / mutatePageContent) can require the brand and reject any
     // unresolved raw id at compile time. The brand is a pure compile-time marker
@@ -1056,7 +1039,7 @@ export abstract class DocmostClientContext {
   }
 
   /**
-   * #654 — record that the current client just committed a real change to a page,
+   * Record that the current client just committed a real change to a page,
    * opening its read-your-own-writes window. Called from every content-mutation
    * seam/site on a verify that reports an ACTUAL change (`changed===true`); a
    * no-op/aborted write (`changed:false`) is ignored so it never triggers a
@@ -1076,7 +1059,7 @@ export abstract class DocmostClientContext {
   }
 
   /**
-   * #654 — should a structural read of `pageId` set the `preferLive` hint? True
+   * Should a structural read of `pageId` set the `preferLive` hint? True
    * iff this client wrote to the page within its (unexpired) RYOW window.
    *
    * Cache-ONLY resolution (NO network, NO resolvePageId — that would recurse into
@@ -1100,7 +1083,7 @@ export abstract class DocmostClientContext {
   }
 
   /**
-   * #654 — translate a `/pages/info` response's `contentSource`/`fallbackReason`
+   * Translate a `/pages/info` response's `contentSource`/`fallbackReason`
    * (present only when `preferLive` was sent) into RYOW metrics, and return the
    * compact `freshness` token surfaced in the 4 structural tools' RESULTS so the
    * model can see a degradation and re-read. `live` => the read got the live doc;
@@ -1132,13 +1115,13 @@ export abstract class DocmostClientContext {
    * (transform abort-on-not-found + response shaping) can be unit-tested without
    * standing up a live Hocuspocus collab socket.
    *
-   * SELF-RESOLVES the pageId to the canonical UUID (issue #449, "resolve-then-
-   * lock"): every write must lock and key its CollabSession by the UUID, never a
-   * raw slugId (#260). resolvePageId is cached/idempotent, so a caller that
-   * already resolved pays no extra round-trip; centralizing it here means a
-   * caller that reaches this seam with a raw slugId still locks correctly instead
-   * of silently splitting the mutex key. withPageLock also asserts the key is a
-   * UUID as a hard backstop.
+   * Self-resolves the pageId to the canonical UUID ("resolve-then-lock"): every
+   * write must lock and key its CollabSession by the UUID, never a raw slugId.
+   * resolvePageId is cached/idempotent, so a caller that already resolved pays
+   * no extra round-trip; centralizing it here means a caller that reaches this
+   * seam with a raw slugId still locks correctly instead of silently splitting
+   * the mutex key. withPageLock also asserts the key is a UUID as a hard
+   * backstop.
    */
   protected async mutatePage(
     pageId: string,
@@ -1171,9 +1154,9 @@ export abstract class DocmostClientContext {
    * tools (updatePageJson, copyPageContent) can have their footnote-
    * canonicalization binding unit-tested without a live Hocuspocus collab socket.
    *
-   * SELF-RESOLVES the pageId to the canonical UUID (issue #449, "resolve-then-
-   * lock") for the same reason as mutatePage above — the lock/CollabSession key
-   * is guaranteed canonical here, not left to the caller's discipline.
+   * Self-resolves the pageId to the canonical UUID ("resolve-then-lock") for
+   * the same reason as mutatePage above — the lock/CollabSession key is
+   * guaranteed canonical here, not left to the caller's discipline.
    */
   protected async replacePage(
     pageId: string,
@@ -1200,14 +1183,13 @@ export abstract class DocmostClientContext {
   }
 
   /**
-   * #647 §D/§G/§H — server-side GUARDED full replace. POSTs the final document to
+   * Server-side GUARDED full replace. POSTs the final document to
    * `/pages/update` as `operation:'replace'` + `baseHash`, so the authoritative
    * collab process applies it ONLY if the live page still hashes to `baseHash`
-   * (compare-and-swap on the owner). This REPLACES the old client-collab write
-   * seam (`replacePage` / `mutatePageContent`) for the two full-overwrite tools:
-   * with the CAS on the server, the client no longer needs `withPageLock` or a
-   * collab-WS session (both are gone from this path — the server CAS is the
-   * concurrency control now).
+   * (compare-and-swap on the owner). The two full-overwrite tools use it
+   * instead of `replacePage` / `mutatePageContent`: the server CAS is the
+   * concurrency control, so this path needs neither `withPageLock` nor a
+   * collab-WS session.
    *
    * On HTTP 409 the server rejected the write (a concurrent edit landed); we
    * translate it to a typed {@link ConflictError} carrying the server's

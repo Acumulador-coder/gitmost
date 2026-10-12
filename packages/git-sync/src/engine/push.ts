@@ -1,5 +1,5 @@
 /**
- * Push cycle — vault -> Docmost (SPEC §6 "FS -> Docmost"), FIRST increment.
+ * Push cycle — vault -> Docmost (SPEC §6 "FS -> Docmost").
  *
  * This module mirrors the structure of `./pull.ts`: a set of VaultGit diff/ref
  * primitives (in `./git.ts`), a PURE planner (`computePushActions`) that turns
@@ -13,9 +13,9 @@
  *   - A with    pageId   -> update (restored/copied file; the page already exists).
  *   - M                  -> update content (collab/Yjs path, SPEC §2/§15.6).
  *   - D                  -> delete_page (pageId recovered from the PRE-IMAGE meta).
- *   - R                  -> rename/move (CLASSIFIED here, APPLIED in push #3).
+ *   - R                  -> rename/move.
  *
- * MOVE/RENAME APPLY (push #3) — DONE here. `classifyRenameMoves` (PURE) resolves
+ * MOVE/RENAME APPLY: `classifyRenameMoves` (PURE) resolves
  * each `renamesMoves` entry into the Docmost op(s) it needs, comparing the PATH-
  * derived parent (SPEC §5: the file path is the source of truth for tree
  * position, NOT stale `meta.parentPageId`) and the meta title; `applyPushActions`
@@ -59,7 +59,7 @@ export interface UpdateAction {
    * the file was at its OLD path — so the merge base must be looked up there, or
    * it resolves to `null` and the merge degrades to a 2-way (clobbering concurrent
    * Docmost-side edits). For a plain `M` update this is undefined -> uses `path`,
-   * an honest 3-way merge at the same path (unchanged behavior).
+   * an honest 3-way merge at the same path.
    */
   basePath?: string;
 }
@@ -79,7 +79,7 @@ export interface RenameMoveAction {
 }
 
 /**
- * A CLASSIFIED rename/move (push #3): a `RenameMoveAction` resolved into the
+ * A CLASSIFIED rename/move: a `RenameMoveAction` resolved into the
  * Docmost op(s) it actually needs. The file PATH is the source of truth for tree
  * position (SPEC §5: "the identity is the pageId, not the path" — the path is COSMETIC and
  * LOCAL, the page identity is its pageId), so we compare the RESOLVED parent of
@@ -107,10 +107,9 @@ export interface RenameMoveActionClassified {
 }
 
 /**
- * Injected resolvers for the PURE `classifyRenameMoves` (push #3). Both are PURE
- * given a path + side; the real `main` (a follow-up) wires them to the file tree
- * (`readFile` for `current`, `git.showFileAtRef` for `prev`), tests pass plain
- * lookups. SPEC §5 path-as-truth:
+ * Injected resolvers for the PURE `classifyRenameMoves`. Both are PURE given a
+ * path + side; production wires them to the file tree (`readFile` for `current`,
+ * `git.showFileAtRef` for `prev`), tests pass plain lookups. SPEC §5 path-as-truth:
  *   - `metaAt`: the file's synthetic native meta at that side (title from the
  *     filename, pageId from the `gitmost_id` frontmatter).
  *   - `resolveParentPageId`: the pageId of the page whose FILE is the parent
@@ -123,7 +122,7 @@ export interface ClassifyRenameMovesDeps {
 
 /**
  * PURE classifier for the `renamesMoves` produced by `computePushActions`
- * (push #3, SPEC §5/§6/§8). Resolves each `{pageId, oldPath, newPath}` into the
+ * (SPEC §5/§6/§8). Resolves each `{pageId, oldPath, newPath}` into the
  * Docmost op(s) it needs, with NO IO (both resolvers are injected).
  *
  * SPEC §5 — the file PATH is the source of truth for tree position, NOT the
@@ -248,7 +247,7 @@ export interface PushActionsInput {
 }
 
 /**
- * Emit the action PAIR a move/rename needs (F4): a `renamesMoves` entry (the
+ * Emit the action PAIR a move/rename needs: a `renamesMoves` entry (the
  * relocation, applied later as a move/rename — those ops are content-free) AND a
  * body `updates` entry for the NEW path, so a body edit riding along in the SAME
  * diff is not lost. `importPageMarkdown` targets by pageId and is a near-no-op for
@@ -289,20 +288,20 @@ function emitMoveWithBody(
  *       'prev')`) -> DELETE. If no pageId can be recovered, SKIP with a reason
  *       (untracked-file guard, SPEC §8: never delete an untracked page).
  *   - `R` (renamed/moved): same pageId (from current meta), path changed ->
- *       RENAME/MOVE. Resolution of move-vs-rename + the new parentPageId is
- *       DEFERRED to the next increment; here we only record oldPath/newPath/
+ *       RENAME/MOVE. Resolution of move-vs-rename + the new parentPageId happens
+ *       in `classifyRenameMoves`; here we only record oldPath/newPath/
  *       pageId. If the renamed file has no recoverable pageId it is SKIPPED.
  *       (`C` copy is treated the same as `R` for recording purposes.)
  */
 export function computePushActions(input: PushActionsInput): PushActions {
   const { metaAt, currentPageIds } = input;
   const copyPaths = input.copyPaths ?? new Set<string>();
-  // PAGE-FILE FILTER (design §"Adoption"): only `.md` files OUTSIDE any dot-folder
+  // PAGE-FILE FILTER: only `.md` files OUTSIDE any dot-folder
   // are Docmost pages. `.obsidian/*`, attachments, and other non-page files are
   // committed to the vault (no `.gitignore`) and so appear in the diff, but they
   // are NEVER pages — Obsidian owns them. Without this filter every ADDED such
   // file would be mis-classified as a CREATE (nativeMeta always supplies a
-  // spaceId, so the old `create-without-spaceId` skip no longer screens them),
+  // spaceId, so the `create-without-spaceId` skip does not screen them),
   // creating junk pages in Docmost and corrupting the file with a `gitmost_id`
   // frontmatter. Filter BEFORE any classification so non-page A/M/D/R are ignored.
   const changes = input.changes.filter((c) => isPageFile(c.path));
@@ -314,7 +313,7 @@ export function computePushActions(input: PushActionsInput): PushActions {
     skipped: [],
   };
 
-  // GHOST-MOVE coalescing (⭐ data-loss guard). git's rename detection (`-M`)
+  // GHOST-MOVE coalescing (data-loss guard). git's rename detection (`-M`)
   // can miss a move when the two files are too dissimilar — which is exactly the
   // case for the tiny meta-only files a layout RESHUFFLE produces (e.g.
   // several untitled pages sharing the `_` fallback name; retitling one frees the
@@ -413,8 +412,8 @@ export function computePushActions(input: PushActionsInput): PushActions {
           // (the base version at the same path, which still carried the id),
           // mirroring the `D` branch. Without this, an edit that also dropped the
           // frontmatter (e.g. a tool that rewrote the whole file) is silently
-          // skipped and then reverted by the next export — the edit is lost (bug
-          // C10-D1). The export writes the file back with its frontmatter, so the
+          // skipped and then reverted by the next export — the edit is lost. The
+          // export writes the file back with its frontmatter, so the
           // file self-heals. If the pre-image ALSO lacked an id
           // (a page never tracked), there is genuinely nothing to update -> skip.
           const prevPageId = metaAt(change.path, "prev")?.pageId;
@@ -627,7 +626,7 @@ export interface ApplyPushResult {
  *     folder-note, space from the run; `client.createPage(...)`. The assigned
  *     id is reported in `createdPages` (the export writes it into the file).
  *   - DELETE: `client.deletePage(pageId)` — soft-delete to Trash (SPEC §8).
- *   - RENAME/MOVE (push #3, SPEC §5/§6/§16): classify each `renamesMoves` entry
+ *   - RENAME/MOVE (SPEC §5/§6/§16): classify each `renamesMoves` entry
  *     with `classifyRenameMoves`, then `move` -> `client.movePage`, `rename` ->
  *     `client.renamePage` (both: move first), `noop` -> no call, recorded.
  *
@@ -685,7 +684,7 @@ export async function applyPushActions(
   // 2. CREATES — create the page; the export writes its id into the file.
   //    Isolated per page like updates.
   //
-  // RETRY-ADOPT (#1 idempotency): a create is not atomic with the export that
+  // RETRY-ADOPT (idempotency): a create is not atomic with the export that
   // records its id. If a cycle dies in between, the next cycle sees the file as
   // a create again. A live page with the file's (parentPageId|root, title) that
   // git-sync itself created since the last export, still empty or holding the
@@ -1056,7 +1055,7 @@ export function orderCreatesParentFirst(creates: CreateAction[]): CreateAction[]
 }
 
 /**
- * Whether a vault path is a Docmost PAGE file (design §"Adoption"): a `.md` file
+ * Whether a vault path is a Docmost PAGE file: a `.md` file
  * with NO dot-segment anywhere in its path. This excludes `.obsidian/` config,
  * `.trash/`, dotfiles (`.foo.md`), and every non-`.md` file (attachments, JSON,
  * …) — Obsidian owns those; they live in the vault but are never pages. Used to

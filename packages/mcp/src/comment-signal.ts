@@ -1,14 +1,13 @@
 /**
- * Passive "new comments: N" signal (#417) — the SHARED, transport-agnostic core.
+ * Passive "new comments: N" signal — the SHARED, transport-agnostic core.
  *
- * MOTIVATION: the "human comments while the agent works" loop was pull-only — the
- * agent had to REMEMBER to call the expensive `checkNewComments` (a full
- * space-tree walk), so in a long turn it never checked and the human's comments
- * were never noticed mid-turn. This module builds a short, ephemeral one-liner
- * ("new comments: N on page …") that each surface appends to the result of ANY
- * (non-comment) tool call, so the signal finds the agent instead of the other way
- * round — mirroring the per-turn `<page_changed>` block precedent for the page
- * BODY (ai-chat.prompt.ts), but for COMMENTS and MID-TURN.
+ * `checkNewComments` is expensive (a full space-tree walk) and an agent busy
+ * with a long turn does not call it, so human comments go unnoticed mid-turn.
+ * This module builds a short, ephemeral one-liner ("new comments: N on page …")
+ * that each surface appends to the result of ANY (non-comment) tool call, so
+ * the signal finds the agent instead of the other way round — like the
+ * per-turn `<page_changed>` block for the page BODY (ai-chat.prompt.ts), but
+ * for COMMENTS and MID-TURN.
  *
  * This file owns ONLY the surface-neutral pieces: the injection-safe line
  * builder + the watermark / per-page debounce / working-set state machine
@@ -58,15 +57,13 @@ export interface CommentSignalProbeClient {
 }
 
 /**
- * The canonical count-source probe BOTH hosts use (#494). Counts comments on
+ * The canonical count-source probe BOTH hosts use. Counts comments on
  * `pageId` created strictly after `sinceMs`, reading the FULL feed (incl.
  * resolved) so a human's comment on any thread is seen; then — ONLY on a hit —
  * fetches the page's title via the LIGHT `getPageRaw` (not the heavy `getPage`,
  * which also renders Markdown + subpages) to LABEL the signal, so the no-signal
- * path never pays for it. Extracted so the standalone MCP host (index.ts) and the
- * in-app host (ai-chat-tools.service.ts) share ONE probe body instead of two
- * hand-mirrored copies that could silently drift (e.g. one counting resolved
- * comments and the other not, or one using the heavy page read). Best-effort
+ * path never pays for it. Shared by the standalone MCP host (index.ts) and the
+ * in-app host (ai-chat-tools.service.ts) so both count the same way. Best-effort
  * title: a `getPageRaw` fault leaves the title undefined and never throws.
  */
 export function createListCommentsProbe(
@@ -106,10 +103,10 @@ export const DEFAULT_COMMENT_SIGNAL_DEBOUNCE_MS = 20_000;
 
 /**
  * Tools whose OWN result must NOT carry the signal — it would be tautological
- * (the agent is already looking at comments) and noisy. Since issue #412 both
- * the standalone MCP surface and the in-app agent use the same camelCase tool
- * names, so a single set of camelCase names covers both surfaces. `getComment`
- * (single fetch) is intentionally NOT excluded.
+ * (the agent is already looking at comments) and noisy. The standalone MCP
+ * surface and the in-app agent use the same camelCase tool names, so one set
+ * covers both surfaces. `getComment` (single fetch) is intentionally NOT
+ * excluded.
  */
 export const COMMENT_SIGNAL_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
   "listComments",
@@ -209,12 +206,12 @@ export function createCommentSignalTracker(
   //    "the agent just read/created comments, don't re-signal them" barrier and
   //    applies to every page.
   //  - `pageWatermarkMs[pageId]`: a per-page override, raised ONLY for the page
-  //    a signal was just emitted for (emit-on-change). Keeping this PER PAGE is
-  //    the fix for the earlier single-global-watermark bug: advancing page A's
-  //    watermark on emission must NOT suppress a still-unseen comment on page B
-  //    whose createdAt may pre-date A's advanced watermark. Each page is measured
-  //    against max(floor, its own override), defaulting to the construction
-  //    baseline, so activity on a second working-set page is never lost.
+  //    a signal was just emitted for (emit-on-change). It is PER PAGE because
+  //    advancing page A's watermark on emission must NOT suppress a still-unseen
+  //    comment on page B whose createdAt may pre-date A's advanced watermark.
+  //    Each page is measured against max(floor, its own override), defaulting to
+  //    the construction baseline, so activity on a second working-set page is
+  //    never lost.
   const initialWatermarkMs = now();
   let floorWatermarkMs = initialWatermarkMs;
   const pageWatermarkMs = new Map<string, number>();

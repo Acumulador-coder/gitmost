@@ -192,7 +192,7 @@ test("diffDocs names a drawio->excalidraw swap (a bucket would report 1 -> 1)", 
 });
 
 // ---------------------------------------------------------------------------
-// #619: block-atom DATA CARRIERS. Each is a top-level block whose whole payload
+// Block-atom DATA CARRIERS. Each is a top-level block whose whole payload
 // lives in attrs (src/attachmentId/sourcePageId/…). Deleting one moves no prose
 // and no marks — only the 1-char leaf placeholder an atom contributes to the
 // text delta (indistinguishable from a typo fix). The count is what NAMES the

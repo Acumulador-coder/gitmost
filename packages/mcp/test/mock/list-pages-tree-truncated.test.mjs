@@ -1,11 +1,10 @@
-// Unit test: listPages tree mode must propagate the `truncated` flag (#486).
+// Unit test: listPages tree mode must propagate the `truncated` flag.
 //
 // enumerateSpacePages returns { pages, truncated } — truncated is true ONLY when
 // the stdio-fallback BFS hit its node cap (the primary /pages/tree path is
-// uncapped). The old tree-mode listPages destructured only `pages` and returned a
-// bare tree, dropping `truncated`, so a caller handed an INCOMPLETE tree had no
-// way to know pages were missing. The fix returns { tree, truncated } (same
-// pattern check_new_comments uses).
+// uncapped). Tree-mode listPages returns { tree, truncated } (same pattern
+// check_new_comments uses), so a caller handed an INCOMPLETE tree knows pages
+// are missing.
 //
 // Reaching the real cap (MAX_NODES = 10000) in a mock is impractical, so we stub
 // enumerateSpacePages directly to assert the flag is threaded through verbatim.

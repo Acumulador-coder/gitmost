@@ -13,7 +13,7 @@ import {
 } from './db';
 
 /**
- * Issue #226 (regression of #205): "a page has EXACTLY ONE custom address".
+ * "A page has EXACTLY ONE custom address".
  * Exercises against real Postgres:
  *   - the partial unique index `(workspace_id, page_id) WHERE page_id IS NOT NULL`
  *     (migration 20260627T120000) — one alias per page, but dangling aliases
@@ -319,7 +319,7 @@ describe('share_aliases one-per-page invariant [integration]', () => {
   });
 
   it('confirmReassign onto a page that ALREADY has its own alias: target ends with ONE row', async () => {
-    // Regression guard for the operation-order bug: A has `shared`, B has its
+    // Operation order: A has `shared`, B has its
     // OWN alias `bee`. Moving `shared` onto B must FIRST drop B's `bee` row,
     // THEN retarget, or the NON-deferrable (workspace_id, page_id) index fires a
     // 23505 mid-transaction (two rows momentarily carry page_id = B) and the tx

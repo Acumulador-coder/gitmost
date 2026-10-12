@@ -39,7 +39,7 @@ export { markdownToProseMirror };
  * already stripped `undefined` attrs, so a remaining failure is pinpointed via
  * `findUnstorableAttr`.
  *
- * Diagnostics precedence (#409): the dominant crash here is
+ * Diagnostics precedence: the dominant crash here is
  * `Unknown node type: undefined` — a nested node with an absent/unknown `type`
  * (a SHAPE problem, e.g. `{"text":"foo"}` missing `"type":"text"`). That points
  * at the node, not an attribute, so `findInvalidNode` is consulted FIRST and,
@@ -85,9 +85,9 @@ global.WebSocket = WebSocket;
  * Page-write variant of the package's `markdownToProseMirror`: imports markdown
  * then re-runs mcp's footnote canonicalizer over the result.
  *
- * Footnote layering after #293 STEP 5:
- *   - The package's `markdownToProseMirror` already ASSEMBLES footnotes on import
- *     (canon #2): inline `^[body]` markers become the schema's
+ * Footnote layering:
+ *   - The package's `markdownToProseMirror` already ASSEMBLES footnotes on import:
+ *     inline `^[body]` markers become the schema's
  *     `footnoteReference` + a single doc-level `footnotesList`, with ids assigned
  *     sequentially (`fn-1`, `fn-2`, …) in first-reference order and identical
  *     bodies merged. So the import output is ALREADY in canonical footnote
@@ -100,26 +100,26 @@ global.WebSocket = WebSocket;
  *     was produced, not because the import needs fixing.
  *
  * Use this ONLY for full-document PAGE writes. Comment bodies call the package's
- * plain `markdownToProseMirror` (no canonicalization) — safe now because inline
- * `^[body]` footnotes carry their body at the reference point, so a comment can
- * no longer produce a reference-less footnote definition to be dropped.
+ * plain `markdownToProseMirror` (no canonicalization) — safe because inline
+ * `^[body]` footnotes carry their body at the reference point, so a comment
+ * cannot produce a reference-less footnote definition to be dropped.
  *
- * #493: `normalizeAgentMarkdown` runs FIRST, so an agent's `updatePageMarkdown`
+ * `normalizeAgentMarkdown` runs FIRST, so an agent's `updatePageMarkdown`
  * body gets the SAME GFM `[^id]` reference-footnote -> inline `^[body]` rewrite as
  * the server import path (instead of the reference leaking as literal text / a
  * bogus link). It DELIBERATELY does NOT strip a leading YAML front-matter block:
  * a full-body agent rewrite that opens with a `---…---` is (almost) always a
  * horizontalRule the serializer emitted, and stripping it would silently drop the
- * page's leading content (#493 review). The front-matter strip stays on the
+ * page's leading content. The front-matter strip stays on the
  * server FILE-import boundary only (`normalizeForeignMarkdown`).
  *
- * #502 IMPORTANT — the two layered markdown extensions (`$…$` math, schemeless
+ * IMPORTANT — the two layered markdown extensions (`$…$` math, schemeless
  * fuzzy autolink) are NOT decided here; they are the CALLER's choice via
  * `options`, because the two callers of this wrapper need OPPOSITE behavior:
  *   - AGENT-authored plain markdown (`updatePageMarkdown`) → both OFF, so a
  *     `$…$` config span stays literal and a bare `www.host` is not autolinked
  *     (real math is authored via `update_page_json`).
- *   - FULL-FILE round-trip import (`import_page_markdown`, #328 lossless) →
+ *   - FULL-FILE round-trip import (`import_page_markdown`, lossless) →
  *     DEFAULTS (both ON), because the exporter serializes a math node as readable
  *     `$x^2$`; re-importing with math OFF would degrade it to literal text and
  *     BREAK the lossless export→import pair.
@@ -174,8 +174,8 @@ export function buildCollabWsUrl(baseUrl: string): string {
  * validate marks against parent specs, and updateYFragment would happily write
  * the poison into the live Y.Doc — where the NEXT schema-full materialization
  * (browser ySyncPlugin) throws and y-prosemirror permanently DELETES the whole
- * offending node (the July code-block data-loss incident). Failing loudly here
- * turns silent delayed data loss into an immediate, actionable tool error.
+ * offending node. Failing loudly here turns silent delayed data loss into an
+ * immediate, actionable tool error.
  *
  * The whole-document scope is INTENTIONAL — a forbidden mark that pre-dates
  * this write (legacy poison) is rejected too: failing loudly beats silent
@@ -228,16 +228,15 @@ export function buildYDoc(doc: any): Y.Doc {
 
 /**
  * Write a new ProseMirror doc into the live Yjs fragment by STRUCTURAL DIFF,
- * preserving the Yjs identity of unchanged nodes (issue #152).
+ * preserving the Yjs identity of unchanged nodes.
  *
- * The previous approach deleted the whole fragment and re-applied a fresh Y.Doc,
- * which discarded every Yjs node id. y-prosemirror anchors the editor selection
- * to those ids, so an open editor's cursor lost its anchor and snapped to the
- * end of the document on every agent write (most visibly on comment anchoring,
- * which changes no text at all). `updateYFragment` is exactly the routine the
- * editor itself uses to sync ProseMirror edits into Yjs: it diffs the new node
- * against the current fragment and touches only the changed children, so
- * unchanged nodes keep their ids and the live cursor stays put.
+ * y-prosemirror anchors the editor selection to Yjs node ids, so replacing the
+ * whole fragment would snap an open editor's cursor to the end of the document
+ * on every agent write (even comment anchoring, which changes no text).
+ * `updateYFragment` is exactly the routine the editor itself uses to sync
+ * ProseMirror edits into Yjs: it diffs the new node against the current
+ * fragment and touches only the changed children, so unchanged nodes keep their
+ * ids and the live cursor stays put.
  *
  * Must run inside a single `transact` so the diff applies atomically (no remote
  * update interleaves). Keeps `buildYDoc`'s `findUnstorableAttr` diagnostic for
@@ -281,7 +280,7 @@ export function applyDocToFragment(ydoc: Y.Doc, newDoc: any): void {
  * encoders that nonetheless reject the same unstorable attributes. To narrow the
  * preview/apply gap it ALSO rehearses the apply path's `PMNode.fromJSON`
  * hydration, so a doc that would only fail there (e.g. an unknown node type) is
- * rejected at preview time too (#154 review). Still cheap: no live fragment, no
+ * rejected at preview time too. Still cheap: no live fragment, no
  * `updateYFragment`.
  */
 export function assertYjsEncodable(doc: any): void {
@@ -304,7 +303,7 @@ export function assertYjsEncodable(doc: any): void {
  * This is the single safe write path for every MCP content mutation. It:
  *   1. serializes per-page writes through withPageLock (no two MCP writes on
  *      the same page overlap);
- *   2. acquires a LIVE, synced CollabSession for the page (issue #400) — a
+ *   2. acquires a LIVE, synced CollabSession for the page — a
  *      cached provider whose local ydoc mirrors the authoritative server doc
  *      (INCLUDING edits/comments/images not yet in the debounced REST snapshot),
  *      reused across a series of edits instead of a fresh connect/auth/sync per
@@ -373,7 +372,7 @@ export async function mutatePageContent(
 }
 
 /**
- * Stateless-channel message types for the #370 explicit save-version handshake.
+ * Stateless-channel message types for the explicit save-version handshake.
  * These MUST match the server constants in
  * apps/server/src/collaboration/extensions/persistence.extension.ts
  * (SAVE_VERSION_MESSAGE_TYPE and the VERSION_SAVED / VERSION_SKIPPED replies) —
@@ -382,7 +381,7 @@ export async function mutatePageContent(
  * handled save (`version.saved` for a real save/promote, `version.skipped` for a
  * reachable no-op — an empty page or a missing page row); the client must match
  * BOTH or it waits out the ack timeout on the skip case and misreports a healthy
- * server as unreachable (#370 F2).
+ * server as unreachable.
  */
 const SAVE_VERSION_MESSAGE_TYPE = "save-version";
 const VERSION_SAVED_MESSAGE_TYPE = "version.saved";
@@ -444,8 +443,8 @@ function matchSaveVersionReply(message: any): SaveVersionReply | undefined {
 
 /**
  * Save an intentional version of a page's CURRENT live collaboration content
- * (#370). Runs under the per-page lock, acquires the SAME cached CollabSession the
- * content writes use (#400) — so it authenticates with the caller's agent collab
+ * Runs under the per-page lock, acquires the SAME cached CollabSession the
+ * content writes use — so it authenticates with the caller's agent collab
  * token, and the server derives kind='agent' from that signed actor — then sends a
  * `{type:'save-version'}` stateless message and awaits the server's terminal reply
  * (`version.saved` or `version.skipped`) on the same channel.
@@ -518,8 +517,8 @@ export async function savePageVersionRealtime(
  * it was produced from markdown (ids regenerate) or edited in place
  * (existing block ids preserved).
  *
- * This is an intentional full replace (used by update_page / updatePageJson),
- * but now runs under the per-page lock and waits for server persistence via
+ * This is an intentional full replace (used by update_page / updatePageJson);
+ * it runs under the per-page lock and waits for server persistence via
  * mutatePageContent.
  */
 export async function replacePageContent(
@@ -531,8 +530,7 @@ export async function replacePageContent(
   signal?: AbortSignal,
 ): Promise<MutationResult> {
   // Fail fast on a bad document instead of deferring the failure into the
-  // collaboration write (where TiptapTransformer.toYdoc(undefined) used to
-  // throw). The transform must return a valid ProseMirror doc.
+  // collaboration write. The transform must return a valid ProseMirror doc.
   if (
     prosemirrorDoc == null ||
     typeof prosemirrorDoc !== "object" ||
@@ -563,11 +561,11 @@ export async function updatePageContentRealtime(
   // PAGE write: canonicalize footnotes (markdown import builds the bottom list in
   // definition order; numbering is reference-ordered).
   //
-  // #502: this is the AGENT-authored `updatePageMarkdown` body — plain prose /
+  // This is the AGENT-authored `updatePageMarkdown` body — plain prose /
   // config — so the two layered markdown extensions are turned OFF: a `$…$` span
   // stays literal text (real math via `update_page_json`) and a SCHEMELESS
   // `www.host`/email is not autolinked (an explicit `https://…` still links).
-  // Contrast `import_page_markdown`, which keeps DEFAULTS for the #328 lossless
+  // Contrast `import_page_markdown`, which keeps DEFAULTS for the lossless
   // round-trip.
   const tiptapJson = await markdownToProseMirrorCanonical(markdownContent, {
     parseMath: false,
@@ -577,14 +575,14 @@ export async function updatePageContentRealtime(
     pageId,
     collabToken,
     baseUrl,
-    // #493: an agent read HIDES resolved-comment anchors (#337), so the markdown
-    // it sends here no longer carries them — a naive full rewrite would erase
+    // An agent read HIDES resolved-comment anchors, so the markdown
+    // it sends here does not carry them — a naive full rewrite would erase
     // every resolved comment mark. Re-graft the resolved marks from the LIVE doc
     // onto the matching text in the freshly-imported body. Active comments are
     // untouched (they ride through the markdown themselves); a resolved span whose
     // text the agent changed simply does not re-anchor and is dropped.
     //
-    // #555: surface a dropped resolved anchor through the diagnostics channel
+    // Surface a dropped resolved anchor through the diagnostics channel
     // instead of losing it silently — either the text is gone (agent rewrote it)
     // or too many identical-text anchors collided on too few occurrences (a span
     // holds only one comment mark). Genuine, if rare, data loss in the resolved

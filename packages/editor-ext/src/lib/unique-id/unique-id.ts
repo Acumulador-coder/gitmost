@@ -37,7 +37,7 @@ export const UniqueID = TiptapUniqueID.extend({
     };
   },
 
-  // #709 — local override of 3.20.4's `onCreate`, which with a collaboration
+  // Local override of 3.20.4's `onCreate`, which with a collaboration
   // provider only subscribes to its "synced" and never unsubscribes. With warm
   // collab sessions the provider outlives the editor: an editor mounted on an
   // ALREADY synced provider would never get that event (its nodes would stay

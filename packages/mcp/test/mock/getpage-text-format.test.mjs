@@ -1,4 +1,4 @@
-// #502 READ: the getPage tool gains a `format:"text"` mode. It requests the
+// The getPage tool's `format:"text"` mode. It requests the
 // server's flat, deterministic text rendering (the server's jsonToText path — the
 // SAME serializer that feeds search), passing it through unchanged. This mock
 // stands up a local http server (same harness style as getpage-conversion-cache)

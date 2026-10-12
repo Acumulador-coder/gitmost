@@ -1,11 +1,10 @@
-// Mock-HTTP tests for the cursor-pagination migration in DocmostClient (#442).
+// Mock-HTTP tests for cursor pagination in DocmostClient.
 //
-// The server switched its list endpoints from OFFSET (`page`) to CURSOR
-// (`cursor`/`nextCursor`) pagination, and the global ValidationPipe silently
-// strips the obsolete `page` field — so the old offset loops re-fetched page
-// one forever (hasNextPage stuck true), dropping every item past the first
-// page. These tests pin the new cursor behaviour and the immovable-cursor
-// guard that prevents a silent spin/duplication if the protocol drifts again.
+// The server's list endpoints use CURSOR (`cursor`/`nextCursor`) pagination, and
+// the global ValidationPipe silently strips an unknown `page` field — so an
+// offset loop would re-fetch page one forever (hasNextPage stuck true). These
+// tests pin the cursor behaviour and the immovable-cursor guard that prevents a
+// silent spin/duplication if the protocol drifts.
 //
 // A local http.createServer stands in for Docmost so everything stays
 // deterministic and offline (same harness style as reauth.test.mjs).
@@ -117,7 +116,7 @@ test("listSidebarPages walks all cursor pages and collects every item", async ()
 });
 
 // -----------------------------------------------------------------------------
-// 2) REGRESSION on the bug class: server IGNORES the cursor param and always
+// 2) The server IGNORES the cursor param and always
 //    returns page one with hasNextPage:true -> the immovable-cursor guard must
 //    terminate the loop with no duplicates, NOT spin to MAX_PAGES.
 // -----------------------------------------------------------------------------
@@ -130,7 +129,7 @@ test("listSidebarPages terminates (no dups) when the server ignores the cursor",
     if (req.url === "/api/pages/sidebar-pages") {
       requests++;
       // Always the SAME first page with hasNextPage:true and the SAME cursor,
-      // exactly as a server that no longer understands our pagination param.
+      // as a server that does not understand our pagination param.
       sendJson(res, 200, {
         success: true,
         data: {
@@ -512,7 +511,7 @@ test("checkNewComments fetches pages concurrently (bounded) and preserves order"
 });
 
 // -----------------------------------------------------------------------------
-// 7) checkNewComments partial failure (#490): the concurrent scan is resilient —
+// 7) checkNewComments partial failure: the concurrent scan is resilient —
 //    if ONE page's /comments fetch rejects (deleted mid-scan, a transient 500),
 //    that page is skipped and the WHOLE scan still resolves with every other
 //    page's fresh comments. A single failing fetch must never reject the batch

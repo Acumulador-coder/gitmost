@@ -77,7 +77,7 @@ export enum QueueJob {
 }
 
 /**
- * #599 (R2) — job options for the workspace-wide RAG reindex
+ * Job options for the workspace-wide RAG reindex
  * (WORKSPACE_CREATE_EMBEDDINGS), shared by EVERY enqueue site (the manual
  * "Reindex now" button, the AI-Search enable toggle, and the automatic reindex
  * fired when the embedding config's fingerprint changes) so they de-duplicate
@@ -90,8 +90,7 @@ export enum QueueJob {
  * `attempts: 1`. A reindex that ends with failed pages (a TEI timeout, a 429)
  * cannot flip the active generation, which leaves the workspace in the swap window
  * (~2x pgvector rows, `semantic.state: 'stale'`, lexical-only after a model
- * change). With a single attempt that state was PERMANENT — nothing ever re-ran the
- * job. The run is idempotent (the start GC keeps the serving generation; the
+ * change) until something re-runs the job. The run is idempotent (the start GC keeps the serving generation; the
  * per-page replace is fingerprint-scoped), so retrying it is safe and simply
  * re-attempts the pages that failed. Bounded at 3 so a permanently poisonous page
  * cannot loop forever: after that the job stays failed and the workspace is left in

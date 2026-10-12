@@ -12,8 +12,8 @@ import {
 // A LOCAL, illustrative copy of the server's INTERNAL_LINK_REGEX
 // (apps/server/src/integrations/export/utils.ts) used only to document the
 // subset boundary WITHIN this package (this layer cannot import the server).
-// It is NOT the cross-package drift guard: a hand copy can silently go stale if
-// the server regex is later narrowed. The real, mechanical drift guard lives in
+// It is NOT the cross-package drift guard (a hand copy can go stale). The
+// mechanical drift guard lives in
 // the top layer, `apps/server/src/integrations/export/internal-link-parity.spec.ts`,
 // which imports BOTH the LIVE server `INTERNAL_LINK_REGEX` and the LIVE
 // `isInternalPagePath` and reddens if the client ever ceases to be a subset.

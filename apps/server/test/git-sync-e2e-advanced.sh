@@ -8,10 +8,6 @@
 #   - the Redis container ($REDIS_CONTAINER) to inject a held lock (503 path),
 #   - DB-created fixture users / a second space (auto-created + torn down).
 #
-# Came out of a generate->critique subagent pass on "what is NOT covered". The
-# critic verified the contracts against the code (e.g. a non-member of an
-# ENABLED space gets 403, not 404 — only a missing / sync-disabled space 404s).
-#
 # Usage:  apps/server/test/git-sync-e2e-advanced.sh
 set -uo pipefail
 
@@ -196,19 +192,12 @@ m2=$(vault_sha main); lp2=$(vault_sha refs/docmost/last-export)
 # deterministically by the engine unit suite — packages/git-sync/test/
 # classify-rename-moves.test.ts and node-ops.test.ts.)
 
-# NOTE (review #12): the former "delete cap" block was removed. There is NO
-# delete cap in the orchestrator ("There is no delete cap") and /status does not
-# expose maxDeletesPerCycle, so the block failed deterministically with a scary
-# "(data loss!)". The real contract — every git-rm'd page soft-deletes to Trash
-# (recoverable) — is exercised by the git-side-delete scenario elsewhere and by
-# the engine unit suite.
-
 # ===========================================================================
 say "data-loss guard #2: untitled pages + retitle must NOT trash other pages"
-# THE bug from the browser flow: Docmost creates pages UNTITLED (title=''), which
-# all serialize to the `_` fallback name. Retitling one reshuffles the `_`
-# collision and relocates another's file; git reports the move as delete+add and
-# the push used to TRASH the relocated live page. Identity is the pageId now.
+# Docmost creates pages UNTITLED (title=''), which all serialize to the `_`
+# fallback name. Retitling one reshuffles the `_` collision and relocates
+# another's file; git reports the move as delete+add, and since identity is the
+# pageId the push must not trash the relocated live page.
 ut_before=$(psqlq "select count(*) from pages where space_id='$SPACE_ID' and deleted_at is not null;")
 ut_ids=""
 for i in 1 2 3 4; do

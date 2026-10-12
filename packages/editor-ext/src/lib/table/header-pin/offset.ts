@@ -85,10 +85,9 @@ function sameAnchors(a: HTMLElement[], b: HTMLElement[]): boolean {
 
 // Reference-counted watcher that publishes the editor's top offset to a CSS custom property.
 //
-// OBSERVATION SCOPE (the regression that must never come back): this observes
-// ONLY the resolved pin anchors. It must never observe `document.body` or
-// `document.documentElement`. Observing the body closed a feedback loop that
-// burned 100% CPU on an idle Safari page: writing the inherited custom property
+// OBSERVATION SCOPE: this observes ONLY the resolved pin anchors. It must never
+// observe `document.body` or `document.documentElement`. Observing the body
+// closes a feedback loop that burns 100% CPU on an idle Safari page: writing the inherited custom property
 // on `documentElement` invalidates the whole document's style, relayout changes
 // the body box, the body ResizeObserver fires, the header is re-measured, the
 // rounded value comes back one pixel different, and it publishes again. Blink
@@ -106,7 +105,7 @@ function sameAnchors(a: HTMLElement[], b: HTMLElement[]): boolean {
 // remount) without resizing anything and without any ProseMirror transaction,
 // the offset can stay stale until the next tick from any source. Closing that
 // would require watching the document for structural changes — exactly the
-// body-level observation that caused the 100%-CPU loop — so we accept it: the
+// body-level observation that causes the 100%-CPU loop — so we accept it: the
 // worst case is a pinned header row sitting a few pixels off until the user
 // scrolls, types, or resizes.
 export const pinOffsetWatcher = {

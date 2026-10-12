@@ -22,7 +22,7 @@ import {
 } from './db';
 
 /**
- * #184 phase 1.5 — the resumable transport end to end against REAL Postgres,
+ * The resumable transport end to end against REAL Postgres,
  * the REAL `streamText` (seeded via MockLanguageModelV3) and a REAL Node
  * ServerResponse, driving the REAL `AiChatService.stream` run-wrapped path with a
  * REAL `AiChatStreamRegistryService`. The run-hooks mirror the controller: they
@@ -30,7 +30,7 @@ import {
  * tees the SSE frames into it via `consumeSseStream` while stamping the DB row id
  * via `generateMessageId` (both gated on runId).
  *
- * Proven here (tail-only #491): a finished run attached at its persisted frontier
+ * Proven here: a finished run attached at its persisted frontier
  * N_final delivers only the TAIL past N (a synthetic `start` carrying the run-fact
  * + the terminal `finish`/`[DONE]`) — the step content below N lives in the seeded
  * DB row, NOT the ring; the anchor check (invariant 6); an attach opened BEFORE the

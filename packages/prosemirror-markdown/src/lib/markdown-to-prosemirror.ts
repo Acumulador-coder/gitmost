@@ -32,7 +32,7 @@ import {
 } from "./media-html.js";
 
 /**
- * #293 canon #7: `==text==` (Obsidian/GFM highlight) inline syntax.
+ * `==text==` (Obsidian/GFM highlight) inline syntax.
  *
  * `==` is NOT standard markdown, so we teach the parser to turn `==text==` into
  * `<mark>text</mark>`, which the schema's Highlight extension (editor-ext) parses
@@ -86,7 +86,7 @@ const highlightMarkExtension: TokenizerExtension & RendererExtension = {
 };
 
 /**
- * #293 canon #6: Obsidian-native math — `$LaTeX$` (inline) and `$$…$$` (block).
+ * Obsidian-native math — `$LaTeX$` (inline) and `$$…$$` (block).
  *
  * INLINE `$…$` uses the SHARED pandoc currency-safe rule (math-inline.ts), the
  * SAME rule the serializer's prose escaper uses, so currency (`$5`,
@@ -150,7 +150,7 @@ const mathBlockExtension: TokenizerExtension & RendererExtension = {
 };
 
 /**
- * #293 canon #2: Pandoc/Obsidian inline footnotes — `^[note body]`.
+ * Pandoc/Obsidian inline footnotes — `^[note body]`.
  *
  * The single canonical markdown form carries the note body AT the reference
  * point. The crux is the tokenizer: it BALANCES `[`/`]` (respecting
@@ -164,7 +164,7 @@ const mathBlockExtension: TokenizerExtension & RendererExtension = {
  * body text, ASSIGNS sequential ids (fn-1, fn-2, … in first-seen order), and
  * builds one doc-level `<div data-footnote-def>` per unique body inside a single
  * `<section data-footnotes>`. Assigning ids from the exact text (rather than a
- * hash) makes collisions between DIFFERENT bodies impossible (F1) while staying
+ * hash) makes collisions between DIFFERENT bodies impossible while staying
  * race-free — all ids are assigned inside that one call from the local DOM, no
  * module state — and byte-stable (ids are never written to markdown; `^[body]`
  * carries only text, so identical bodies still merge).
@@ -172,7 +172,7 @@ const mathBlockExtension: TokenizerExtension & RendererExtension = {
  * Fail-open: an unbalanced `^[` with no matching `]` returns undefined from the
  * tokenizer and stays literal text (no crash). `^[]` is a footnote with an empty
  * body. The reference form `[^id]` / `[^id]: def` is NOT parsed (no `^[`), so it
- * stays literal (an accepted hand-authoring gap; no backward compat). Registered
+ * stays literal here (normalizeForeignMarkdown rewrites it upstream). Registered
  * on the SAME dedicated instance as the highlight/math extensions.
  */
 const footnoteInlineExtension: TokenizerExtension & RendererExtension = {
@@ -233,9 +233,8 @@ function escapeFootnoteAttr(value: string): string {
 
 /**
  * Options controlling which of the two *layered* markdown extensions the
- * canonical importer applies. Both default to `true`, so the human editor,
- * file-import and git-sync paths keep their existing behavior byte-for-byte;
- * ONLY the MCP markdown-write path opts OUT (see #502).
+ * canonical importer applies. Both default to `true` (human editor, file-import
+ * and git-sync paths); ONLY the MCP markdown-write path opts OUT.
  *
  * The extensions are optional because they are the SOURCE of two silent
  * corruptions when an AGENT writes plain prose/config as markdown:
@@ -259,8 +258,8 @@ export interface MarkdownImportOptions {
  * `fuzzyLinkify:false` override of marked's built-in GFM `url` inline tokenizer.
  *
  * The stock tokenizer autolinks THREE shapes: a schemeless `www.host` domain, a
- * bare email, and an EXPLICIT `scheme://…` URL. #502 wants only the last kept —
- * a schemeless domain/email an agent typed as prose must stay literal text, but
+ * bare email, and an EXPLICIT `scheme://…` URL. Only the last is kept — a
+ * schemeless domain/email an agent typed as prose must stay literal text, but
  * a deliberate `https://…` still links. We delegate to the original tokenizer
  * and, when it matched, DROP the token (returning `undefined`, so the run stays
  * literal text) unless the matched RAW text carries an explicit `scheme:` prefix.
@@ -301,8 +300,8 @@ function buildMarkedInstance(parseMath: boolean, fuzzyLinkify: boolean): Marked 
 
 // Memoize one instance per (parseMath, fuzzyLinkify) combination so the
 // extensions are registered exactly once per combo (never on the global
-// singleton). The default `(true, true)` instance preserves the pre-#502
-// behavior exactly for the editor/file-import/git-sync paths.
+// singleton). The default `(true, true)` instance serves the
+// editor/file-import/git-sync paths.
 const markedInstanceCache = new Map<string, Marked>();
 function getMarkedInstance(parseMath: boolean, fuzzyLinkify: boolean): Marked {
   const key = `${parseMath}:${fuzzyLinkify}`;
@@ -314,13 +313,11 @@ function getMarkedInstance(parseMath: boolean, fuzzyLinkify: boolean): Marked {
   return instance;
 }
 
-// NOTE: this module no longer installs a module-level `global.window`/`document`
-// jsdom shim. The HTML->DOM passes below (bridgeTaskLists / applyCommentDirectives
-// / assembleFootnotes) parse via the INJECTED `parseHtmlDocument` (jsdom on the
-// Node entry, native `DOMParser` on the browser entry), and `@tiptap/html`'s v3
-// `generateJSON` supplies its OWN DOM per environment (happy-dom in Node, native
-// `DOMParser` in the browser) — so no ambient global DOM is needed here, and
-// nothing on the browser code path statically imports jsdom.
+// No global `window`/`document` is needed here: the HTML->DOM passes below
+// (bridgeTaskLists / applyCommentDirectives / assembleFootnotes) parse via the
+// INJECTED `parseHtmlDocument`, and `@tiptap/html`'s v3 `generateJSON` supplies
+// its OWN DOM per environment (happy-dom in Node, native `DOMParser` in the
+// browser).
 
 /**
  * Hard ceiling above which we skip callout preprocessing entirely. The linear
@@ -357,20 +354,18 @@ const CODE_FENCE_RE = /^(\s*)(`{3,}|~{3,})/;
  * rescan). It:
  *   - tracks fenced code regions (```...``` and ~~~...~~~) and never treats a
  *     `:::` line that lives inside a code fence as a callout delimiter, so a
- *     callout body that itself contains a fenced code block with a `:::` line is
- *     no longer corrupted;
+ *     callout body that itself contains a fenced code block with a `:::` line
+ *     stays intact;
  *   - matches an opening `:::type` line with the next CLOSING `:::` at the SAME
  *     nesting level, supporting NESTED callouts via a depth counter (an inner
  *     `:::type` opens a deeper level and consumes a matching `:::`);
- *   - emits the same `<div data-type="callout" data-callout-type="TYPE">` output
- *     (inner rendered through marked) as the previous regex implementation.
+ *   - emits `<div data-type="callout" data-callout-type="TYPE">` (inner rendered
+ *     through marked).
  */
-// SYNCHRONOUS by construction: the only formerly-awaited call is
-// `markedInstance.parse`, which returns a string synchronously for this
-// instance (no async marked extensions are registered), so the whole callout
-// preprocess is sync. Keeping it sync lets a sync converter entry
-// (`markdownToProseMirrorSync`, used by the client's chat renderer which must
-// stay synchronous) share this exact logic with the async entry.
+// SYNCHRONOUS: `markedInstance.parse` returns a string synchronously for this
+// instance (no async marked extensions are registered), so the sync converter
+// entry (`markdownToProseMirrorSync`, used by the client's chat renderer) shares
+// this logic with the async entry.
 function preprocessCallouts(markdown: string, markedInstance: Marked): string {
   // Defensive cap: skip preprocessing for pathologically large inputs.
   if (markdown.length > MAX_CALLOUT_PREPROCESS_BYTES) {
@@ -652,7 +647,7 @@ function bridgeTaskLists(html: string): string {
 }
 
 /**
- * Re-apply ATTACHED HTML comments (#293 canon) before the DOM/generateJSON
+ * Re-apply ATTACHED HTML comments before the DOM/generateJSON
  * stage drops them.
  *
  * The serializer appends attributes that have no native markdown syntax as a
@@ -666,22 +661,22 @@ function bridgeTaskLists(html: string): string {
  *
  * This pass materializes BOTH comment conventions, discriminated by position:
  *
- *   - ATTACHED comments (#9 `attrs`): a comment sitting INSIDE a `<p>`/`<hN>`
+ *   - ATTACHED comments (`attrs`): a comment sitting INSIDE a `<p>`/`<hN>`
  *     (same rendered line as visible content). The only handled key is
  *     `textAlign`, re-expressed as an inline `text-align` style on the parent,
  *     which the schema's TextAlign global attribute reads back.
- *   - ATTACHED image comments (#4 `img`): a comment bound to an `<img>` (its
+ *   - ATTACHED image comments (`img`): a comment bound to an `<img>` (its
  *     previous element sibling), e.g. `![](src) <!--img {"align":"left"}-->`
  *     rendered as `<p><img> <!--img …--></p>`. Each decoded key is written as
  *     the DOM attribute the image schema's parseHTML reads back (align/width/
  *     height/data-size/data-aspect-ratio/data-attachment-id/data-caption).
  *     An `img` comment with no adjacent <img> is INERT.
- *   - STANDALONE machinery comments (#5 `subpages`/`pagebreak`): a lone comment
+ *   - STANDALONE machinery comments (`subpages`/`pagebreak`): a lone comment
  *     line, which `marked` renders as an HTML block so jsdom makes it a DIRECT
  *     child of `<body>`. These are replaced with the schema-matching block div
  *     (`<div data-type="pageBreak">` / `<div data-type="subpages" [data-recursive]>`)
  *     that the schema's parseHTML rebuilds into the atom.
- *   - MEDIA DISCRIMINATOR comments (#8): the comment NAME selects the node type.
+ *   - MEDIA DISCRIMINATOR comments: the comment NAME selects the node type.
  *     IMAGE-FORM (`youtube`/`video`/`audio`/`drawio`/`excalidraw`) binds to the
  *     preceding `<img>` (`![](src)<!--name …-->`); LINK-FORM (`pdf`/`attachment`/
  *     `embed`) binds to the preceding `<a>` (`[text](src)<!--name …-->`);
@@ -705,9 +700,8 @@ function bridgeTaskLists(html: string): string {
  * textblock — bound to that block's text (the `attrs`/`img` conventions). Every
  * other parent (body, document level, a block container like blockquote/details/
  * li/column div) is STANDALONE position, where a lone-block directive
- * (subpages/pagebreak/pageembed/transclusion) is materialized. Broadening
- * standalone beyond body/document is what lets these nodes survive NESTED inside
- * a blockquote/callout/details/list item (previously dropped -> silent data loss).
+ * (subpages/pagebreak/pageembed/transclusion) is materialized, so these nodes
+ * survive NESTED inside a blockquote/callout/details/list item.
  */
 function isAttachedPosition(tag: string): boolean {
   return tag === "p" || /^h[1-6]$/.test(tag);
@@ -764,7 +758,7 @@ function applyCommentDirectives(html: string): string {
   // comments at document level, prepending them to body preserves global order.
   const leadingDivs: any[] = [];
 
-  // #293 canon #8 discriminator NAME -> node form. The comment NAME alone selects
+  // Discriminator NAME -> node form. The comment NAME alone selects
   // the node type; a bare `![](url)`/`[text](src)` with NO following comment is an
   // `image`/plain link (never sniffed). These are materialized below by rebuilding
   // the SAME schema HTML the serializer's raw-HTML path emits (media-html.ts), so
@@ -808,7 +802,7 @@ function applyCommentDirectives(html: string): string {
     const tag = String(parent?.tagName || "").toLowerCase();
 
     if (parsed.name === "subpages" || parsed.name === "pagebreak") {
-      // #293 canon #5 STANDALONE machinery. A lone comment line is rendered by
+      // STANDALONE machinery. A lone comment line is rendered by
       // marked as its own HTML block; the parser places it under <body>, at
       // document level (leading), or — when the directive is NESTED — inside a
       // block CONTAINER (`<blockquote>` for blockquote/callout, `<details>`,
@@ -830,7 +824,7 @@ function applyCommentDirectives(html: string): string {
     }
 
     if (parsed.name === "pageembed" || parsed.name === "transclusion") {
-      // #293 canon #8 STANDALONE media. Like subpages/pagebreak: a lone comment
+      // STANDALONE media. Like subpages/pagebreak: a lone comment
       // line placed under <body>, at document level (leading), or NESTED inside a
       // block container (blockquote/callout/details/li/column). An ATTACHED-
       // position comment (inside a `<p>`/`<hN>`) is INERT. We rebuild the schema
@@ -851,7 +845,7 @@ function applyCommentDirectives(html: string): string {
     }
 
     if (IMAGE_FORM_NAMES.has(parsed.name)) {
-      // #293 canon #8 IMAGE-FORM media (youtube/video/audio/drawio/excalidraw).
+      // IMAGE-FORM media (youtube/video/audio/drawio/excalidraw).
       // `![](src)<!--name {…}-->` renders as `<p><img …><!--name …--></p>`, so
       // the target is the comment's previous element sibling and it MUST be an
       // <img>. We rebuild the schema element from the img's src + decoded attrs
@@ -871,7 +865,7 @@ function applyCommentDirectives(html: string): string {
     }
 
     if (LINK_FORM_NAMES.has(parsed.name)) {
-      // #293 canon #8 LINK-FORM media (pdf/attachment/embed).
+      // LINK-FORM media (pdf/attachment/embed).
       // `[text](src)<!--name {…}-->` renders as `<p><a href="src">text</a>
       // <!--name …--></p>`, so the target is the previous element sibling and it
       // MUST be an <a>. src = a.href; the visible text is the filename/provider.
@@ -905,7 +899,7 @@ function applyCommentDirectives(html: string): string {
     }
 
     if (parsed.name === "img") {
-      // #293 canon #4 ATTACHED image attrs. `![](src) <!--img {…}-->` renders
+      // ATTACHED image attrs. `![](src) <!--img {…}-->` renders
       // as `<p><img …> <!--img …--></p>`, so the comment's target is the nearest
       // preceding <img> — its previousElementSibling. An `img` comment with no
       // adjacent <img> (e.g. a standalone `<!--img-->` at body level, or one
@@ -940,7 +934,7 @@ function applyCommentDirectives(html: string): string {
     if (!parent) continue; // attrs comment must have an element parent
     if (parsed.name !== "attrs") continue; // unknown name -> inert
     const align = parsed.attrs.textAlign;
-    // #293 canon #9 ATTACHED attrs: honored only in attached position.
+    // ATTACHED attrs: honored only in attached position.
     if (tag === "p" || /^h[1-6]$/.test(tag)) {
       // A real <p>/<hN> host (loose list item, top-level block, …): re-express as
       // an inline style; the schema's textAlign parseHTML reads `el.style.textAlign`
@@ -965,8 +959,7 @@ function applyCommentDirectives(html: string): string {
       comment.remove();
     } else {
       // Misplaced `attrs` comment (not a textblock/li/cell host): inert. Consume
-      // it anyway so no attached marker ever survives into the parsed body
-      // (matches the pre-existing "consume regardless" behaviour).
+      // it anyway so no attached marker ever survives into the parsed body.
       comment.remove();
     }
   }
@@ -979,7 +972,7 @@ function applyCommentDirectives(html: string): string {
 }
 
 /**
- * #293 canon #2: assemble the doc-level footnote list from the `<sup>` markers.
+ * Assemble the doc-level footnote list from the `<sup>` markers.
  *
  * The `^[…]` inline extension (and the raw-HTML column path) leave every
  * footnote reference as `<sup data-footnote-ref data-fn-text>`, carrying the
@@ -989,8 +982,8 @@ function applyCommentDirectives(html: string): string {
  *
  *   - collect every `<sup data-footnote-ref>` that carries a `data-fn-text`;
  *   - DEDUP by the EXACT body text (first-seen order) and assign SEQUENTIAL ids
- *     `fn-1`, `fn-2`, …; set `data-id` on each sup (matched by its body). This is
- *     the F1 fix: distinct bodies get distinct ids, so DIFFERENT notes can never
+ *     `fn-1`, `fn-2`, …; set `data-id` on each sup (matched by its body).
+ *     Distinct bodies get distinct ids, so DIFFERENT notes can never
  *     merge (a hash-derived id could collide and silently drop one body), while
  *     identical bodies still key to the same entry and MERGE (identical `^[text]`
  *     merge; a column footnote and an inline one with the same body collapse to
@@ -1000,11 +993,11 @@ function applyCommentDirectives(html: string): string {
  *     as INLINE markdown so links/marks in the note round-trip;
  *   - append those defs into a single doc-level `<section data-footnotes>` at the
  *     END of `<body>` — reusing an existing one if the HTML already has a
- *     footnotes section (F4: never emit a duplicate `<section>`);
+ *     footnotes section (never emit a duplicate `<section>`);
  *   - STRIP `data-fn-text` from every sup, leaving `<sup data-footnote-ref
  *     data-id>` for the schema's FootnoteReference parseHTML.
  *
- * NESTED footnotes (N1): a body can itself contain a `^[…]` (Pandoc/Obsidian
+ * NESTED footnotes: a body can itself contain a `^[…]` (Pandoc/Obsidian
  * allow it, and the schema's `footnoteDefinition` body is `paragraph+` → inline →
  * footnoteReference), so `parseInline` of a def body SPAWNS a new inner
  * `<sup data-fn-text>` INSIDE the just-built definition. A single scan would
@@ -1017,8 +1010,8 @@ function applyCommentDirectives(html: string): string {
  *
  * Race-free by construction: ids are assigned inside this one call from the local
  * DOM, so concurrent conversions share no mutable state. Fail-open: a sup without
- * `data-fn-text` (e.g. a legacy `<sup data-footnote-ref data-id>` from the old
- * `<section>` HTML form) is left untouched.
+ * `data-fn-text` (e.g. `<sup data-footnote-ref data-id>` from the `<section>`
+ * HTML form) is left untouched.
  */
 // Hard cap on fixed-point rounds. Each round peels ONE nesting level, so this is
 // far above any realistic footnote nesting; it exists only so an adversarial
@@ -1116,8 +1109,7 @@ function assembleFootnotes(html: string, markedInstance: Marked): string {
  *
  * Markdown blank lines are separators, never content, so generateJSON only ever
  * produces an empty paragraph as such a hoist artifact — removing them is safe
- * and general (it also subsumes the <div>-wrapper workaround the `video` case
- * uses). We remove ONLY `type === 'paragraph'` nodes whose `content` is absent
+ * and general. We remove ONLY `type === 'paragraph'` nodes whose `content` is absent
  * or an empty array; every other node (including atoms without `content`) is
  * preserved, and we recurse into the content of any node that has children.
  */
@@ -1148,8 +1140,7 @@ function stripEmptyParagraphs(node: any): any {
  * (SYNCHRONOUS core). Every stage — callout preprocess, `marked` parse, the
  * three DOM passes, and generateJSON — is synchronous for this configuration
  * (no async marked extensions), so the conversion needs no `await`. The async
- * `markdownToProseMirror` below delegates here (its Promise return is preserved
- * for every existing Node consumer). A sync entry is REQUIRED by the client's
+ * `markdownToProseMirror` below delegates here. A sync entry is REQUIRED by the client's
  * chat renderer, which runs inside a React render/useMemo and cannot await.
  */
 export function markdownToProseMirrorSync(
@@ -1158,18 +1149,18 @@ export function markdownToProseMirrorSync(
 ): any {
   // Select the marked instance for this call's extension combination. Defaults
   // (math + fuzzy autolink ON) preserve the editor/file-import/git-sync paths;
-  // the MCP markdown-write path passes both false (#502).
+  // the MCP markdown-write path passes both false.
   const markedInstance = getMarkedInstance(
     options?.parseMath ?? true,
     options?.fuzzyLinkify ?? true,
   );
   const withCallouts = preprocessCallouts(markdownContent, markedInstance);
   const html = markedInstance.parse(withCallouts) as string;
-  // Materialize comment directives (#293 #9 attached textAlign; #5 standalone
+  // Materialize comment directives (attached textAlign; standalone
   // subpages/pageBreak) while the comment nodes still exist, before generateJSON
   // drops them.
   const withAttrs = applyCommentDirectives(html);
-  // #293 canon #2: assemble the doc-level footnote list from the `<sup
+  // Assemble the doc-level footnote list from the `<sup
   // data-fn-text>` markers (from `^[…]` or the raw-HTML column form) before
   // generateJSON, so references + definitions materialize into the schema model.
   const withFootnotes = assembleFootnotes(withAttrs, markedInstance);
@@ -1179,7 +1170,7 @@ export function markdownToProseMirrorSync(
   // to their native internal form (`internal:true, target:null, rel:null`) so
   // they get same-tab SPA navigation, hover-preview, and backlink participation.
   // Every markdown import path funnels through here, so all of them are fixed at
-  // once; external links are left untouched (#522).
+  // once; external links are left untouched.
   return markInternalLinks(stripEmptyParagraphs(doc));
 }
 

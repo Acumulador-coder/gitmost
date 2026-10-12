@@ -1,11 +1,11 @@
-// #487 commit 1 — the in-app tool cancellation safe-point inside paginateAll.
+// The in-app tool cancellation safe-point inside paginateAll.
 //
 // The in-app tool host sets a composite abort signal on the client
 // (setToolAbortSignal) before each tool call; paginateAll checks it at a
 // safe-point BEFORE every sequential page fetch, so a Stop that lands mid-read
-// stops the NEXT HTTP request from STARTING (a read tool can no longer paginate
-// for minutes past a Stop). This pins the HONEST observable property against the
-// REAL client + a real HTTP server: "after Stop, no NEW request starts".
+// stops the NEXT HTTP request from STARTING. This pins the HONEST observable
+// property against the REAL client + a real HTTP server: "after Stop, no NEW
+// request starts".
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

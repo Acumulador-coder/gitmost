@@ -1,14 +1,12 @@
 // Codegen: emit src/registry-stamp.generated.ts with a REGISTRY_STAMP hash of
-// the ENTIRE src/ tree, so a build/ vs src/ skew (issue #447) is detectable at
-// runtime for ANY source file — not just tool-specs.ts.
+// the ENTIRE src/ tree, so a build/ vs src/ skew is detectable at runtime for
+// ANY source file — not just tool-specs.ts.
 //
 // WHY hash the whole src tree (not just tool-specs.ts): the runtime tools are
 // assembled from far more than the spec registry — client.ts, the client/*
 // domain modules, comment-signal.ts and the drawio-* helpers all ship in build/
-// and are loaded by the in-app server. Hashing ONLY tool-specs.ts meant an edit
-// to any of those (e.g. a behavioural fix in client.ts) left the stamp unchanged,
-// so a stale build/ served the OLD code silently (issue #486). Hashing every
-// src/**/*.ts closes that gap: any source edit changes the stamp.
+// and are loaded by the in-app server, so an edit to any of them must change the
+// stamp.
 //
 // WHY hash the raw source text (not extracted structured data): the tool input
 // SCHEMAS live as `buildShape` functions which are NOT serializable, so we cannot

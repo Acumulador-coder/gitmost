@@ -29,23 +29,12 @@ export class WsService {
   // verdict goes stale for up to the TTL, during which a title/icon-bearing tree
   // payload could fan out to the whole room. This MUST be called by whatever code
   // creates or removes a page's restriction (the page-access / page-permission
-  // grant/revoke/restrict path), passing the affected page's spaceId, so the next
-  // emit re-reads hasRestrictedPagesInSpace immediately instead of serving a
-  // stale cached value.
+  // grant/revoke/restrict path), passing the affected page's spaceId.
   //
-  // NOTE: on this branch there is no permission-mutation site to call this from —
-  // the page-access/page-permission repo mutators (insertPageAccess /
+  // The page-access/page-permission repo mutators (insertPageAccess /
   // insertPagePermissions / deletePagePermission* / updatePagePermissionRole)
-  // have ZERO callers in apps/server/src; PageAccessService only validates access.
-  // Because there is nothing to wire the invalidation to yet, the documented
-  // fallback was applied instead: WS_CACHE_TTL_MS was dropped from 30s to 3s (see
-  // ws.utils.ts) to bound the worst-case stale-leak window. This primitive is kept
-  // (and tested) so the restriction-mutation flow, when it lands, has the correct
-  // hook to invalidate the cache.
-  //
-  // TODO: the future restriction-mutation endpoint (restrict/grant/revoke page
-  // access) MUST call this with the affected page's spaceId; once wired, the TTL
-  // can be raised back to a higher value if desired.
+  // have no callers in apps/server/src, so nothing calls this yet and
+  // WS_CACHE_TTL_MS is kept short (ws.utils.ts) to bound the stale window.
   async invalidateSpaceRestrictionCache(spaceId: string): Promise<void> {
     await this.cacheManager.del(
       `${WS_SPACE_RESTRICTION_CACHE_PREFIX}${spaceId}`,
@@ -120,12 +109,9 @@ export class WsService {
 
   // Single-snapshot move broadcast. This is the ONE place that fans out a move
   // under a restricted ancestor together with its compensating delete, resolving
-  // the audience EXACTLY ONCE so the two never disagree.
-  //
-  // It takes a SINGLE socket snapshot (`this.server.in(room).fetchSockets()` is
-  // called exactly once) and a SINGLE authorization resolution
-  // (`getUserIdsWithPageAccess` is called exactly once). From that one snapshot it
-  // partitions the room into two groups and emits to each:
+  // the audience EXACTLY ONCE (one `fetchSockets()`, one
+  // `getUserIdsWithPageAccess`) so the two never disagree. It partitions the room
+  // into two groups and emits to each:
   //   - authorized users (their userId is in the authorized set) receive
   //     `movePayload` (the moveTreeNode);
   //   - everyone else — unauthorized users AND anonymous/no-userId sockets —
@@ -133,13 +119,8 @@ export class WsService {
   //     node disappears from their tree instead of lingering with its real
   //     title/slugId/icon.
   // Because both groups are derived from the same socket array and the same
-  // authorized set, the partition is guaranteed DISJOINT (no socket gets both)
-  // and COMPLETE (every socket gets exactly one). This closes the race window
-  // that existed when the move and the compensating delete each ran their own
-  // independent fetchSockets + getUserIdsWithPageAccess: between those two
-  // snapshots a socket could connect/disconnect or its access change, so a socket
-  // could end up in both sets (leaking the restricted node, then no delete) or in
-  // neither (losing the compensating delete).
+  // authorized set, the partition is DISJOINT (no socket gets both) and COMPLETE
+  // (every socket gets exactly one).
   //
   // It deliberately does NOT consult the cached spaceHasRestrictions: the caller
   // (broadcastPageMoved) has already established, freshly and uncached, that the

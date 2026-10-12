@@ -1,6 +1,4 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Mixin over the shared client context (see client/context.ts).
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import FormData from "form-data";
 import axios, { AxiosInstance } from "axios";
@@ -37,7 +35,7 @@ import { normalizeAndMergeFootnotes } from "../lib/footnote-normalize-merge.js";
 import { regraftResolvedComments } from "../lib/comment-anchor.js";
 import vm from "node:vm";
 
-// Public method surface of PagesMixin (issue #450) — a NAMED type so the factory
+// Public method surface of PagesMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements IPagesMixin` fails to compile on drift.
@@ -203,24 +201,18 @@ export function PagesMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
       fuzzyLinkify: false,
     });
 
-    // #493/#647 §H — an agent read HIDES resolved-comment anchors (#337), so the
-    // markdown it sends no longer carries them; a naive full rewrite would erase
-    // every resolved comment mark. Re-graft the resolved marks from the LIVE doc
-    // onto the freshly-imported body. Migrated off the collab-session transform:
-    // we fetch the coherent live content via /pages/info?includeContentHash (the
-    // live-when-loaded content, coherent with the server hash). Best-effort — a
-    // resolved span whose text the agent changed simply does not re-anchor and is
-    // surfaced (#555). We do NOT use this fetch's hash for the CAS: the CAS must
-    // check the AGENT's baseHash (did the page change since the AGENT read it);
-    // if it moved, the guarded replace 409s and the agent re-reads.
-    // Fail-closed (#647 review): the regraft below needs the LIVE doc to recover
-    // the resolved-comment anchors that the agent's read HID (#337). If this fetch
-    // fails — or returns no usable content — we cannot know whether the page
-    // carries resolved comments, so we must NOT fall through to the guarded write:
-    // when baseHash still matches, that write would land a body missing those
-    // anchors and silently drop them — the exact data-loss this epic prevents.
-    // Throw a retryable error instead; the caller should re-read (fresh baseHash)
-    // and retry. No write is attempted here, so the page is left untouched.
+    // An agent read hides resolved-comment anchors, so the markdown it sends
+    // does not carry them; a naive full rewrite would erase every resolved
+    // comment mark. Re-graft the resolved marks from the LIVE doc onto the
+    // freshly-imported body, fetched via /pages/info?includeContentHash (the
+    // live-when-loaded content). Best-effort — a resolved span whose text the
+    // agent changed does not re-anchor and is surfaced. This fetch's hash is NOT
+    // used for the CAS: the CAS must check the AGENT's baseHash (did the page
+    // change since the agent read it); if it moved, the guarded replace 409s.
+    // Fail-closed: if this fetch fails or returns no usable content we cannot
+    // know whether the page carries resolved comments, and a guarded write with
+    // a still-matching baseHash would silently drop those anchors. Throw a
+    // retryable error instead; no write is attempted.
     let liveContent: any;
     try {
       const live = await this.getPageRaw(pageUuid, undefined, {
@@ -280,20 +272,6 @@ export function PagesMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
   }
 
   /**
-   * Validate a URL string against a scheme allowlist for a given context.
-   *
-   * The markdown link path enforces safe schemes via TipTap, but the raw
-   * JSON path (updatePageJson) bypasses that — so this is the sanitization
-   * choke point for ProseMirror JSON written directly by the caller.
-   *
-   * - "link":  reject javascript:, vbscript:, data: (any scheme that can
-   *            execute or smuggle script when the href is clicked).
-   * - "src":   allow only http(s):, mailto:, /api/files paths, or a
-   *            scheme-less relative/absolute path; reject
-   *            javascript:/vbscript:/data:/file:.
-   */
-
-  /**
    * Rename a page (change its title only) without touching or resending its
    * content. The slug is derived from the page record, not the body, so it is
    * left intact too.
@@ -303,16 +281,6 @@ export function PagesMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
     await this.client.post("/pages/update", { pageId, title });
     return { success: true, pageId, title };
   }
-
-  /**
-   * Copy the WHOLE content of one page onto another, entirely server-side: the
-   * source's ProseMirror document is read and written verbatim onto the target
-   * via the live collab path, so the document never passes through the model.
-   *
-   * Only the target's BODY is replaced — its title and slug live on the page
-   * record (not in the content), so they are untouched. The source page is not
-   * modified at all.
-   */
 
   async movePage(
     pageId: string,
@@ -340,16 +308,7 @@ export function PagesMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
       .then((res) => res.data);
   }
 
-  // --- Comment methods (ported from upstream PR #3 by Max Nikitin) ---
-
-  /**
-   * Normalize a comment's `content` into a ProseMirror doc object before
-   * markdown conversion. createComment/updateComment send content as a
-   * JSON.stringify(...) STRING, and the server stores it as-is, so on read it
-   * comes back as a string. convertProseMirrorToMarkdown returns "" for a
-   * string, so parse it first (guarded — fall back to the raw value on any
-   * parse failure so a non-JSON legacy value is still handled gracefully).
-   */
+  // --- Comment methods (from upstream PR #3 by Max Nikitin) ---
 
   /** Share a page publicly (idempotent) and return the public URL. */
   async sharePage(pageId: string, searchIndexing: boolean = true) {
@@ -649,7 +608,7 @@ export function PagesMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
   }
 
   /**
-   * Save an intentional NAMED version of a page's CURRENT live content (#370).
+   * Save an intentional NAMED version of a page's CURRENT live content.
    * The write goes over the same agent-authenticated collab session content edits
    * use, so the server derives kind='agent' from the signed actor. Resolves a
    * SaveVersionResult: `{ saved:true, historyId, kind, alreadySaved }` on success,
@@ -711,31 +670,6 @@ export function PagesMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
     const diff = diffDocs(fromSide.doc, toSide.doc);
     return { from: fromSide.meta, to: toSide.meta, diff };
   }
-
-  /**
-   * Edit a page by running an arbitrary user-supplied JS transform against the
-   * live document, with a diff preview + page-history safety net.
-   *
-   * The transform string is evaluated as `(doc, ctx) => doc` inside a node:vm
-   * sandbox: it gets ONLY `{ doc, ctx, structuredClone, console }` as globals,
-   * a 5s timeout, and NO access to require/process/fs/network. It must return a
-   * `{ type: "doc" }` node, which is validated structurally before any write.
-   *
-   * `ctx` exposes:
-   *   - comments: the page's comments (fetched before the live read);
-   *   - log: an array the transform can push diagnostics to (via console.log);
-   *   - consume(id): mark a comment id as consumed (for deleteComments);
-   *   - helpers: the transforms.ts primitives + commentsToFootnotes.
-   *
-   * Footnote convention used by the helpers: footnote markers are plain "[N]"
-   * text in the body, and the notes are an orderedList under a heading whose
-   * text is "Примечания переводчика".
-   *
-   * dryRun (default true): read the page's current content, run the transform,
-   * and return `{ pushed:false, diff, log }` WITHOUT opening the collab socket.
-   * Otherwise the transform runs atomically inside mutatePageContent, optionally
-   * deletes consumed comments, and returns the new historyId + diff + log.
-   */
   }
   return PagesMixin;
 }

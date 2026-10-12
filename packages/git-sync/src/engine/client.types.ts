@@ -40,7 +40,7 @@ export interface GitSyncPageNodeLite {
  *   - pull reads:  `getPageJson` (+ the tree walk's `listSpaceTree`),
  *   - push writes: `importPageMarkdown` / `createPage` / `deletePage` /
  *                  `movePage` / `renamePage`,
- *   - continuous (phase B+): `listRecentSince` / `listTrash` / `restorePage`.
+ *   - continuous: `listRecentSince` / `listTrash` / `restorePage`.
  */
 export interface GitSyncClient {
   // --- reads (pull) ---------------------------------------------------------
@@ -58,7 +58,7 @@ export interface GitSyncClient {
   ): Promise<{ pages: GitSyncPageNodeLite[]; complete: boolean }>;
 
   /**
-   * Existence probe for the pull-side ghost guard (D-P3-1). Given a set of
+   * Existence probe for the pull-side ghost guard. Given a set of
    * candidate pageIds, return the subset that corresponds to a REAL page ROW —
    * INCLUDING soft-deleted (trashed) and pages in ANY OTHER space, i.e. any
    * `id` that has ever been a page (`SELECT id FROM pages WHERE id = ANY(...)`,
@@ -68,7 +68,7 @@ export interface GitSyncClient {
    * The pull reconciler only absence-deletes a tracked file whose pageId is
    * returned here: a deleted/moved/trashed page HAS a row -> its vault file is
    * cleaned up; a GHOST id (a git file whose id was NEVER a page) has NO row ->
-   * it is preserved rather than silently deleted (the data-loss bug). Called on
+   * it is preserved rather than silently deleted. Called on
    * only the small candidate-delete set (tracked ids absent from the live tree),
    * so the query is bounded and usually empty.
    */
@@ -102,7 +102,7 @@ export interface GitSyncClient {
    *
    * `baseMarkdown` is the body at the last export (`refs/docmost/last-export`,
    * likewise stripped), the common ancestor for a THREE-WAY merge against the
-   * live doc so concurrent human edits survive (review #5). Optional/null -> 2-way.
+   * live doc so concurrent human edits survive. Optional/null -> 2-way.
    */
   importPageMarkdown(
     pageId: string,

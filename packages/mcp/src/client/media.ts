@@ -1,6 +1,4 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Mixin over the shared client context (see client/context.ts).
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import FormData from "form-data";
 import axios, { AxiosInstance } from "axios";
@@ -53,7 +51,7 @@ const MIME_TO_EXT: Record<string, string> = {
 // Anything else uploaded via uploadFile becomes a generic `attachment` block
 // (a download card). Defined explicitly (not derived from MIME_TO_EXT) so the
 // image-vs-attachment decision is a stable, auditable allowlist independent of
-// the extension<->mime maps above (issue #608).
+// the extension<->mime maps above.
 const RENDERABLE_IMAGE_MIMES = new Set<string>([
   "image/png",
   "image/jpeg",
@@ -62,7 +60,7 @@ const RENDERABLE_IMAGE_MIMES = new Set<string>([
   "image/svg+xml",
 ]);
 
-// Default upload byte ceiling for uploadFile (issue #608). The /mcp POST body is
+// Default upload byte ceiling for uploadFile. The /mcp POST body is
 // bounded by the server's global Fastify `HTTP_JSON_BODY_LIMIT` (default 25 MiB,
 // main.ts) and base64 inflates the payload ~1.333×, so the effective on-disk file
 // ceiling is ≈ HTTP_JSON_BODY_LIMIT × 0.74 ≈ 18 MiB. Overridable (but never
@@ -83,7 +81,7 @@ function resolveMaxUploadBytes(): number {
     : DEFAULT_MAX_UPLOAD_BYTES;
 }
 
-// Public method surface of MediaMixin (issue #450) — a NAMED type so the factory
+// Public method surface of MediaMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements IMediaMixin` fails to compile on drift.
@@ -271,7 +269,7 @@ export function MediaMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
    * in one step. This is the byte-fed counterpart to uploadImage/insertImage
    * (which only accept an http(s) URL the SERVER must fetch): here the caller
    * ships the bytes, so no public URL is required and non-image types are
-   * supported. MCP-only (issue #608).
+   * supported. MCP-only.
    *
    * Ordering is load-bearing (orphan avoidance + validate-before-upload):
    *  - pageId is resolved to its canonical UUID FIRST — a slugId sent to
@@ -755,16 +753,13 @@ export function MediaMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
     const pageUuid = await this.resolvePageId(pageId);
 
     // Hold ONE per-page lock for the WHOLE operation (scan -> upload -> write).
-    // Previously the scan and the write were two separate mutatePageContent
-    // calls, each acquiring + releasing the lock, with the upload happening in
-    // the UNLOCKED gap between them. A concurrent op could interleave there: it
-    // could remove the target image so the write pass matches nothing, leaving
-    // the freshly-uploaded attachment as an un-deletable orphan (Docmost has no
-    // API to delete a single content attachment). Acquiring the lock once and
-    // using the non-locking collab helper inside (the per-page mutex is NOT
-    // reentrant, so the self-locking mutatePageContent would deadlock here)
-    // closes that TOCTOU window. uploadImage hits /files/upload over plain HTTP
-    // and does not touch the page lock, so it is safe to call while held.
+    // Otherwise a concurrent op could remove the target image between the scan
+    // and the write, so the write matches nothing and the freshly-uploaded
+    // attachment becomes an un-deletable orphan (Docmost has no API to delete a
+    // single content attachment). Inside the lock we use the non-locking collab
+    // helper (the per-page mutex is NOT reentrant, so the self-locking
+    // mutatePageContent would deadlock here). uploadImage hits /files/upload over
+    // plain HTTP and does not touch the page lock, so it is safe to call while held.
     return withPageLock(pageUuid, async () => {
       // STEP 1: read-only live check. Scan the live document for any image node
       // matching oldAttachmentId BEFORE uploading anything, so a wrong/stale id
@@ -894,19 +889,7 @@ export function MediaMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
     });
   }
 
-  // --- draw.io diagrams (issue #423) ---
-
-  /**
-   * Upload a ready-made byte buffer as a page attachment via the same
-   * multipart /files/upload endpoint uploadImage uses. Split out as its own
-   * (overridable) seam so drawioCreate/update can upload the generated
-   * `.drawio.svg` without going through the URL-fetch path, and so tests can
-   * stub the network. Mirrors uploadImage's fresh-FormData + one-shot 401/403
-   * re-auth handling (a FormData body is single-use, so it must be rebuilt per
-   * attempt).
-   */
-
-  // --- draw.io diagrams (issue #423) ---
+  // --- draw.io diagrams ---
 
   /**
    * Upload a ready-made byte buffer as a page attachment via the same
@@ -994,7 +977,7 @@ export function MediaMixin<TBase extends GConstructor<DocmostClientContext>>(Bas
   }
 
   /**
-   * PUBLIC accessor for the guarded internal-file fetch (#588). A thin, read-only
+   * PUBLIC accessor for the guarded internal-file fetch. A thin, read-only
    * wrapper over the `protected fetchInternalFile` — it adds NO logic of its own
    * and deliberately reuses that method's SSRF / traversal / 64 MiB guards rather
    * than reimplementing them. Exposed on the public client surface so the in-app

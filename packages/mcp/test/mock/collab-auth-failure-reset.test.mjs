@@ -1,14 +1,12 @@
-// Unit tests for the collab-token reset on a Hocuspocus WS auth failure (#486).
+// Unit tests for the collab-token reset on a Hocuspocus WS auth failure.
 //
-// Before this fix the cached collab token (#435) was dropped ONLY on an HTTP
-// 401/403 (the REST interceptor + login()); a rejected collab-WEBSOCKET handshake
-// left the stale token in the cache, so every subsequent mutation re-presented
-// the SAME bad token for up to the collab-token TTL (minutes) with no self-heal.
-//
-// The fix wraps collab writes in `writeWithCollabAuthRetry`: when the write
-// rejects with the tagged collab-auth error (collab-session.ts's
-// onAuthenticationFailed), it invalidates the cached token and retries the write
-// ONCE with a force-refreshed token — symmetric to the HTTP-401 path.
+// The cached collab token is dropped on an HTTP 401/403 (the REST interceptor +
+// login()), but a rejected collab-WEBSOCKET handshake needs its own path or the
+// stale token would be re-presented for up to the collab-token TTL.
+// `writeWithCollabAuthRetry` handles it: when the write rejects with the tagged
+// collab-auth error (collab-session.ts's onAuthenticationFailed), it invalidates
+// the cached token and retries the write ONCE with a force-refreshed token —
+// symmetric to the HTTP-401 path.
 //
 // writeWithCollabAuthRetry / getCollabTokenWithReauth are protected in TS but
 // plain methods on the compiled build, so the tests call them directly (same

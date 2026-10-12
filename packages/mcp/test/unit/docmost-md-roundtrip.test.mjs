@@ -230,10 +230,9 @@ test("drawio round-trips through export and import", () => {
   });
 });
 
-// #503: a hardBreak (Shift+Enter) must be REPRESENTABLE end-to-end through the
-// MCP canon, not silently cut. The reported symptom was a hardBreak sent via
-// updatePageJson vanishing with no error and no line break. This guards all
-// three seams of that path at once:
+// A hardBreak (Shift+Enter) must be REPRESENTABLE end-to-end through the
+// MCP canon, not silently cut. This guards all three seams of the
+// updatePageJson path at once:
 //   1. pm -> md: the serializer emits the CommonMark hard break `  \n` (two
 //      trailing spaces), not a bare `\n` (which reimports as a soft break and is
 //      lost).

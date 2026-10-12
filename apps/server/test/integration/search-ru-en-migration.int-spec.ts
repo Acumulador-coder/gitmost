@@ -4,7 +4,7 @@ import * as migration from '../../src/database/migrations/20260707T130000-search
 import * as dropFts from '../../src/database/migrations/20261011T120000-drop-page-embeddings-fts';
 
 /**
- * #529 A1 — the ru_en config migration must be REVERSIBLE in the correct order:
+ * The ru_en config migration must be REVERSIBLE in the correct order:
  * down() moves pages.tsv + page_embeddings.fts back to `english` BEFORE dropping
  * the ru_en config (a generated column still depending on ru_en would block the
  * DROP). This roundtrips down()→up() on the already-migrated test DB and asserts

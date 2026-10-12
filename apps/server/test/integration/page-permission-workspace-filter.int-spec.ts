@@ -11,7 +11,7 @@ import {
 } from './db';
 
 /**
- * #348 — the whole-workspace access-filter short-circuit is an ACCESS-CONTROL
+ * The whole-workspace access-filter short-circuit is an ACCESS-CONTROL
  * path, so it must produce the SAME result as the full recursive-ancestor CTE.
  *
  * filterAccessiblePageIds({ workspaceId }) (no spaceId — the favorites /
@@ -21,10 +21,10 @@ import {
  * no matching `pagePermissions`. Driven against real Postgres, asserts:
  *   1. zero restrictions -> short-circuit returns the full input set;
  *   2. a restriction present -> the CTE runs and drops the page the user can't
- *      reach while keeping the reachable ones (behavior unchanged);
+ *      reach while keeping the reachable ones;
  *   3. inserting the FIRST pageAccess flips hasRestrictedPagesInWorkspace
- *      false -> true immediately (the 0->1 transition — now uncached, no stale
- *      window, review F1); it is scoped per workspace.
+ *      false -> true immediately (uncached, no stale window); it is scoped per
+ *      workspace.
  */
 describe('#348 filterAccessiblePageIds workspace short-circuit (real PG)', () => {
   let db: Kysely<any>;

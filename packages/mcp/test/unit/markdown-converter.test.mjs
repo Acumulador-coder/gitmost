@@ -25,8 +25,8 @@ test("nested bulletList with 3 children keeps all children indented under the pa
     ),
   );
 
-  // Block children of a list item are blank-line separated (loose list) since
-  // the #351 converter fix; the sublist stays nested at the 2-col marker column.
+  // Block children of a list item are blank-line separated (loose list); the
+  // sublist stays nested at the 2-col marker column.
   assert.equal(
     convertProseMirrorToMarkdown(input),
     "- Parent\n\n  - A\n  - B\n  - C",
@@ -43,7 +43,7 @@ test("nested list under an ordered item indents 3 spaces", () => {
     ),
   );
 
-  // Blank-line separated block children (loose list) per the #351 converter fix.
+  // Blank-line separated block children (loose list).
   assert.equal(
     convertProseMirrorToMarkdown(input),
     "1. Parent\n\n   - Child",
@@ -119,7 +119,7 @@ test("textAlign is carried in a trailing attached-comment directive (JSON-encode
     content: [text("body")],
   });
 
-  // #293 canon #9: paragraph textAlign has no native markdown syntax, so it is
+  // Paragraph textAlign has no native markdown syntax, so it is
   // attached as a trailing `<!--attrs {json}-->` comment on the block. The value
   // is JSON-encoded, so a hostile value (`"`, `<`, `>`) is carried verbatim and
   // inert — it cannot break out of the comment.
@@ -154,7 +154,7 @@ test("empty task item still emits its marker", () => {
   assert.equal(convertProseMirrorToMarkdown(input), "- [ ]\n- [x]");
 });
 
-// Image captions (issue #221 / #293 canon #8). An image WITHOUT a caption stays
+// Image captions. An image WITHOUT a caption stays
 // the plain `![alt](src)`; WITH a caption (or any other non-src attr) the extra
 // attrs ride in a trailing `<!--img {json}-->` discriminator comment on the
 // markdown image form, so the round-trip md -> json restores them.

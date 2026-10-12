@@ -12,7 +12,7 @@ import {
 } from './db';
 
 /**
- * #487 commit 4 — bidirectional reconcile + owner-write priority, real SQL.
+ * Bidirectional reconcile + owner-write priority, real SQL.
  *
  * Proves the OBSERVABLE recovery properties against docmost_test:
  *  - the CONDITIONAL owner-write beats a reconcile stamp, and a stamp never

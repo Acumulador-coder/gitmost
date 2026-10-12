@@ -1,4 +1,4 @@
-// #402 — INTEGRATION test that locks the registerTool monkeypatch installed by
+// INTEGRATION test that locks the registerTool monkeypatch installed by
 // createDocmostMcpServer (src/index.ts). The sibling unit test
 // (test/unit/tool-timing.test.mjs) only exercises the timeToolHandler helper in
 // ISOLATION; it never constructs the server, so nothing there proves the factory

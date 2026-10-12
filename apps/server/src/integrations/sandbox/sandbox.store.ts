@@ -116,10 +116,9 @@ export class SandboxStore implements OnModuleDestroy {
    * Both wiring sites (embedded MCP + in-app agent tools) use this so the uri↔id
    * mapping and URL composition live next to putAndLink, not copy-pasted.
    *
-   * The two per-blob caps are REPORTED to the package (#613) so downloadFile can
-   * pre-check and error against the caps this store will ACTUALLY enforce, rather
-   * than a compile-time copy of their defaults — an operator who raises
-   * SANDBOX_MAX_BYTES therefore raises what downloadFile delivers. They are read
+   * The two per-blob caps are REPORTED to the package so downloadFile can
+   * pre-check and error against the caps this store will ACTUALLY enforce — an
+   * operator who raises SANDBOX_MAX_BYTES raises what downloadFile delivers. They are read
    * from the environment HERE (the package still never touches env), and asSink()
    * is called per MCP request / per in-app tool binding, so a value is never
    * staler than one request. put() re-reads them anyway, so it stays authoritative.

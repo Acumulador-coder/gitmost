@@ -33,19 +33,14 @@ export function withPageLock<T>(
   pageId: PageId,
   fn: () => Promise<T>,
 ): Promise<T> {
-  // STRUCTURAL INVARIANT (issue #449/#435, "resolve-then-lock"): the mutex key
-  // MUST be the canonical page UUID, never a raw slugId. The `PageId` brand now
-  // enforces this at COMPILE time (a raw string / slugId no longer type-checks
-  // as a key); the runtime assert below stays as a backstop for untyped (JS)
-  // callers and the http/stdio transports. The whole write path relies
-  // on the lock key AND the CollabSession cache key being the resolved UUID
-  // (#260) — if a future write method forgot to call resolvePageId and locked
-  // under a slugId, two writes to the same page would take DIFFERENT mutex keys
-  // and silently lose serialization (clobbering live human edits). This was an
-  // invariant enforced only by comments/convention; assert it in CODE so the
-  // violation fails fast and loud at the lock instead of corrupting data in
-  // prod. The centralizing helper (mutatePageContent/replacePageContent) already
-  // guards a raw-input caller, but this backstop catches ANY path.
+  // STRUCTURAL INVARIANT ("resolve-then-lock"): the mutex key MUST be the
+  // canonical page UUID, never a raw slugId. The `PageId` brand enforces this at
+  // COMPILE time; the runtime assert below is a backstop for untyped (JS)
+  // callers and the http/stdio transports. The whole write path relies on the
+  // lock key AND the CollabSession cache key being the resolved UUID — a write
+  // locked under a slugId would take a DIFFERENT mutex key than a write to the
+  // same page by UUID and silently lose serialization (clobbering live human
+  // edits), so the violation fails fast and loud here.
   if (!isUuid(pageId)) {
     throw new Error(
       `withPageLock: key must be a canonical page UUID, got '${pageId}'. ` +

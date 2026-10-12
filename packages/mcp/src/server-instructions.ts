@@ -15,20 +15,14 @@
 //     registry the server registers tools from (SHARED_TOOL_SPECS' mcpName +
 //     catalogLine) PLUS the handful of inline MCP-only tools (their inventory
 //     lines live in INLINE_MCP_INVENTORY below). Because this list is BUILT
-//     from the registry, it can never drift out of sync with the registered
-//     tools — adding/renaming/removing a spec changes it automatically, with no
-//     prose edit and no scraper test. An unmapped tool still appears (under
-//     "OTHER"), so a new tool can never silently vanish from the guide.
+//     from the registry, it stays in sync with the registered tools —
+//     adding/renaming/removing a spec changes it automatically, with no prose
+//     edit. An unmapped tool still appears (under "OTHER"), so a new tool can
+//     never silently vanish from the guide.
 //
-// This replaces the old hand-maintained monolithic guide + its regex scraper
-// test (test/unit/server-instructions.test.mjs), which only checked that every
-// registered name appeared SOMEWHERE in the prose and drifted whenever a name
-// was reworded.
-//
-// OUT OF SCOPE (issue #448): the README / README.ru tool catalogs are still
-// hand-maintained prose and are NOT generated from this registry. Regenerating
-// them from SHARED_TOOL_SPECS is tracked separately as an optional docs script
-// under issue #412 — until then a tool rename still needs a manual README edit.
+// The README / README.ru tool catalogs are hand-maintained prose and are NOT
+// generated from this registry, so a tool rename still needs a manual README
+// edit.
 
 import { SHARED_TOOL_SPECS, SharedToolSpec } from "./tool-specs.js";
 
@@ -53,9 +47,9 @@ export const ROUTING_PROSE =
  * remaining multi-word (camelCase) token in the prose is a REGISTERED tool — so a
  * rename/removal that leaves a DEAD tool reference in the prose reddens, while an
  * ordinary parameter mention does not. The generated <tool_inventory> already
- * guards the FORWARD direction (every registered tool appears); this closes the
- * reverse (the prose could previously name a nonexistent tool and nothing
- * reddened). A new non-tool term in the prose is a loud one-line addition here.
+ * guards the FORWARD direction (every registered tool appears); this guards
+ * the reverse. A new non-tool term in the prose is a loud one-line addition
+ * here.
  */
 export const PROSE_NON_TOOL_TERMS: ReadonlySet<string> = new Set([
   // tool PARAMETERS mentioned in the routing hints
@@ -108,7 +102,7 @@ export function registeredMcpToolNames(
 }
 
 /**
- * REVERSE drift-guard (#494): return the multi-word (camelCase) tokens in the
+ * REVERSE drift-guard: return the multi-word (camelCase) tokens in the
  * routing prose that look like a tool name but are NOT registered and are NOT a
  * known non-tool term. An empty result means the prose references only real
  * tools. A non-empty result is a dead/renamed reference (a token like
@@ -224,8 +218,8 @@ const TOOL_FAMILY: Record<string, Family> = {
   restorePageVersion: "HISTORY",
   savePageVersion: "HISTORY",
   exportPageMarkdown: "HISTORY",
-  // importPageMarkdown is now inAppOnly (#411) — it is not registered on the
-  // external MCP host, so it no longer appears in the generated inventory.
+  // importPageMarkdown is inAppOnly — it is not registered on the external MCP
+  // host, so it does not appear in the generated inventory.
 };
 
 /**

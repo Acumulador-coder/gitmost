@@ -12,15 +12,12 @@ import {
 } from './db';
 
 /**
- * #207 #8 — recursive page-tree CTEs (ancestors in getPageBreadCrumbs,
- * descendants in forceDelete) must not hang when a parent/child cycle already
- * exists in the data. Before the fix neither CTE had a CYCLE clause or a depth
- * cap, so a cycle (e.g. one persisted by the #7 TOCTOU race) made withRecursive
- * loop forever — and since the move guard itself runs the ancestor CTE, a cycle
- * would disable the very guard meant to prevent it.
+ * Recursive page-tree CTEs (ancestors in getPageBreadCrumbs, descendants in
+ * forceDelete) must not hang when a parent/child cycle already exists in the
+ * data — and since the move guard itself runs the ancestor CTE, a hang would
+ * disable the very guard meant to prevent cycles.
  *
- * The fix adds a depth counter bounded by MAX_PAGE_TREE_DEPTH to both CTEs.
- * These tests seed an A<->B cycle directly (bypassing the guard), then run the
+ * Both CTEs carry a depth counter bounded by MAX_PAGE_TREE_DEPTH. These tests seed an A<->B cycle directly (bypassing the guard), then run the
  * real CTE paths against Postgres with a short connection-level statement_timeout
  * so a regression (an unbounded CTE) fails fast as a query timeout instead of a
  * bounded result.

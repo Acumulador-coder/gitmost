@@ -1,6 +1,4 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Mixin over the shared client context (see client/context.ts).
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import {
   updatePageContentRealtime,
@@ -54,7 +52,7 @@ import {
 } from "../lib/transforms.js";
 import { normalizeAndMergeFootnotes } from "../lib/footnote-normalize-merge.js";
 
-// Public method surface of NodesWriteMixin (issue #450) — a NAMED type so the factory
+// Public method surface of NodesWriteMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements INodesWriteMixin` fails to compile on drift.
@@ -212,20 +210,6 @@ export function NodesWriteMixin<TBase extends GConstructor<DocmostClientContext>
   }
 
   /**
-   * AUTHOR-INLINE footnote insertion. The agent supplies only WHERE
-   * (`anchorText`, a snippet of body text to attach the marker after) and WHAT
-   * (`text`, the footnote content as markdown). Numbering and the bottom
-   * `footnotesList` are derived deterministically server-side
-   * (`insertInlineFootnote` -> `canonicalizeFootnotes`): the agent never sees,
-   * assigns, or edits a footnote number or the list, so it CANNOT desync.
-   *
-   * Content DEDUP: when an existing definition has the same content, its id is
-   * reused (one number, one definition, several references). The write is atomic
-   * via `mutatePageContent` (single-writer, page-locked); if the anchor text is
-   * not found the transform aborts with a clear error and no write happens.
-   */
-
-  /**
    * Surgical text edits: find/replace inside text nodes of the live
    * document. Preserves all block ids, marks, callouts and tables.
    */
@@ -342,7 +326,7 @@ export function NodesWriteMixin<TBase extends GConstructor<DocmostClientContext>
    * Replace the block whose attrs.id === nodeId. Operates on the LIVE collab
    * document so comments and concurrent edits are preserved.
    *
-   * Exactly one of `input.markdown` / `input.node` (#413):
+   * Exactly one of `input.markdown` / `input.node`:
    *  - `markdown` (RECOMMENDED): the block is rewritten from a canonical markdown
    *    fragment. The fragment may import to N blocks (a "1 -> N" splice: rewrite a
    *    whole section in one call). The FIRST resulting block INHERITS the target's
@@ -355,7 +339,7 @@ export function NodesWriteMixin<TBase extends GConstructor<DocmostClientContext>
    *  - `node`: a raw ProseMirror node for precise attr/mark work. The replacement
    *    keeps the target id (if `node.attrs.id` is missing it is set to nodeId).
    *
-   * #159 ambiguous-id semantics are unchanged: 0 matches -> "no node"; >1 matches
+   * Ambiguous-id semantics: 0 matches -> "no node"; >1 matches
    * -> "ambiguous, refused" (nothing written), on BOTH paths — the markdown path
    * runs a dry `replaceNodeById` count first, so a duplicated id never splices.
    */
@@ -460,7 +444,7 @@ export function NodesWriteMixin<TBase extends GConstructor<DocmostClientContext>
   }
 
   /**
-   * patchNode with a MARKDOWN fragment (#413). Imports the fragment through the
+   * patchNode with a MARKDOWN fragment. Imports the fragment through the
    * canonical importer, then 1 -> N splices the resulting blocks in place of the
    * target block on the LIVE collab doc:
    *  - the FIRST block inherits the target's id; the rest get FRESH ids (minted
@@ -468,7 +452,7 @@ export function NodesWriteMixin<TBase extends GConstructor<DocmostClientContext>
    *  - `^[...]` footnote definitions merge into the page's tail list;
    *  - REJECTED when the target block carries a markdown-unrepresentable table
    *    attr (colspan/rowspan/colwidth/background) — guarding against silent loss;
-   *  - #159 ambiguity is enforced by a dry `replaceNodeById` count BEFORE the
+   *  - id ambiguity is enforced by a dry `replaceNodeById` count BEFORE the
    *    splice, so a duplicated id never writes.
    */
   protected async patchNodeMarkdown(
@@ -578,7 +562,7 @@ export function NodesWriteMixin<TBase extends GConstructor<DocmostClientContext>
    * Operates on the LIVE collab document so comments and concurrent edits are
    * preserved.
    *
-   * Exactly one of `input.markdown` / `input.node` (#413):
+   * Exactly one of `input.markdown` / `input.node`:
    *  - `markdown` (RECOMMENDED): a canonical markdown fragment. It may import to
    *    SEVERAL blocks — they are inserted IN ORDER at the anchor. `^[...]`
    *    footnote definitions merge into the page's tail list (same machinery as

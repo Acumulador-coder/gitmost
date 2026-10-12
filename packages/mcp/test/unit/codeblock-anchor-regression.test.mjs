@@ -1,19 +1,19 @@
-// Full-chain regression for the disappearing-codeBlock incident.
+// Full-chain regression: a comment mark anchored inside a codeBlock must not
+// destroy the block.
 //
-// Production chain that destroyed code blocks:
-//   1. createComment anchored a comment MARK inside a codeBlock
-//      (applyCommentMarkInDoc had no schema awareness);
-//   2. applyDocToFragment wrote the poisoned doc into the live Y.Doc
+// The chain this guards against:
+//   1. createComment anchors a comment MARK inside a codeBlock;
+//   2. applyDocToFragment writes the poisoned doc into the live Y.Doc
 //      (PMNode.fromJSON does not validate marks against parent specs);
 //   3. any schema-full materialization (browser ySyncPlugin on page open —
-//      initProseMirrorDoc here) hit schema.node('codeBlock', ...) ->
+//      initProseMirrorDoc here) hits schema.node('codeBlock', ...) ->
 //      createChecked -> validContent -> allowsMarks === false (codeBlock spec
-//      `marks: ""`) -> throw -> y-prosemirror's catch DELETED the codeBlock
+//      `marks: ""`) -> throw -> y-prosemirror's catch DELETES the codeBlock
 //      from the shared Y.Doc permanently.
 //
-// The invariant violated in production, asserted here end-to-end against the
-// REAL Y.Doc + schema: after a createComment-style anchoring attempt on
-// code-only text and a client materialization, the codeBlock STILL EXISTS.
+// Asserted end-to-end against the REAL Y.Doc + schema: after a
+// createComment-style anchoring attempt on code-only text and a client
+// materialization, the codeBlock STILL EXISTS.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { initProseMirrorDoc, yDocToProsemirrorJSON } from "y-prosemirror";
@@ -41,7 +41,7 @@ const countCodeBlocks = (doc) =>
   (doc.content || []).filter((n) => n.type === "codeBlock").length;
 
 test("incident chain: a code-only comment anchor cannot destroy the codeBlock", () => {
-  // Sanity: the docmost codeBlock really forbids all marks — the incident's
+  // Sanity: the docmost codeBlock really forbids all marks — the chain's
   // precondition. If this ever changes, the guard derivation adapts with it.
   assert.equal(docmostSchema.nodes.codeBlock.spec.marks, "");
 
@@ -61,7 +61,7 @@ test("incident chain: a code-only comment anchor cannot destroy the codeBlock", 
   assert.deepEqual(attempt, live, "the refused attempt leaves the doc unchanged");
 
   // 2. Materialize like the browser editor does on page open (ySyncPlugin
-  // init). In the incident this is the step that deleted the poisoned node.
+  // init). This is the step that would delete a poisoned node.
   initProseMirrorDoc(ydoc.getXmlFragment("default"), docmostSchema);
 
   // 3. THE invariant: the codeBlock is still in the shared Y.Doc.
@@ -75,7 +75,7 @@ test("incident chain, guard bypassed: the write path refuses the poison and the 
   const live = yDocToProsemirrorJSON(ydoc, "default");
 
   // Hand-splice the mark into the codeBlock, bypassing the anchor guard — the
-  // exact doc shape the buggy code used to produce.
+  // doc shape an unguarded anchor would produce.
   const poisoned = structuredClone(live);
   const cb = poisoned.content.find((n) => n.type === "codeBlock");
   cb.content = [

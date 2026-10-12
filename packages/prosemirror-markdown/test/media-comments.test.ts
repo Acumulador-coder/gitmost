@@ -5,10 +5,9 @@ import {
 } from 'docmost-client';
 
 // ---------------------------------------------------------------------------
-// #293 canon #8 — media family -> md-form + discriminator comment.
+// Media family -> md-form + discriminator comment.
 //
-// Ten node types move their TOP-LEVEL form from raw schema HTML to a readable
-// markdown target plus a discriminator `<!--name {…}-->` comment whose NAME
+// Ten node types serialize at TOP LEVEL as a readable markdown target plus a discriminator `<!--name {…}-->` comment whose NAME
 // selects the node type:
 //
 //   IMAGE-FORM  `![](src)<!--name …-->`   youtube, video, audio, drawio, excalidraw

@@ -1,6 +1,5 @@
-// Snapshot + invariant tests for the semantic presets (issue #425, acceptance
-// #5): every node kind has a style-string per preset, and colorblind-safe uses
-// only the Okabe-Ito palette (no problematic color pairs).
+// Snapshot + invariant tests for the semantic presets: every node kind has a
+// style-string per preset, and colorblind-safe uses only the Okabe-Ito palette.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

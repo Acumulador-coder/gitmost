@@ -81,7 +81,7 @@ test("normalizeFileUrl rewrites the bare /files/ branch and leaves /api/files/ a
 
 test("collectInternalFileNodes recurses into nested content containers", () => {
   // The internal image is buried inside a callout's content array, so a
-  // regression on the recursion (e.g. a shallow .filter()) would miss it.
+  // non-recursive walk (e.g. a shallow .filter()) would miss it.
   const nested = {
     type: "image",
     attrs: { src: "/api/files/att-9/deep.png", attachmentId: "att-9" },

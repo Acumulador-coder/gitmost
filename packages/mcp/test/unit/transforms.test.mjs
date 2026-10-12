@@ -189,7 +189,7 @@ test("commentsToFootnotes anchors comments and renumbers by position", () => {
   // p3 (banana), in reading order — the old `[N]` text markers are gone.
   const refIds = collectRefIds(out);
   assert.equal(refIds.length, 3);
-  // Body paragraphs p1..p3 no longer carry literal [N] text markers.
+  // Body paragraphs p1..p3 carry no literal [N] text markers.
   assert.doesNotMatch(blockText(out.content[1]), /\[\d+\]/);
   assert.doesNotMatch(blockText(out.content[2]), /\[\d+\]/);
   assert.doesNotMatch(blockText(out.content[3]), /\[\d+\]/);
