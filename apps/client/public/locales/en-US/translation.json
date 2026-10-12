@@ -1242,6 +1242,9 @@
   "Stop": "Stop",
   "Response stopped.": "Response stopped.",
   "Connection lost — the answer was interrupted.": "Connection lost — the answer was interrupted.",
+  "Connection lost — following the answer…": "Connection lost — following the answer…",
+  "Can't reach the server to follow the answer — retrying: {{reason}}": "Can't reach the server to follow the answer — retrying: {{reason}}",
+  "The answer may be incomplete — the run stopped responding. Last error: {{reason}}": "The answer may be incomplete — the run stopped responding. Last error: {{reason}}",
   "Response stopped (manually or the connection dropped).": "Response stopped (manually or the connection dropped).",
   "Chat menu": "Chat menu",
   "No chats yet.": "No chats yet.",
@@ -1264,10 +1267,8 @@
   "Commented": "Commented",
   "Resolved comment": "Resolved comment",
   "Ran tool {{name}}": "Ran tool {{name}}",
-  "AI-agent": "AI-agent",
   "AI agent «{{role}}» on behalf of {{person}}": "AI agent «{{role}}» on behalf of {{person}}",
   "AI agent {{name}}": "AI agent {{name}}",
-  "Edited by AI agent on behalf of {{name}}": "Edited by AI agent on behalf of {{name}}",
   "Git sync": "Git sync",
   "Synced from Git on behalf of {{name}}": "Synced from Git on behalf of {{name}}",
   "Endpoints": "Endpoints",
@@ -1555,5 +1556,6 @@
   "{{count}} icons (limited mode)_one": "1 icon (limited mode)",
   "{{count}} icons (limited mode)_other": "{{count}} icons (limited mode)",
   "{{count}} icons_one": "1 icon",
-  "{{count}} icons_other": "{{count}} icons"
+  "{{count}} icons_other": "{{count}} icons",
+  "Search is unavailable on this share because it publishes only saved versions.": "Search is unavailable on this share because it publishes only saved versions."
 }

@@ -738,7 +738,6 @@
   "AI search": "Поиск ИИ",
   "AI Answer": "Ответ ИИ",
   "Ask AI": "Спросить ИИ",
-  "Edited by AI agent on behalf of {{name}}": "Отредактировано AI-агентом от имени {{name}}",
   "AI is thinking...": "ИИ обрабатывает запрос...",
   "Thinking": "Думаю",
   "Ask a question...": "Задайте вопрос...",
@@ -1258,6 +1257,9 @@
   "Stop": "Стоп",
   "Response stopped.": "Ответ остановлен.",
   "Connection lost — the answer was interrupted.": "Соединение потеряно — ответ был прерван.",
+  "Connection lost — following the answer…": "Соединение потеряно — продолжаем следить за ответом…",
+  "Can't reach the server to follow the answer — retrying: {{reason}}": "Не удаётся связаться с сервером, чтобы следить за ответом, — повторяем: {{reason}}",
+  "The answer may be incomplete — the run stopped responding. Last error: {{reason}}": "Ответ может быть неполным — агент перестал отвечать. Последняя ошибка: {{reason}}",
   "Response stopped (manually or the connection dropped).": "Ответ остановлен (вручную или из-за разрыва соединения).",
   "Chat menu": "Меню чата",
   "No chats yet.": "Чатов пока нет.",
@@ -1575,5 +1577,6 @@
   "{{count}} icons_few": "{{count}} иконки",
   "{{count}} icons_one": "{{count}} иконка",
   "{{count}} icons_many": "{{count}} иконок",
-  "{{count}} icons_other": "{{count}} иконок"
+  "{{count}} icons_other": "{{count}} иконок",
+  "Search is unavailable on this share because it publishes only saved versions.": "Поиск на этой публикации недоступен: она показывает только сохранённые версии."
 }

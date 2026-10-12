@@ -115,9 +115,9 @@ export function getOfflineGraceMs(): number {
 export const OFFLINE_CRITICAL_TIMEOUT_MS = 15_000;
 
 /** Axios per-request config for an offline-critical request. */
-export function offlineCriticalRequestConfig(): { timeout: number } {
-  return { timeout: OFFLINE_CRITICAL_TIMEOUT_MS };
-}
+export const OFFLINE_CRITICAL_REQUEST_CONFIG = {
+  timeout: OFFLINE_CRITICAL_TIMEOUT_MS,
+};
 
 export function getAvatarUrl(
   avatarUrl: string,

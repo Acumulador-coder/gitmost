@@ -53,17 +53,25 @@ export function usePageQuery(
     queryKey: ["pages", pageInput.pageId],
     queryFn: () => getPageById(pageInput),
     enabled: !!pageInput.pageId,
-    staleTime: 5 * 60 * 1000,
+    // Always stale (see the #563 note below): cached data still renders at
+    // once, but every open of the page revalidates it in the background.
+    staleTime: 0,
     // Keep the previously-loaded page visible while navigating to a new one
     // instead of flashing a blank/skeleton frame (the new page's content
     // streams in when ready). isLoading stays true only for the very first load.
     placeholderData: keepPreviousData,
     // #563 — FORCED reconciliation of the page-meta boot cache. This query feeds
-    // the localStorage cache the chrome paints from, so it must revalidate on
-    // EVERY mount: the global defaults (refetchOnMount:false + staleTime 5min,
-    // main.tsx) would otherwise suppress the refetch inside a 5-minute window,
-    // and a page renamed / deleted / access-revoked less than 5 minutes ago
-    // would keep showing stale chrome with nothing ever correcting it. The
+    // the localStorage cache the chrome paints from, so EVERY open of a page —
+    // a mount OR a switch of this observer to the page's key (in-app A -> B -> A
+    // navigation keeps <Page /> mounted and only changes the key) — must
+    // revalidate it. The global defaults (refetchOnMount:false + staleTime 5min,
+    // main.tsx) would otherwise suppress the refetch inside a 5-minute window:
+    // `refetchOnMount: "always"` covers the mount, and `staleTime: 0` covers the
+    // key switch (TanStack Query fetches on a key change only when the data is
+    // stale). Without both, a page renamed / deleted / access-revoked less than
+    // 5 minutes ago would keep showing stale chrome with nothing ever correcting
+    // it, and the page view's edit rights — granted only after THIS view's own
+    // fetch (page.tsx, CL-4) — would never arrive for a recently-seen page. The
     // refetch is a background one (cached data stays on screen).
     refetchOnMount: "always",
   });

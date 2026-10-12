@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { Provider, createStore } from "jotai";
 import type { IPage } from "@/features/page/types/page.types";
 import type { ICurrentUser } from "@/features/user/types/user.types";
@@ -15,12 +15,20 @@ const pageQueryState: {
   isLoading: boolean;
   isError: boolean;
   error?: unknown;
+  // Unset: a settled response is the one this view fetched after mounting.
+  isFetchedAfterMount?: boolean;
+  isFetching?: boolean;
 } = { data: undefined, isLoading: true, isError: false, error: undefined };
 
 let spaceData: unknown = undefined;
 
 vi.mock("@/features/page/queries/page-query", () => ({
-  usePageQuery: () => pageQueryState,
+  usePageQuery: () => ({
+    ...pageQueryState,
+    isFetchedAfterMount:
+      pageQueryState.isFetchedAfterMount ?? !pageQueryState.isLoading,
+    isFetching: pageQueryState.isFetching ?? false,
+  }),
 }));
 
 vi.mock("@/features/space/queries/space-query.ts", () => ({
@@ -119,6 +127,8 @@ beforeEach(() => {
   pageQueryState.isLoading = true;
   pageQueryState.isError = false;
   pageQueryState.error = undefined;
+  pageQueryState.isFetchedAfterMount = undefined;
+  pageQueryState.isFetching = undefined;
   spaceData = undefined;
 });
 
@@ -184,6 +194,70 @@ describe("Page chrome (local-first boot cache)", () => {
     expect(screen.getByTestId("page-header").getAttribute("data-readonly")).toBe(
       "false",
     );
+  });
+
+  it("edit rights wait for this view's own fetch, survive a background refetch, and are re-checked on every return to the page", () => {
+    const store = makeStore(cachedPage());
+    function Navigator() {
+      const navigate = useNavigate();
+      return (
+        <>
+          <button onClick={() => navigate("/s/engineering/p/other-slug2")}>
+            away
+          </button>
+          <button onClick={() => navigate("/s/engineering/p/page-slug1")}>
+            back
+          </button>
+        </>
+      );
+    }
+    const ui = () => (
+      <MantineProvider>
+        <Provider store={store}>
+          <MemoryRouter initialEntries={["/s/engineering/p/page-slug1"]}>
+            <Navigator />
+            <Routes>
+              <Route path="/s/:spaceSlug/p/:pageSlug" element={<Page />} />
+            </Routes>
+          </MemoryRouter>
+        </Provider>
+      </MantineProvider>
+    );
+    const readOnly = () =>
+      screen.getByTestId("page-header").getAttribute("data-readonly");
+
+    // The query holds this page from an earlier visit; this view's own fetch
+    // is still in flight.
+    pageQueryState.data = { ...cachedPage(), content: "{}" } as unknown as IPage;
+    pageQueryState.isLoading = false;
+    pageQueryState.isFetchedAfterMount = false;
+    pageQueryState.isFetching = true;
+    spaceData = { settings: {} };
+    const { rerender } = render(ui());
+    expect(readOnly()).toBe("true");
+
+    // The fetch lands: editable.
+    pageQueryState.isFetchedAfterMount = true;
+    pageQueryState.isFetching = false;
+    rerender(ui());
+    expect(readOnly()).toBe("false");
+
+    // A background refetch keeps the rights.
+    pageQueryState.isFetching = true;
+    rerender(ui());
+    expect(readOnly()).toBe("false");
+
+    // Away to another page and straight back, before either fetch landed:
+    // the page is read-only again until its own refetch lands.
+    pageQueryState.isFetchedAfterMount = false;
+    fireEvent.click(screen.getByText("away"));
+    fireEvent.click(screen.getByText("back"));
+    expect(readOnly()).toBe("true");
+
+    pageQueryState.isFetchedAfterMount = true;
+    pageQueryState.isFetching = false;
+    rerender(ui());
+    expect(readOnly()).toBe("false");
   });
 
   it("keeps a LIVE trashed page read-only (deletedAt beats canEdit)", () => {
