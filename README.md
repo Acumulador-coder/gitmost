@@ -104,7 +104,8 @@ community feature, with no enterprise license. Open it from the page header; the
 - **Agent roles.** Admins define assistant personas with their own instructions and model, and
   can import ready-made roles from a multilingual catalog.
 - **Search over your content.** Full-text search plus optional vector (RAG) semantic search
-  across pages. The agent can also look at the images on a page.
+  across pages. With `AI_CHAT_VIEW_IMAGE=true` and a vision-capable model the agent can also
+  look at the images on a page.
 - **Web access via external MCP.** Admins can connect external MCP servers (e.g. Tavily) for
   the whole workspace, and every member can add personal ones under
   **Settings → Account → My MCP servers**.

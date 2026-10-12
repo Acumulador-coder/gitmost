@@ -10,6 +10,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-12
+
+This release adds native two-way sync between a space and a git repository of
+Markdown files, with a built-in `git clone` / `push` host. The modes that 0.96.0
+still kept behind switches are now the only ones: the wiki is always
+local-first, and every AI-chat turn is a detached server-side run. Search
+finally says "not found": real matches and semantically similar pages are
+reported separately. The editor opens and edits large pages much faster. A
+release-wide security and stability review closed a set of issues in public
+share search, collaboration access checks, links on share pages and the AI
+chat.
+
+### Breaking Changes
+
+- **Removed switches: `LOCAL_FIRST_ENABLED`, `AI_CHAT_RESUMABLE_STREAM` and the
+  workspace setting `settings.ai.autonomousRuns`.** Their "on" behaviour is now
+  the only one: page chrome and body always paint from the local cache and the
+  local collaboration replica, and a browser disconnect never stops an AI-chat
+  run (only Stop does, plus the new-chat exception below). Leftover values are
+  ignored. The admin toggle for autonomous runs is gone from AI settings.
+- **Typesense search is gone: `SEARCH_DRIVER` and `TYPESENSE_*` are no longer
+  read.** The Typesense module is upstream Enterprise code this fork does not
+  ship, so `SEARCH_DRIVER=typesense` made every web, MCP and share search fail
+  with "Enterprise Typesense search module missing". All search now runs on
+  Postgres; a leftover `SEARCH_DRIVER` is ignored instead of breaking search.
+- **Search results separate real matches from similar pages.** `items`,
+  `total`, `hasMore` and `truncatedAtCap` now cover pages that actually match
+  the query; semantically similar pages that do not match go to a new
+  `related` list (at most 5, first page only, never counted in `total`). A
+  query that matches nothing returns `total: 0` instead of 50 arbitrary pages.
+  This applies to the web search, the MCP `search` tool and the AI agent's
+  `searchPages`, which now returns `{ results, related, total }` and runs the
+  same search as the web UI. (#701)
+- **Share search is unavailable on shares that publish only saved versions.**
+  On a share whose published mode serves approved versions, search returned
+  titles and snippets of unpublished drafts. Such a share now answers search
+  with an empty result and a `disabledReason`, and the share assistant's search
+  tool reports it as unavailable. Share search is also refused when sharing is
+  disabled for the workspace or space, like the share page itself.
+- **Migration drops `page_embeddings.fts` and its GIN index.** Nothing reads
+  the column since the agent search moved to the shared search; Postgres no
+  longer maintains the index on every embedding insert. `down()` restores both.
+
+### Added
+
+- **Native two-way Docmost ↔ git Markdown sync.** Opt-in per space (Space
+  settings → a git-sync toggle, plus an `autoMergeConflicts` toggle that
+  controls whether a still-conflicted page is held back or pushed with its
+  conflict markers stripped): each enabled space is mirrored to an on-disk git
+  "vault" of Markdown files and reconciled in both directions on a debounced +
+  poll-backstop cycle, under a per-space lock, writing through the
+  collaboration layer so concurrent human edits are merged rather than
+  overwritten. Git-originated changes are attributed to a configurable service
+  account and carry a "git-sync" badge in page history. An optional `/git`
+  smart-HTTP host lets you `git clone` / `fetch` / `push` a space directly
+  (HTTP Basic auth; reading needs space membership, pushing needs manage
+  rights; a non-member gets the same 404 as a missing space). A space that
+  contains pages with page-level access restrictions cannot have sync enabled
+  and is never served over `/git`, because git cannot enforce those
+  restrictions. Format conversions run in worker threads, pushes are bounded
+  by size and file-count budgets, and each sync cycle has a deadline. Off by
+  default and fully inert when `GIT_SYNC_ENABLED` is off (no routes, no timers,
+  no extra store flushes); configured via `GIT_SYNC_ENABLED`,
+  `GIT_SYNC_SERVICE_USER_ID`, `GIT_SYNC_HTTP_ENABLED` and the other `GIT_SYNC_*`
+  variables in `.env.example`. (#119, #359)
+- **Workspace toggle for the page-tree quick actions.** The copy-link and trash
+  icons on page-tree rows can be hidden in Workspace settings → General. On by
+  default; the row's "⋮" menu keeps both actions either way.
+- **Link to the source code in the user menu**, as AGPL-3.0 §13 requires for a
+  network service.
+- **Open collaboration sessions re-check page access.** When a connected
+  client re-sends its token, the server re-runs the page access check; revoked
+  access closes that document while the socket stays open, and a token for a
+  different user is rejected. (#709)
+- **"Similar pages" on public share search** and semantic neighbours in the
+  share assistant's search tool, matching the main search since #701.
+
+### Changed
+
+- **Large pages open and edit much faster.** Links render as plain DOM with one
+  shared popover; heading link buttons, code-block highlighting and table
+  header pinning update only what changed; each editor builds its document once;
+  repeated full re-renders on open and on plugin re-creation are gone; a
+  `:has()` rule that restyled the whole page on every block change was removed.
+- **Recently opened pages keep their collaboration sessions warm**, so going
+  back to a page does not reconnect; the collaboration provider attaches only
+  after the local copy has loaded. (#709)
+- **AI chat follows a dropped live stream through the delta poll.** The
+  automatic reconnect ladder is removed; a reloaded tab still live-follows an
+  active run. When the poll itself keeps failing, the chat now shows that it
+  lost the connection instead of waiting silently.
+- Embedding no longer freezes the server's event loop while chunking a page,
+  and embedding requests carry at most 32 values each.
+- `yjs` is bumped to 13.6.33, so destroyed editors are no longer kept alive by
+  their Y.Doc.
+- The Docker image runs `tini` as PID 1, so orphaned `git` processes are
+  reaped instead of piling up as zombies.
+
+### Fixed
+
+- **Links on public share pages point where they should again.** Since the
+  link rendering change, share pages rendered the raw document `href` instead
+  of the share-relative one; and a link's stored `class` / `rel` / `target` /
+  `title` attributes reached the DOM, so a crafted class could overlay the
+  page. "Copy link" resolves the address with the URL parser, so a link can
+  no longer turn into an address on another host.
+- **A new AI chat stopped before its first reply no longer keeps running on
+  the server.** The run is stopped when the client leaves before it has
+  learned the chat id. (#714)
+- **The public share assistant stops when the visitor leaves**, instead of
+  spending provider tokens to the end of the turn, and the tokens of every step
+  completed before the disconnect are counted against the share's limit. (#716)
+- AI chat: Stop after the first step no longer writes the turn's end twice;
+  the turn-end writes finish before the MCP leases are released; the SSE
+  heartbeat never starts on a response that is already gone; a run-stream
+  reader that stops reading no longer pins server memory.
+- Embedding a page of more than ~5,400 chunks no longer fails on Postgres's
+  parameter limit after all the work was done.
+- Switching users in another tab no longer lets a stale tab open
+  collaboration sessions with the previous user's token, and a warm page stays
+  read-only until edit rights are confirmed again.
+- Markdown import keeps emphasis whose text has edge whitespace or edge
+  punctuation touching a word.
+- Idle page-tree rows no longer reserve width for hidden quick actions.
+
+### Security
+
+- Public share search no longer leaks page titles above the share root in
+  result paths, nor draft content on approved-version shares (see Breaking
+  Changes).
+- Collaboration token re-sync is rate-limited per connection and fails closed
+  on infrastructure errors.
+- Regular expressions that backtracked quadratically on long whitespace runs
+  in imported Markdown were replaced with linear scans.
+
 ## [0.96.0] - 2026-09-21
 
 This release makes the wiki local-first: page chrome and body paint from a
@@ -447,20 +582,6 @@ table.
   reload loop while a second deploy in the same tab still recovers. When the
   build carries no version info the feature stays inert. (#481)
 
-- **Native two-way Docmost ↔ git Markdown sync.** Opt-in per space (Space
-  settings → a git-sync toggle, plus an `autoMergeConflicts` toggle that controls
-  whether a still-conflicted page is held back or pushed with its conflict
-  markers stripped): each enabled space is mirrored to an on-disk git "vault" of
-  Markdown files and reconciled in both directions (Docmost → vault and vault →
-  Docmost) on a debounced + poll-backstop cycle, under a per-space lock, writing
-  through the collaboration layer so concurrent human edits aren't clobbered.
-  Git-originated changes are attributed to a configurable service account and
-  carry a "git-sync" provenance badge in page history. Optionally exposes a `/git`
-  smart-HTTP host so you can `git clone`/`fetch`/`push` a space directly (HTTP
-  Basic auth, space-permission authorized). Off by default and configured via the
-  `GIT_SYNC_*` environment variables, including `GIT_SYNC_ENABLED`,
-  `GIT_SYNC_SERVICE_USER_ID`, and `GIT_SYNC_HTTP_ENABLED` (see `.env.example`).
-  (#119)
 - **Place several images side by side in a row.** A new "Inline (side by
   side)" alignment mode in the image bubble menu renders consecutive inline
   images as a row that wraps onto the next line on narrow screens. The row is
@@ -1558,7 +1679,8 @@ knowledge layer, an embedded MCP server, and the Gitmost rebrand.
 - Build: drop the private EE submodule, retarget CI to GHCR, and update the
   Docker image to the GHCR registry.
 
-[Unreleased]: https://github.com/vvzvlad/gitmost/compare/v0.96.0...HEAD
+[Unreleased]: https://github.com/vvzvlad/gitmost/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/vvzvlad/gitmost/compare/v0.96.0...v1.0.0
 [0.96.0]: https://github.com/vvzvlad/gitmost/compare/v0.94.0...v0.96.0
 [0.94.0]: https://github.com/vvzvlad/gitmost/compare/v0.93.0...v0.94.0
 [0.93.0]: https://github.com/vvzvlad/gitmost/compare/v0.91.0...v0.93.0
