@@ -159,8 +159,9 @@ export class PublicShareChatService {
    * request-count limiter above bounds how many anonymous calls run; this bounds
    * how many provider TOKENS they spend (input re-sent per step + output),
    * which is what the owner is actually billed for (issue #159, finding #5).
-   * Checked read-only before a turn streams; the real usage is recorded once the
-   * turn finishes (`onFinish`).
+   * Checked read-only before a turn streams; the real usage is recorded as each
+   * step completes (`onStepFinish`), so a turn cut short by a disconnect or an
+   * abort is still charged for every step the provider already billed.
    */
   private readonly tokenBudget: PublicShareWorkspaceTokenBudget;
 
@@ -204,13 +205,18 @@ export class PublicShareChatService {
   }
 
   /**
-   * `streamText` onFinish hook body: account a finished turn's REAL token spend
-   * (input re-sent per step + output, summed across all steps) against the
+   * `streamText` onStepFinish hook body: account one COMPLETED step's REAL token
+   * spend (its input, re-sent on every step, + its output) against the
    * per-workspace rolling-day budget, so a future turn over budget is rejected up
-   * front (issue #159, finding #5). `totalUsage` fields are `number | undefined`;
-   * fall back to the sum of input+output when the provider omits `totalTokens`.
-   * Fire-and-forget: the turn already streamed, so a record failure must not
-   * break it.
+   * front (issue #159, finding #5). Charging per step — not once in `onFinish` —
+   * is what makes the budget hold when the anonymous visitor disconnects
+   * mid-turn: the abort path never reaches a usage-carrying `onFinish` (after an
+   * abort `onFinish` gets an empty usage, or does not fire at all), while every
+   * step the provider already billed has fired `onStepFinish` exactly once. The
+   * in-flight step of an aborted turn is not reported by the SDK and cannot be
+   * charged. Usage fields are `number | undefined`; fall back to the sum of
+   * input+output when the provider omits `totalTokens`. Fire-and-forget: a
+   * record failure must not break the stream.
    */
   recordTurnUsage(
     workspaceId: string,
@@ -317,8 +323,12 @@ export class PublicShareChatService {
         // bill even if the per-IP throttle is evaded; worst case = steps × this.
         maxOutputTokens: resolveShareAiMaxOutputTokens(),
         abortSignal: signal,
-        onFinish: ({ totalUsage }) =>
-          this.recordTurnUsage(workspaceId, totalUsage),
+        // Charge each completed step as it lands (see recordTurnUsage): exactly
+        // once per step on every terminal path — finish, error, or an abort,
+        // where the SDK fires BOTH onAbort and onFinish and neither carries the
+        // usage. Nothing is charged in onFinish/onAbort, so that double fire
+        // cannot double-charge.
+        onStepFinish: ({ usage }) => this.recordTurnUsage(workspaceId, usage),
         onError: ({ error }) => {
           // Reuse the shared formatter so provider error formatting stays
           // unified (statusCode + body) with the authenticated path.

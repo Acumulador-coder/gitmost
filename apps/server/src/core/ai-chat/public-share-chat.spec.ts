@@ -728,7 +728,7 @@ describe('PublicShareChatService.withinShareTokenBudget / recordShareTokens', ()
   });
 });
 
-describe('PublicShareChatService.recordTurnUsage (streamText onFinish accounting)', () => {
+describe('PublicShareChatService.recordTurnUsage (streamText onStepFinish accounting)', () => {
   function makeService() {
     const redisService = { getOrThrow: () => new FakeTokenRedis() } as never;
     const service = new PublicShareChatService(
@@ -746,7 +746,7 @@ describe('PublicShareChatService.recordTurnUsage (streamText onFinish accounting
 
   it('sums input+output when the provider omits totalTokens', () => {
     const { service, recordSpy } = makeService();
-    // The onFinish payload shape: a totalUsage with per-component counts but no
+    // The onStepFinish payload shape: a usage with per-component counts but no
     // authoritative total (provider omitted it).
     service.recordTurnUsage('ws-1', { inputTokens: 1200, outputTokens: 300 });
     expect(recordSpy).toHaveBeenCalledWith('ws-1', 1500);
@@ -846,10 +846,11 @@ describe('PublicShareChatToolsService share scoping', () => {
     expect(shareService.updatePublicAttachments).not.toHaveBeenCalled();
   });
 
-  it('searchSharePages forwards the share scope (shareId, no spaceId/userId) to the FTS branch', async () => {
+  it('searchSharePages forwards the share scope (shareId, anonymous caller, no spaceId/userId)', async () => {
     const searchService = {
       searchPage: jest.fn().mockResolvedValue({
         items: [{ id: 'p1', title: 'T', highlight: 'snip' }],
+        related: [],
       }),
     };
     const svc = new PublicShareChatToolsService(
@@ -865,11 +866,13 @@ describe('PublicShareChatToolsService share scoping', () => {
     const res = await searchSharePages.execute({ query: 'hello' });
     const [params, opts] = searchService.searchPage.mock.calls[0];
     expect(params.shareId).toBe('THIS-SHARE');
-    // The share-scoped FTS branch requires NO spaceId and NO userId.
+    // The anonymous share-scoped caller: NO spaceId and NO userId.
     expect(params.spaceId).toBeUndefined();
-    expect(opts.userId).toBeUndefined();
-    expect(opts.workspaceId).toBe('ws-1');
-    expect(res).toEqual([{ id: 'p1', title: 'T', snippet: 'snip' }]);
+    expect(opts).toEqual({ anonymousShare: true, workspaceId: 'ws-1' });
+    expect(res).toEqual({
+      results: [{ id: 'p1', title: 'T', snippet: 'snip' }],
+      related: [],
+    });
   });
 });
 

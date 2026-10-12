@@ -227,18 +227,22 @@ describe("useAiChatDeltaPoll", () => {
       () => useAiChatDeltaPoll({ chatId: "c1", armed: true, enabled: true }),
       { wrapper },
     );
-    expect(result.current).toBeUndefined(); // leading tick in flight, no result yet
+    expect(result.current.runFact).toBeUndefined(); // leading tick in flight, no result yet
     // The leading tick surfaces run-1; the first interval re-polls the SAME fact
     // (deduped — no re-render churn).
     await advance(DELTA_POLL_INTERVAL_MS);
-    expect(result.current).toEqual({ id: "run-1", status: "running" });
+    expect(result.current.runFact).toEqual({ id: "run-1", status: "running" });
     await advance(DELTA_POLL_INTERVAL_MS); // run gone -> fresh negative surfaced
-    expect(result.current).toBeNull();
+    expect(result.current.runFact).toBeNull();
   });
 
-  it("swallows a transient poll error and keeps polling on the next tick", async () => {
+  it("surfaces and logs a failed poll, keeps polling, and clears the failure once a poll succeeds", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const bounce = new Error("server bounce");
     h.delta
-      .mockRejectedValueOnce(new Error("server bounce"))
+      .mockRejectedValueOnce(bounce)
       .mockResolvedValue(
         deltaRes([], "cur-2", { id: "run-1", status: "running" }),
       );
@@ -250,8 +254,15 @@ describe("useAiChatDeltaPoll", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(result.current).toBeUndefined(); // rejected — swallowed
+    expect(result.current.runFact).toBeUndefined();
+    expect(result.current.failure).toBe("Error: server bounce");
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("delta poll"),
+      bounce,
+    );
     await advance(DELTA_POLL_INTERVAL_MS); // next tick recovers
-    expect(result.current).toEqual({ id: "run-1", status: "running" });
+    expect(result.current.runFact).toEqual({ id: "run-1", status: "running" });
+    expect(result.current.failure).toBeNull();
+    consoleError.mockRestore();
   });
 });

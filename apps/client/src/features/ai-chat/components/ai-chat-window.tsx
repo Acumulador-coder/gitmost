@@ -306,8 +306,8 @@ export default function AiChatWindow() {
   // via onResumeFallback) and CONSUMES the run fact the hook surfaces: `polledRunFact`
   // is threaded into <ChatThread>, where a fresh NEGATIVE fact quenches a stale
   // `polling` after merging the persisted reply (#555 S3 / I3). See run-fsm.spec.md
-  // §3.4.
-  const polledRunFact = useAiChatDeltaPoll({
+  // §3.4. `pollFailure` is the latest failed poll (AI-7), shown by the thread.
+  const { runFact: polledRunFact, failure: pollFailure } = useAiChatDeltaPoll({
     chatId: activeChatId,
     armed: degradedPoll,
     enabled: windowOpen,
@@ -1085,6 +1085,8 @@ export default function AiChatWindow() {
               // merging the persisted reply (I3), rather than waiting for the
               // terminal row.
               polledRunFact={polledRunFact}
+              // AI-7: why the degraded poll is failing, if it is.
+              pollFailure={pollFailure}
               // #184: the Stop button must hit the authoritative server stop (a
               // local SSE abort is a client disconnect the server ignores).
               onServerStop={handleServerStop}

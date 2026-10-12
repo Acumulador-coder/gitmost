@@ -1834,10 +1834,9 @@ describe('isInterruptResume', () => {
 /**
  * #184 phase 1.5 — the run-wrapped pipe options (unit). Drives stream() to the
  * pipe call with streamText mocked, capturing the options object, and asserts:
- *  - runId -> consumeSseStream tees into the registry and
- *    generateMessageId returns the seeded assistant DB row id.
- *  - no runHooks (runId undefined) -> neither option is set (the runId gate).
- *  - runId -> the outer catch releases the entry via abortEntry.
+ *  - consumeSseStream tees into the registry and generateMessageId returns
+ *    the seeded assistant DB row id.
+ *  - the outer catch releases the entry via abortEntry.
  */
 describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -1952,7 +1951,6 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
       sessionId: 's1',
       body: body as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       runHooks: hooks as never,
@@ -1976,15 +1974,6 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
       'msg-1',
       fakeStream,
     );
-  });
-
-  it('NO runHooks (runId undefined): no consumeSseStream / generateMessageId (the runId gate)', async () => {
-    const { svc, streamRegistry } = makeService();
-    await drive(svc, undefined);
-    const options = pipeMock.mock.calls[0][1];
-    expect(options.consumeSseStream).toBeUndefined();
-    expect(options.generateMessageId).toBeUndefined();
-    expect(streamRegistry.bind).not.toHaveBeenCalled();
   });
 
   it('runId: the outer catch calls abortEntry when the stream throws', async () => {
@@ -2062,7 +2051,6 @@ describe('AiChatService.stream — resumable pipe options (#184 phase 1.5)', () 
         ],
       } as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       runHooks: makeRunHooks() as never,
@@ -2243,10 +2231,15 @@ describe('AiChatService.stream — token-degeneration reaction (#444)', () => {
       sessionId: 's1',
       body: body as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
-      runHooks: undefined as never,
+      // Every turn is a run: a minimal fake run handle (no lifecycle hooks).
+      runHooks: {
+        begin: async () => ({
+          runId: 'run-1',
+          signal: new AbortController().signal,
+        }),
+      },
     });
   }
 
@@ -2256,7 +2249,7 @@ describe('AiChatService.stream — token-degeneration reaction (#444)', () => {
     await drive(svc);
 
     const opts = cap.opts();
-    // The turn's abort signal is the UNION of the socket/run signal and the
+    // The turn's abort signal is the UNION of the run signal and the
     // internal degeneration controller — untripped before any output.
     expect(opts.abortSignal.aborted).toBe(false);
 

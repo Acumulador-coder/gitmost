@@ -946,7 +946,6 @@ export class McpClientsService {
   ): Tool {
     const original = template.execute;
     if (typeof original !== 'function') return template;
-    const service = this;
     const { serverIndex, rawName, writeClass } = meta;
 
     let binding = bindings.get(serverIndex);
@@ -1030,7 +1029,7 @@ export class McpClientsService {
             if (!boundBinding.reconnecting) {
               boundBinding.reconnecting = (async () => {
                 const server = entry.servers[serverIndex];
-                const fresh = await service.reconnectServer(server, capMs);
+                const fresh = await this.reconnectServer(server, capMs);
                 leaseSet.push(fresh.lease); // accumulate; released at turn-end
                 boundBinding.current = fresh.state;
                 return fresh.state;

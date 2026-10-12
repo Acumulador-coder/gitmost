@@ -15,7 +15,10 @@ jest.mock('ai', () => ({
 }));
 
 import { streamText, generateText } from 'ai';
-import { AiChatService } from './ai-chat.service';
+import {
+  AiChatService,
+  TURN_END_WRITES_DEADLINE_MS,
+} from './ai-chat.service';
 import { RunAlreadyActiveError } from './ai-chat-run.service';
 // Spied as a MODULE so we observe the exact arguments the service threads into
 // the replay budgeter — the wiring the helper unit tests cannot see (#555 item 2).
@@ -76,7 +79,6 @@ describe('AiChatService.stream — concurrent-run race rejection (#184)', () => 
     sessionId: 'sess-1',
     body: { chatId: 'chat-1', messages: [] } as never,
     res: { raw: {} } as never,
-    signal: new AbortController().signal,
     model: {} as never,
     role: null,
     runHooks: {
@@ -113,13 +115,11 @@ describe('AiChatService.stream — concurrent-run race rejection (#184)', () => 
 });
 
 /**
- * F3 — the LOAD-BEARING run-detach wiring: `effectiveSignal = handle.signal`
- * after runHooks.begin, then `abortSignal: effectiveSignal` passed to streamText.
- * That single line is what makes a run survive a browser disconnect (the agent
- * loop's abort is governed by the RUN's signal, not the socket): a regression to
- * the socket-bound signal would still pass every other test green while silently
- * breaking Stop + durability. These two tests pin the exact signal streamText
- * consumes on both paths.
+ * F3 — the LOAD-BEARING run-detach wiring: the run handle's `signal` from
+ * runHooks.begin is what streamText's abortSignal follows. That is what makes a
+ * run survive a browser disconnect (the agent loop's abort is governed by the
+ * RUN's signal, not the socket) and what makes Stop work: a regression would still
+ * pass every other test green while silently breaking Stop + durability.
  */
 describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -208,12 +208,10 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  it('happy path (run-wrapped): streamText is driven with abortSignal === handle.signal (the RUN signal, NOT the socket)', async () => {
+  it('streamText is driven by the RUN signal from handle.signal', async () => {
     const { svc } = makeService();
     const runController = new AbortController();
     const runSignal = runController.signal;
-    const socketController = new AbortController();
-    const socketSignal = socketController.signal;
 
     const begin = jest.fn(async () => ({ runId: 'run-1', signal: runSignal }));
     await svc.stream({
@@ -222,7 +220,6 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
       sessionId: 'sess-1',
       body: body as never,
       res: makeRes() as never,
-      signal: socketSignal,
       model: {} as never,
       role: null,
       runHooks: {
@@ -235,47 +232,13 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
 
     expect(begin).toHaveBeenCalledTimes(1);
     expect(streamTextMock).toHaveBeenCalledTimes(1);
-    // THE assertion: the agent loop's abort is wired to the RUN, so a browser
-    // disconnect (which aborts only `socketSignal`) cannot end the turn.
-    // NOTE (#444): the signal handed to streamText is now
-    // AbortSignal.any([effectiveSignal, degenerationController.signal]), so it is
-    // no longer identity-equal to `runSignal`. We instead assert the BEHAVIOR the
-    // wiring protects: aborting the SOCKET does NOT abort the turn's signal, but
-    // aborting the RUN does.
+    // THE assertion: the agent loop's abort is wired to the RUN. NOTE (#444): the
+    // signal handed to streamText is AbortSignal.any([runSignal,
+    // degenerationController.signal]), so it is not identity-equal to `runSignal`;
+    // assert the BEHAVIOR the wiring protects: aborting the RUN aborts the turn.
     const passed = streamTextMock.mock.calls[0][0].abortSignal as AbortSignal;
-    expect(passed).not.toBe(socketSignal);
     expect(passed.aborted).toBe(false);
-    socketController.abort?.();
-    // A socket abort must not reach a run-wrapped turn.
-    expect(passed.aborted).toBe(false);
-    // A run abort must.
     runController.abort();
-    expect(passed.aborted).toBe(true);
-  });
-
-  it('legacy path (no runHooks): streamText is driven with the SOCKET signal', async () => {
-    const { svc } = makeService();
-    const socketController = new AbortController();
-    const socketSignal = socketController.signal;
-
-    await svc.stream({
-      user: { id: 'user-1' } as never,
-      workspace: { id: 'ws-1' } as never,
-      sessionId: 'sess-1',
-      body: body as never,
-      res: makeRes() as never,
-      signal: socketSignal,
-      model: {} as never,
-      role: null,
-      // No runHooks -> the turn stays socket-bound.
-    });
-
-    expect(streamTextMock).toHaveBeenCalledTimes(1);
-    // #444: the passed signal is AbortSignal.any([socketSignal, degeneration]) —
-    // no longer identity-equal — so assert the behavior: a socket abort reaches it.
-    const passed = streamTextMock.mock.calls[0][0].abortSignal as AbortSignal;
-    expect(passed.aborted).toBe(false);
-    socketController.abort();
     expect(passed.aborted).toBe(true);
   });
 
@@ -315,7 +278,6 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
       sessionId: 'sess-1',
       body: body as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       runHooks: runHooks as never,
@@ -533,8 +495,6 @@ describe('AiChatService.stream — begin-failure fails the turn (#184 F14 / #486
       .mockImplementation(() => undefined as never);
 
     const { svc, aiChatMessageRepo } = makeService();
-    const socketController = new AbortController();
-    const socketSignal = socketController.signal;
 
     // A transient, NON-race begin failure (e.g. a non-unique DB error inserting
     // the run row). This is the `else` branch of the begin try/catch.
@@ -548,7 +508,6 @@ describe('AiChatService.stream — begin-failure fails the turn (#184 F14 / #486
       sessionId: 'sess-1',
       body: body as never,
       res: makeRes() as never,
-      signal: socketSignal,
       model: {} as never,
       role: null,
       runHooks: {
@@ -689,7 +648,6 @@ describe('AiChatService.stream — aggressive-threshold ×0.5 wiring provenance 
       sessionId: 'sess-1',
       body: body as never,
       res: makeRes() as never,
-      signal: new AbortController().signal,
       model: {} as never,
       role: null,
       runHooks: {
@@ -790,4 +748,238 @@ describe('AiChatService.stream — aggressive-threshold ×0.5 wiring provenance 
     );
     expect(streamTextMock).toHaveBeenCalledTimes(1);
   });
+});
+
+/**
+ * AI-5 / AI-4 — the streamText terminal callbacks.
+ *
+ * AI-5: they are NOT mutually exclusive. On a Stop after a finished step the SDK
+ * calls onAbort synchronously WITHOUT awaiting it, and then its flush awaits
+ * onFinish (with the finished steps, an empty usage and finishReason 'other'); a
+ * mid-stream provider error fires onError and then onFinish the same way. Only
+ * the first callback may run the terminal handling — one row write, one settle.
+ *
+ * AI-4: settling the run frees the chat's single active slot, which is what a
+ * superseding / queued turn starts on, so the turn-end writes that turn reads
+ * (here: the open-page snapshot) must land BEFORE the settle.
+ */
+describe('AiChatService.stream — terminal callbacks (AI-5 / AI-4)', () => {
+  const streamTextMock = streamText as unknown as jest.Mock;
+
+  beforeEach(() => {
+    streamTextMock.mockReset();
+    for (const level of ['log', 'warn', 'error'] as const) {
+      jest
+        .spyOn(Logger.prototype, level)
+        .mockImplementation(() => undefined as never);
+    }
+  });
+
+  afterEach(() => jest.restoreAllMocks());
+
+  function makeRes() {
+    return {
+      raw: {
+        writeHead: jest.fn(),
+        write: jest.fn(),
+        once: jest.fn(),
+        on: jest.fn(),
+        flushHeaders: jest.fn(),
+        writableEnded: false,
+        destroyed: false,
+      },
+    };
+  }
+
+  // Drive stream() to streamText with an OPEN PAGE (so the turn end writes a
+  // page snapshot) and capture the streamText options + the run hooks.
+  async function capture(
+    exportPageMarkdown: () => Promise<string> = async () => '# Page',
+  ) {
+    const page = {
+      id: 'page-1',
+      workspaceId: 'ws-1',
+      title: 'Page',
+      updatedAt: new Date('2026-01-01T00:00:00Z'),
+    };
+    const aiChatMessageRepo = {
+      insert: jest.fn(async () => ({ id: 'msg-1' })),
+      findAllByChat: jest.fn(async () => []),
+      update: jest.fn(async () => ({ id: 'msg-1' })),
+      finalizeOwner: jest.fn(async () => ({ id: 'msg-1' })),
+      findStreamingWithTerminalRun: jest.fn(async () => []),
+    };
+    const snapshotRepo = {
+      // No snapshot yet: the turn-start detection is a no-op and the turn end
+      // seeds one (export + upsert).
+      findByChatPage: jest.fn(async () => undefined),
+      upsert: jest.fn(async () => undefined),
+    };
+    const svc = new AiChatService(
+      {} as never, // ai
+      {
+        findById: jest.fn(async () => ({ id: 'chat-1', workspaceId: 'ws-1' })),
+        insert: jest.fn(),
+      } as never,
+      aiChatMessageRepo as never,
+      snapshotRepo as never,
+      { resolve: jest.fn(async () => ({})) } as never,
+      {
+        forUser: jest.fn(async () => ({})),
+        exportPageMarkdown: jest.fn(exportPageMarkdown),
+      } as never,
+      {
+        toolsFor: jest.fn(async () => ({
+          tools: {},
+          clients: [],
+          outcomes: [],
+          instructions: [],
+        })),
+      } as never,
+      {} as never, // aiAgentRoleRepo
+      { findById: jest.fn(async () => page) } as never,
+      { validateCanView: jest.fn(async () => undefined) } as never,
+      {
+        isAiChatDeferredToolsEnabled: () => false,
+        isAiChatFinalStepLockdownEnabled: () => false,
+        isAiChatViewImageEnabled: () => false,
+      } as never,
+    );
+    let opts: any;
+    streamTextMock.mockImplementation((o: any) => {
+      opts = o;
+      return {
+        consumeStream: jest.fn(),
+        pipeUIMessageStreamToResponse: jest.fn(),
+      };
+    });
+    const runHooks = {
+      begin: jest.fn(async () => ({
+        runId: 'run-1',
+        signal: new AbortController().signal,
+      })),
+      onSettled: jest.fn(),
+    };
+    await svc.stream({
+      user: { id: 'user-1' } as never,
+      workspace: { id: 'ws-1' } as never,
+      sessionId: 'sess-1',
+      body: {
+        chatId: 'chat-1',
+        openPage: { id: 'page-1' },
+        messages: [
+          { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+        ],
+      } as never,
+      res: makeRes() as never,
+      model: {} as never,
+      role: null,
+      runHooks,
+    });
+    expect(opts).toBeDefined();
+    return { opts, runHooks, aiChatMessageRepo, snapshotRepo };
+  }
+
+  const step = { text: 'step one', toolCalls: [], content: [] };
+  const lateFinish = {
+    text: 'step one',
+    finishReason: 'other',
+    totalUsage: {},
+    usage: {},
+    steps: [step],
+  };
+
+  it('AI-5: a Stop after a finished step (onAbort, then onFinish) is ONE terminal: aborted', async () => {
+    const { opts, runHooks, aiChatMessageRepo, snapshotRepo } = await capture();
+    opts.onStepFinish(step);
+
+    // Exactly the SDK's order: onAbort fired and NOT awaited, then onFinish awaited.
+    const aborting = opts.onAbort({ steps: [step] });
+    await opts.onFinish(lateFinish);
+    await aborting;
+
+    expect(aiChatMessageRepo.finalizeOwner).toHaveBeenCalledTimes(1);
+    expect(
+      (aiChatMessageRepo.finalizeOwner.mock.calls[0] as any[])[2].status,
+    ).toBe('aborted');
+    expect(runHooks.onSettled).toHaveBeenCalledTimes(1);
+    expect(runHooks.onSettled).toHaveBeenCalledWith('run-1', 'aborted');
+    expect(snapshotRepo.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('AI-5: a mid-stream error followed by onFinish is ONE terminal: error', async () => {
+    const { opts, runHooks, aiChatMessageRepo } = await capture();
+    opts.onStepFinish(step);
+
+    await opts.onError({ error: new Error('provider exploded') });
+    await opts.onFinish(lateFinish);
+
+    expect(aiChatMessageRepo.finalizeOwner).toHaveBeenCalledTimes(1);
+    expect(
+      (aiChatMessageRepo.finalizeOwner.mock.calls[0] as any[])[2].status,
+    ).toBe('error');
+    expect(runHooks.onSettled).toHaveBeenCalledTimes(1);
+    expect(runHooks.onSettled).toHaveBeenCalledWith(
+      'run-1',
+      'error',
+      expect.stringContaining('provider exploded'),
+    );
+  });
+
+  it.each([
+    ['onFinish', (o: any) => o.onFinish({ ...lateFinish, finishReason: 'stop' })],
+    ['onAbort', (o: any) => o.onAbort({ steps: [step] })],
+    ['onError', (o: any) => o.onError({ error: new Error('boom') })],
+  ])(
+    'AI-4: %s writes the turn-end page snapshot BEFORE it settles the run',
+    async (_name, terminal) => {
+      const { opts, runHooks, snapshotRepo } = await capture();
+      opts.onStepFinish(step);
+
+      await terminal(opts);
+
+      expect(snapshotRepo.upsert).toHaveBeenCalledTimes(1);
+      expect(runHooks.onSettled).toHaveBeenCalledTimes(1);
+      expect(snapshotRepo.upsert.mock.invocationCallOrder[0]).toBeLessThan(
+        runHooks.onSettled.mock.invocationCallOrder[0],
+      );
+    },
+  );
+
+  // A supersede waits for the settle at most SUPERSEDE_SETTLE_TIMEOUT_MS, so a
+  // page export that hangs must not hold the settle past TURN_END_WRITES_DEADLINE_MS.
+  it.each([
+    ['onFinish', (o: any) => o.onFinish({ ...lateFinish, finishReason: 'stop' })],
+    ['onAbort', (o: any) => o.onAbort({ steps: [step] })],
+    ['onError', (o: any) => o.onError({ error: new Error('boom') })],
+  ])(
+    'a page export that never resolves: %s settles the run at the turn-end deadline',
+    async (_name, terminal) => {
+      const { opts, runHooks, snapshotRepo } = await capture(
+        () => new Promise<string>(() => undefined),
+      );
+      opts.onStepFinish(step);
+      jest.useFakeTimers();
+      try {
+        const done = terminal(opts);
+
+        await jest.advanceTimersByTimeAsync(TURN_END_WRITES_DEADLINE_MS - 1);
+        expect(runHooks.onSettled).not.toHaveBeenCalled();
+
+        await jest.advanceTimersByTimeAsync(1);
+        await done;
+        expect(runHooks.onSettled).toHaveBeenCalledTimes(1);
+        expect(snapshotRepo.upsert).not.toHaveBeenCalled();
+        expect(Logger.prototype.warn).toHaveBeenCalledWith(
+          expect.stringMatching(
+            new RegExp(
+              `chat chat-1 \\(open page page-1\\).*${TURN_END_WRITES_DEADLINE_MS}ms`,
+            ),
+          ),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
 });

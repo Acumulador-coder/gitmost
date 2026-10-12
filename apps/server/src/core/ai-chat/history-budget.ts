@@ -292,7 +292,7 @@ export function trimHistoryForReplay(
   // The tail we always keep full: from the Nth-from-last user message onward.
   const boundary = recentBoundaryIndex(messages, REPLAY_KEEP_RECENT_TURNS);
   const tail = messages.slice(boundary);
-  let head = messages.slice(0, boundary).map(cloneMessage);
+  const head = messages.slice(0, boundary).map(cloneMessage);
 
   // Phase 1: truncate old tool outputs.
   for (const m of head) {

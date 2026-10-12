@@ -7,6 +7,7 @@ import {
 } from "@/features/ai-chat/utils/resume-helpers.ts";
 import { AI_CHAT_MESSAGES_RQ_KEY } from "@/features/ai-chat/queries/ai-chat-query.ts";
 import type { IAiChatMessageRow } from "@/features/ai-chat/types/ai-chat.types.ts";
+import { httpStatusOf } from "@/lib/http-error";
 
 // #491/#555: the degraded DELTA poll interval. The window owns ONLY this dumb
 // timer; the THREAD's run-lifecycle FSM owns arm/disarm (via onResumeFallback) and
@@ -39,6 +40,21 @@ export function applyDeltaRowsToMessagesCache(
   return { ...old, pages: mergeDeltaRowsIntoPages(old.pages, rows) };
 }
 
+/** A failed poll as the user is shown it: the HTTP status and the server's
+ *  message when there is a response, the error name and message otherwise. */
+export function describeDeltaPollFailure(err: unknown): string {
+  const status = httpStatusOf(err);
+  const serverMessage = (err as { response?: { data?: { message?: unknown } } })
+    ?.response?.data?.message;
+  const message =
+    typeof serverMessage === "string" && serverMessage
+      ? serverMessage
+      : err instanceof Error
+        ? `${err.name}: ${err.message}`
+        : String(err);
+  return status !== undefined ? `HTTP ${status}: ${message}` : message;
+}
+
 /** Are two delta run facts equivalent (both null, or same id + status)? Used to
  *  avoid re-surfacing (and re-rendering on) an unchanged fact each poll. */
 export function sameRunFact(a: DeltaRunFact, b: DeltaRunFact): boolean {
@@ -63,12 +79,18 @@ export function sameRunFact(a: DeltaRunFact, b: DeltaRunFact): boolean {
  * of waiting for the terminal row. The cursor and
  * the surfaced fact RESET when the chat changes or the poll (dis)arms — the delta
  * chain is scoped to ONE resume attempt of ONE chat (invariant 8).
+ *
+ * It also RETURNS the latest poll `failure` (AI-7): the poll is the only path
+ * that follows a detached run after a drop, so a failing poll is a degraded
+ * state the user must see with its real cause (invariant 10) — not a silent
+ * wait until the inactivity cap. Cleared by the next successful poll and on a
+ * chat change; kept across a disarm, so the stalled banner can still name it.
  */
 export function useAiChatDeltaPoll(params: {
   chatId: string | null | undefined;
   armed: boolean;
   enabled: boolean;
-}): DeltaRunFact | undefined {
+}): { runFact: DeltaRunFact | undefined; failure: string | null } {
   const { chatId, armed, enabled } = params;
   const queryClient = useQueryClient();
   // The DB-clock cursor echoed from the previous poll; `undefined` starts a fresh
@@ -77,6 +99,14 @@ export function useAiChatDeltaPoll(params: {
   // `undefined` = no poll result yet this cycle (the thread ignores it); `null` /
   // `{ id, status }` = an authoritative server run fact.
   const [runFact, setRunFact] = useState<DeltaRunFact | undefined>(undefined);
+  // The latest failed poll's description, scoped to the chat it was polled for
+  // (so a chat change drops it); null once a poll succeeds.
+  const [failureState, setFailure] = useState<{
+    chatId: string;
+    reason: string;
+  } | null>(null);
+  const failure =
+    failureState && failureState.chatId === chatId ? failureState.reason : null;
 
   // Reset the cursor + the surfaced fact whenever the chat changes or the poll
   // (dis)arms: the chain is scoped to one resume attempt of one chat. Resetting on
@@ -111,9 +141,14 @@ export function useAiChatDeltaPoll(params: {
         setRunFact((prev) =>
           prev !== undefined && sameRunFact(prev, res.run) ? prev : res.run,
         );
-      } catch {
-        // Transient failure (e.g. a server restart mid-run): swallow and retry on
-        // the next tick — the poll must survive a bounce, like the old dumb refetch.
+        setFailure(null);
+      } catch (err) {
+        // The poll keeps going — it must survive a bounce (e.g. a server restart
+        // mid-run) and retries on the next tick — but the failure is logged and
+        // surfaced, never swallowed.
+        console.error("AI chat: the delta poll following the run failed", err);
+        if (cancelled) return;
+        setFailure({ chatId: id, reason: describeDeltaPollFailure(err) });
       }
     };
     // Leading tick: fire ONCE immediately on arm so the first delta lands promptly
@@ -130,5 +165,5 @@ export function useAiChatDeltaPoll(params: {
     };
   }, [armed, enabled, chatId, queryClient]);
 
-  return runFact;
+  return { runFact, failure };
 }
