@@ -72,6 +72,22 @@ function baseDeps(vault: any, over: Partial<RunCycleDeps> = {}): RunCycleDeps {
 }
 
 describe("runCycle (composition)", () => {
+  it("runs prepareVault in a SAFE order: ensureRepo -> clearStaleGitLocks -> ensureMainBranch", async () => {
+    // clearStaleGitLocks needs the repo ensureRepo makes, and runs before
+    // ensureMainBranch, which a stale refs/heads/main.lock or HEAD.lock blocks.
+    const vault = fakeVault();
+
+    const res = await runCycle(baseDeps(vault));
+    expect(res.ran).toBe(true);
+
+    const i = (name: string) => vault.order.indexOf(name);
+    expect(i("ensureRepo")).toBeGreaterThanOrEqual(0);
+    expect(i("clearStaleGitLocks")).toBeGreaterThanOrEqual(0);
+    expect(i("ensureMainBranch")).toBeGreaterThanOrEqual(0);
+    expect(i("ensureRepo")).toBeLessThan(i("clearStaleGitLocks"));
+    expect(i("clearStaleGitLocks")).toBeLessThan(i("ensureMainBranch"));
+  });
+
   it("runs a SINGLE push planning pass (no dry-run; the delete-cap hook is gone)", async () => {
     const vault = fakeVault();
     const deps = baseDeps(vault);

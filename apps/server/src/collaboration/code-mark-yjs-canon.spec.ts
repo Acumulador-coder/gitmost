@@ -17,7 +17,7 @@ import { tiptapExtensions } from './collaboration.util';
  *   const isOverlapping = !mark.type.excludes(mark.type);
  *   pattrs[isOverlapping ? `${name}--${hashOfJSON(mark.toJSON())}` : name] = mark.attrs;
  *
- * A mark that does not exclude itself is keyed by a hash (like `comment`).
+ * A mark that does not exclude itself is keyed by a hash.
  * `excludes: ""` would key inline code as `code--<hash>`; `excludes: "code"`
  * (exclude only itself) lets code coexist with bold / italic / … on the stock
  * `code` key.
@@ -71,6 +71,21 @@ describe('#515 server `code` mark: Yjs key canon (tiptapExtensions)', () => {
       .filter((markType: any) => code.excludes(markType))
       .map((markType: any) => markType.name);
     expect(evicted).toEqual([]);
+  });
+
+  it('every mark excludes itself, so no mark gets a hashed Yjs key (comment helpers read raw attribute names)', () => {
+    const overlapping = Object.values(schema.marks)
+      .filter((markType: any) => !markType.excludes(markType))
+      .map((markType: any) => markType.name);
+    expect(overlapping).toEqual([]);
+  });
+
+  it('no other mark excludes code (directionality, #515)', () => {
+    const offenders = Object.values(schema.marks)
+      .filter((markType: any) => markType.name !== 'code')
+      .filter((markType: any) => markType.excludes(code))
+      .map((markType: any) => markType.name);
+    expect(offenders).toEqual([]);
   });
 
   it('WRITE path (TiptapTransformer.toYdoc) persists inline code under the plain `code` key', () => {
