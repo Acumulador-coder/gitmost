@@ -564,6 +564,33 @@ describe('GitSyncOrchestrator', () => {
       releaseHung();
       await firstTick;
     });
+
+    it('one tick reaches every enabled space, at most two cycles at a time', async () => {
+      const built = build();
+      jest.spyOn(built.orchestrator as any, 'enabledSpaces').mockResolvedValue([
+        { spaceId: 'space-1', workspaceId: 'ws-1' },
+        { spaceId: 'space-2', workspaceId: 'ws-1' },
+        { spaceId: 'space-3', workspaceId: 'ws-1' },
+      ]);
+      let running = 0;
+      let peak = 0;
+      const ran: string[] = [];
+      jest
+        .spyOn(built.orchestrator, 'runOnce')
+        .mockImplementation(async (spaceId: string) => {
+          running++;
+          peak = Math.max(peak, running);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          running--;
+          ran.push(spaceId);
+          return { spaceId, ran: true };
+        });
+
+      await (built.orchestrator as any).pollTick();
+
+      expect(ran.sort()).toEqual(['space-1', 'space-2', 'space-3']);
+      expect(peak).toBe(2);
+    });
   });
 
   describe('module lifecycle', () => {

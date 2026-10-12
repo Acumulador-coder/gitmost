@@ -756,11 +756,12 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * downtime. Each enabled space runs under its own lock (overlaps skipped).
    * Never throws.
    *
-   * The tick does not wait for one space before starting the next. It hands
-   * free slots (GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES) to the spaces that have
-   * waited longest and are not still running from an earlier tick; a hung cycle
-   * holds one slot until its deadline while the other spaces keep being
-   * reconciled. The returned promise settles when this tick's cycles have.
+   * The tick does not wait for one space before starting the next. Its free
+   * slots (GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES) work through the spaces that have
+   * waited longest and are not still running from an earlier tick: a slot whose
+   * cycle settles takes the next waiting space, so one tick reaches every enabled
+   * space. A hung cycle holds one slot until its deadline while the other slots
+   * keep reconciling. The returned promise settles when this tick's cycles have.
    *
    * Re-entrancy guard: the `polling` flag skips a tick while another is still
    * enumerating; it is in-process only (each replica guards its own ticks —
@@ -799,29 +800,39 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
             (this.pollLaunchedAt.get(a.spaceId) ?? 0) -
             (this.pollLaunchedAt.get(b.spaceId) ?? 0),
         );
-      for (const { spaceId, workspaceId } of waiting) {
-        if (this.pollInFlight.size >= GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES)
-          break;
+      // Runs the next waiting space in a free slot, then hands the slot on. The
+      // cap is re-checked on each hand-off because a later tick may have filled
+      // the slot meanwhile, and a space it started is skipped here.
+      const runNext = (): Promise<void> => {
+        if (this.pollInFlight.size >= GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES) {
+          return Promise.resolve();
+        }
+        let next = waiting.shift();
+        while (next && this.pollInFlight.has(next.spaceId)) next = waiting.shift();
+        if (!next) return Promise.resolve();
+        const { spaceId, workspaceId } = next;
         this.pollInFlight.add(spaceId);
         this.pollLaunchedAt.set(spaceId, Date.now());
         // runOnce records each cycle's outcome in the space's health (served by
         // /status, counted in the metrics) and logs the healthy <-> failing
         // transitions; only its opt-in read can still throw.
-        launched.push(
-          this.runOnce(spaceId, workspaceId)
-            .then(
-              () => undefined,
-              (err) => {
-                this.logger.error(
-                  `git-sync: poll cycle for space ${spaceId} failed: ${
-                    err instanceof Error ? err.message : String(err)
-                  }`,
-                  err instanceof Error ? err.stack : undefined,
-                );
-              },
-            )
-            .finally(() => this.pollInFlight.delete(spaceId)),
-        );
+        return this.runOnce(spaceId, workspaceId)
+          .then(
+            () => undefined,
+            (err) => {
+              this.logger.error(
+                `git-sync: poll cycle for space ${spaceId} failed: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+                err instanceof Error ? err.stack : undefined,
+              );
+            },
+          )
+          .finally(() => this.pollInFlight.delete(spaceId))
+          .then(runNext);
+      };
+      for (let slot = 0; slot < GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES; slot++) {
+        launched.push(runNext());
       }
     } finally {
       this.polling = false;

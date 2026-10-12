@@ -177,8 +177,7 @@ export class EnvironmentVariables {
 
   // Required when git-sync is enabled: the service user create/move/rename/delete
   // are attributed to. Optional otherwise.
-  // Same reading of the flag as GitSyncModule and isGitSyncEnabled().
-  @ValidateIf((obj) => (obj.GIT_SYNC_ENABLED ?? '').toLowerCase() === 'true')
+  @ValidateIf((obj) => obj.GIT_SYNC_ENABLED === 'true')
   @IsNotEmpty()
   @IsString()
   GIT_SYNC_SERVICE_USER_ID: string;
