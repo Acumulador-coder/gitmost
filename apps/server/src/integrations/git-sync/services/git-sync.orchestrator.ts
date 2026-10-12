@@ -721,8 +721,12 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`git-sync: poll interval registered (${ms}ms).`);
   }
 
-  /** Tear down the dynamic interval on shutdown (guard against double-delete). */
+  /**
+   * Tear down the dynamic interval on shutdown (guard against double-delete) and
+   * stop a running tick from handing its slots on to more spaces.
+   */
   onModuleDestroy(): void {
+    this.pollStopped = true;
     if (!this.pollIntervalName) return;
     try {
       // deleteInterval clears the timer and removes it from the registry.
@@ -740,6 +744,8 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
 
   /** True while a pollTick enumerates and launches cycles (re-entrancy guard). */
   private polling = false;
+  /** Set on shutdown: no poll cycle starts after it. */
+  private pollStopped = false;
   /**
    * Spaces whose poll-launched cycle has not settled yet; each holds one of the
    * GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES slots. Bounded by that cap.
@@ -804,11 +810,16 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
       // cap is re-checked on each hand-off because a later tick may have filled
       // the slot meanwhile, and a space it started is skipped here.
       const runNext = (): Promise<void> => {
-        if (this.pollInFlight.size >= GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES) {
+        if (
+          this.pollStopped ||
+          this.pollInFlight.size >= GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES
+        ) {
           return Promise.resolve();
         }
         let next = waiting.shift();
-        while (next && this.pollInFlight.has(next.spaceId)) next = waiting.shift();
+        while (next && this.pollInFlight.has(next.spaceId)) {
+          next = waiting.shift();
+        }
         if (!next) return Promise.resolve();
         const { spaceId, workspaceId } = next;
         this.pollInFlight.add(spaceId);

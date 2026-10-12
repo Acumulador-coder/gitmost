@@ -540,6 +540,7 @@ describe('GitSyncOrchestrator', () => {
       jest.spyOn(built.orchestrator as any, 'enabledSpaces').mockResolvedValue([
         { spaceId: 'space-1', workspaceId: 'ws-1' },
         { spaceId: 'space-2', workspaceId: 'ws-1' },
+        { spaceId: 'space-3', workspaceId: 'ws-1' },
       ]);
       let releaseHung!: () => void;
       const hung = new Promise((resolve) => {
@@ -553,12 +554,14 @@ describe('GitSyncOrchestrator', () => {
           .length;
 
       const firstTick = (built.orchestrator as any).pollTick();
-      await until(() => cyclesOf('space-2') === 1);
-      // space-1 is still hung; later ticks keep reconciling space-2.
+      // While space-1 hangs, the other slot works through the rest of the list.
+      await until(() => cyclesOf('space-2') === 1 && cyclesOf('space-3') === 1);
+      // Later ticks keep reconciling the others.
       await (built.orchestrator as any).pollTick();
       await (built.orchestrator as any).pollTick();
 
       expect(cyclesOf('space-2')).toBe(3);
+      expect(cyclesOf('space-3')).toBe(3);
       expect(cyclesOf('space-1')).toBe(1);
 
       releaseHung();
@@ -590,6 +593,33 @@ describe('GitSyncOrchestrator', () => {
 
       expect(ran.sort()).toEqual(['space-1', 'space-2', 'space-3']);
       expect(peak).toBe(2);
+    });
+
+    it('a tick starts no more cycles once the module is destroyed', async () => {
+      const built = build();
+      jest.spyOn(built.orchestrator as any, 'enabledSpaces').mockResolvedValue([
+        { spaceId: 'space-1', workspaceId: 'ws-1' },
+        { spaceId: 'space-2', workspaceId: 'ws-1' },
+        { spaceId: 'space-3', workspaceId: 'ws-1' },
+      ]);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const runOnce = jest
+        .spyOn(built.orchestrator, 'runOnce')
+        .mockImplementation(async (spaceId: string) => {
+          await gate;
+          return { spaceId, ran: true };
+        });
+
+      const tick = (built.orchestrator as any).pollTick();
+      await until(() => runOnce.mock.calls.length === 2);
+      built.orchestrator.onModuleDestroy();
+      release();
+      await tick;
+
+      expect(runOnce).toHaveBeenCalledTimes(2);
     });
   });
 
