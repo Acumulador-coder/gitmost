@@ -1,4 +1,4 @@
-// Unit tests for the drawioFromGraph pipeline (issue #425, stage 3): the
+// Unit tests for the drawioFromGraph pipeline: the
 // semantic graph -> ELK -> linter-clean XML assembler, plus the layout hints
 // (pinned / sameLayerAs / layer) and incremental layout. Pure — no client, no
 // network — so they run under `node --test` against the built lib.

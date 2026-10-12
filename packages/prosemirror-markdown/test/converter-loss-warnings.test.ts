@@ -5,10 +5,10 @@ import {
 } from "../src/lib/markdown-converter.js";
 
 /**
- * #493 commit 3 — a node/mark type the serializer has no dedicated case for used
- * to be degraded SILENTLY (an unknown node flattened to its children, an unknown
- * mark dropped from the run). The serializer now REPORTS the loss:
- *   - default (non-strict): unchanged graceful degradation, but one warning per
+ * A node/mark type the serializer has no dedicated case for is degraded (an
+ * unknown node flattened to its children, an unknown mark dropped from the run)
+ * and the loss is REPORTED:
+ *   - default (non-strict): graceful degradation, plus one warning per
  *     unmapped type is pushed into an optional `warnings` sink so callers can
  *     observe it;
  *   - strict: the FIRST unmapped type throws a ConverterLossError (git-sync +
@@ -29,7 +29,7 @@ describe("converter loss reporting — unknown node types", () => {
   it("degrades to children AND records a warning (non-strict, sink provided)", () => {
     const warnings: string[] = [];
     const md = convertProseMirrorToMarkdown(unknownNode, { warnings });
-    // Graceful degrade: the child text still survives (historical behavior).
+    // Graceful degrade: the child text still survives.
     expect(md).toContain("inner text");
     // The loss is now observable.
     expect(warnings).toHaveLength(1);

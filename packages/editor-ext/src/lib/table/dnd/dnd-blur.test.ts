@@ -3,12 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TableHandlePluginSpec, TableDndKey, TableHandleState } from './dnd-extension';
 
 /**
- * F2: drop the table handles when the editor loses focus.
+ * Drop the table handles when the editor loses focus.
  *
- * `_onSelectionUpdate` sets `hoveringCell` whenever the CARET sits in a cell,
- * and nothing ever cleared it — so one click into any table left the three
- * floating handles (and their floating-ui `autoUpdate` watchers) mounted for
- * the rest of the session. The blur path unmounts them, but must not fight a
+ * `_onSelectionUpdate` sets `hoveringCell` whenever the CARET sits in a cell, so
+ * without the blur path one click into any table would leave the three floating
+ * handles (and their floating-ui `autoUpdate` watchers) mounted for the rest of
+ * the session. The blur path unmounts them, but must not fight a
  * menu (`frozen`), a drag (`dragging`), or dispatch a transaction on every
  * blur once the state is already clear.
  */

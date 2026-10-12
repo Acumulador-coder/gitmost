@@ -6,7 +6,7 @@ import { Paragraph } from "@tiptap/extension-paragraph";
 import { Text } from "@tiptap/extension-text";
 import { applyAlignment, TiptapImage } from "./image";
 
-// CONTRACT tests for the image node's `caption` attribute (issue #221). The
+// CONTRACT tests for the image node's `caption` attribute. The
 // caption is a plain-text string stored on the image atom and serialized as
 // `data-caption` on the <img>. If this mapping drifts, captions saved to HTML
 // (and thus to native storage / search / markdown) are silently lost.
@@ -14,7 +14,7 @@ const extensions = [Document, Paragraph, Text, TiptapImage];
 
 // applyAlignment is a pure DOM mutation: it sets the float / padding /
 // justify-content / data-image-align on an image node-view container per the
-// resolved `align`. Tested directly (issue #145 review) since the five-way
+// resolved `align`. Tested directly since the five-way
 // branch, the reset-then-apply guard, and the data-image-align mirror (which the
 // responsive @media rule keys off) are otherwise uncovered.
 

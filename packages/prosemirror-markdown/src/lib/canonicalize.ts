@@ -1,7 +1,7 @@
 /**
  * Semantic canonicalization of ProseMirror/TipTap documents for the round-trip
- * idempotency check (SPEC §11, "Task #0", option (b): compare a CANONICALIZED
- * form rather than raw bytes).
+ * idempotency check (SPEC §11: compare a CANONICALIZED form rather than raw
+ * bytes).
  *
  * `markdownToProseMirror` reconstructs schema DEFAULT attributes (e.g.
  * `indent: 0` where the source omitted it) and regenerates per-block ids on

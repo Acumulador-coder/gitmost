@@ -14,8 +14,8 @@
  * even one git's rename detection misses. Third-party editors (Obsidian, …) see
  * clean markdown; the frontmatter is hidden in their preview.
  *
- * No backward-compat with the old `docmost:meta` format: vaults are a cache, wiped
- * and rebuilt native. A file WITHOUT a `gitmost_id` frontmatter is an un-tracked
+ * The `docmost:meta` format is not read here: vaults are a cache, rebuilt in
+ * this format. A file WITHOUT a `gitmost_id` frontmatter is an un-tracked
  * (e.g. hand-written) file -> the caller ADOPTS it (creates a page, writes the id).
  */
 
@@ -59,14 +59,11 @@ function readIdFromYaml(yaml: string): string | null {
  * and the whole text as the body — the caller then ADOPTS it (creates a page,
  * writes the id back).
  *
- * KNOWN LIMITATION (phase 4 — adoption, see docs/backlog/git-sync-thin-meta.md):
- * a leading frontmatter block is stripped from `body` even when it carries NO
- * `gitmost_id` but DOES carry the user's own Obsidian properties (`tags:` etc.).
- * On adoption those fields are not yet round-tripped — `serializePageFile`
- * write-back persists only `gitmost_id`. Preserving arbitrary user frontmatter
- * across the Docmost round-trip (BOTH adoption write-back AND the next pull's
- * re-serialize) is deferred to the adoption phase; until then, do NOT roll the
- * native format onto a real Obsidian vault whose notes carry properties.
+ * KNOWN LIMITATION (see docs/backlog/git-sync-thin-meta.md): a leading
+ * frontmatter block is stripped from `body` even when it carries NO `gitmost_id`
+ * but DOES carry the user's own Obsidian properties (`tags:` etc.), and
+ * `serializePageFile` persists only `gitmost_id` — so do NOT use this format on a
+ * real Obsidian vault whose notes carry properties.
  */
 export function parsePageFile(full: string): {
   id: string | null;

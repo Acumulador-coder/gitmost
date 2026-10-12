@@ -39,7 +39,7 @@ const columnInner = (rendered: string): string => {
 // At the TOP level the `text` case emits markdown markers (**, *, ``, ~~) for
 // bold/italic/code/strike. But inside columns (and spanned table cells) the
 // content is raw HTML that marked will NOT re-parse, so inlineToHtml
-// (markdown-converter.ts lines 599-619) MUST mirror each mark to HTML instead:
+// MUST mirror each mark to HTML instead:
 // bold-><strong>, italic-><em>, code-><code>, strike-><s>, underline-><u>. This
 // is a DISTINCT branch from the top-level mark path; if it leaked markdown, the
 // literal ** / `` would survive as text on re-import.
@@ -76,9 +76,9 @@ describe('inlineToHtml: bold/italic/code/strike/underline -> HTML inside columns
 // 2. inlineToHtml: link/hardBreak/highlight/textStyle/comment inside columns.
 //
 // Exercises the remaining inlineToHtml branches that are uncovered inside a
-// raw-HTML container: link href escaping via escapeAttr (line 621; & -> &amp;,
-// " -> &quot;), hardBreak -> <br> (line 591), highlight WITH vs WITHOUT color
-// (624-626), textStyle color (628-630), and comment with data-resolved (632-638).
+// raw-HTML container: link href escaping via escapeAttr (& -> &amp;,
+// " -> &quot;), hardBreak -> <br>, highlight WITH vs WITHOUT color,
+// textStyle color, and comment with data-resolved.
 // ---------------------------------------------------------------------------
 describe('inlineToHtml: link/hardBreak/highlight/textStyle/comment inside columns', () => {
   it('escapes link hrefs, emits <br>, plain/colored <mark>, span color, and resolved comment', () => {
@@ -133,9 +133,9 @@ describe('inlineToHtml: link/hardBreak/highlight/textStyle/comment inside column
 // 3. blockToHtml non-paragraph branches inside columns: heading / codeBlock /
 //    bulletList.
 //
-// heading -> <hN> (718-721), codeBlock with-language vs no-language class fork
-// (730-742; the no-language `cls = ''` branch at 741 yields a BARE <code> with
-// no class), and bulletList -> <ul><li><p>...</p></li></ul> (722-725). Code text
+// heading -> <hN>, codeBlock with-language vs no-language class fork (the
+// no-language `cls = ''` branch yields a BARE <code> with no class), and
+// bulletList -> <ul><li><p>...</p></li></ul>. Code text
 // is element TEXT content, so it is escapeHtmlText-escaped (not the attr escaper),
 // and embedded newlines are preserved verbatim.
 // ---------------------------------------------------------------------------
@@ -176,11 +176,10 @@ describe('blockToHtml: heading / codeBlock(lang & no-lang) / bulletList inside c
 // 4. Spanned-table renderHtmlCell + orderedList block child (HTML fallback).
 //
 // A colspan>1 cell forces the WHOLE table to the raw-<table> HTML fallback
-// (markdown-converter.ts ~287-331). renderHtmlCell emits colspan + align attrs
-// (312-316) and renders each block child via blockToHtml. An orderedList child
-// hits the blockToHtml orderedList branch, which emits
-// <ol start="N"><li><p>..</p></li>..</ol> — the schema's non-1 `start` attr IS
-// emitted by this HTML <ol> branch (FIXED #351).
+// (markdown-converter.ts). renderHtmlCell emits colspan + align attrs and
+// renders each block child via blockToHtml. An orderedList child hits the
+// blockToHtml orderedList branch, which emits
+// <ol start="N"><li><p>..</p></li>..</ol> with the schema's non-1 `start`.
 // ---------------------------------------------------------------------------
 describe('spanned table: renderHtmlCell colspan/align + orderedList block child', () => {
   it('renders the colspan/align cell with an <ol start="N"> (start attr preserved)', () => {

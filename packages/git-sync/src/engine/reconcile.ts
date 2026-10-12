@@ -97,13 +97,13 @@ export function planReconciliation(
   live: LiveEntry[],
   existing: ExistingEntry[],
   /**
-   * The subset of tracked pageIds that correspond to a REAL page row (D-P3-1
-   * ghost guard). When provided, a tracked file whose pageId is ABSENT from
+   * The subset of tracked pageIds that correspond to a REAL page row (ghost
+   * guard). When provided, a tracked file whose pageId is ABSENT from
    * `live` is absence-deleted ONLY if its id is in this set — a deleted/moved/
    * trashed page has a row (delete its stale vault file), while a GHOST id (a
    * git file whose id was never a page) has NO row and is PRESERVED. When
    * `undefined` (pure unit callers that do not model ghosts), every absent id is
-   * treated as deletable — the historical behavior.
+   * treated as deletable.
    */
   deletableIds?: ReadonlySet<string>,
 ): ReconciliationPlan {

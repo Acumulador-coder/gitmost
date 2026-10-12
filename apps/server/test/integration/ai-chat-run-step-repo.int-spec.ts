@@ -18,11 +18,11 @@ import {
 } from './db';
 
 /**
- * #492 append-persist — the reconstruct CONTRACT on a live Postgres. Proves that a
- * turn persisted the NEW way (per-step rows in `ai_chat_run_steps`, only a step
- * marker on the message row) reconstructs to the SAME UI parts as a turn persisted
- * the OLD way (full `metadata.parts` inline on the row, no step rows) — so the
- * era-switch is invisible to attach / delta-poll / export. Real repos + real jsonb
+ * Append-persist — the reconstruct CONTRACT on a live Postgres. Proves that a
+ * turn persisted as per-step rows in `ai_chat_run_steps` (only a step marker on
+ * the message row) reconstructs to the SAME UI parts as a turn persisted with
+ * full `metadata.parts` inline on the row (no step rows) — so the two storage
+ * shapes are indistinguishable to attach / delta-poll / export. Real repos + real jsonb
  * roundtrip, not a mock (a mock cannot prove the parts survive the jsonb column
  * byte-identical).
  */

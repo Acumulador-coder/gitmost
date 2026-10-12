@@ -14,15 +14,14 @@
 // some write tools, different limits, hybrid-RRF search, etc.) stay defined
 // per-layer and are NOT represented here.
 //
-// SERVER_INSTRUCTIONS note (issue #448): the intent-routing guide MCP clients
-// receive on initialize is now SPLIT — its tool INVENTORY is GENERATED from this
-// registry (mcpName + catalogLine) by server-instructions.ts, so adding /
-// renaming / removing a spec here updates the guide's inventory AUTOMATICALLY;
-// no prose edit is needed. Only an INLINE MCP-only tool (registerTool in
-// index.ts, not a spec here) needs a hand-written line in INLINE_MCP_INVENTORY —
-// enforced by test/unit/tool-inventory.test.mjs. The routing PROSE (the "when to
-// use what" hints) in server-instructions.ts stays manual, but it is no longer a
-// drift-guard for the tool set.
+// SERVER_INSTRUCTIONS note: the tool INVENTORY of the intent-routing guide MCP
+// clients receive on initialize is GENERATED from this registry (mcpName +
+// catalogLine) by server-instructions.ts, so adding / renaming / removing a spec
+// here updates the guide's inventory AUTOMATICALLY; no prose edit is needed.
+// Only an INLINE MCP-only tool (registerTool in index.ts, not a spec here) needs
+// a hand-written line in INLINE_MCP_INVENTORY — enforced by
+// test/unit/tool-inventory.test.mjs. The routing PROSE (the "when to use what"
+// hints) in server-instructions.ts stays manual.
 
 // Loose on purpose — see the comment above. The two zod majors expose different
 // static type surfaces, so typing this precisely would couple the registry to
@@ -38,7 +37,7 @@ type ZodLike = any;
 // place instead of hand-mirrored per host. Pure — safe across the zod boundary.
 import { parseNodeArg } from '@docmost/prosemirror-markdown';
 // Type-only import (erased at compile) of the real client so `DocmostClientLike`
-// is DERIVED from it (issue #446), not hand-mirrored. The loosest correct client
+// is DERIVED from it, not hand-mirrored. The loosest correct client
 // surface both hosts satisfy: the in-app host passes its own DERIVED
 // `DocmostClientLike` (a Pick of the same class) and the MCP host passes the real
 // `DocmostClient`, so both are structurally assignable to this shared alias.
@@ -47,7 +46,7 @@ import type { DocmostClient } from './client.js';
 /**
  * The client surface a shared `execute` may call — the LOOSEST correct type both
  * hosts satisfy: a `Pick` of the real `DocmostClient` methods the executes below
- * use. DERIVED from the real class (issue #446) so a signature change to any
+ * use. DERIVED from the real class so a signature change to any
  * consumed method surfaces as a compile error in the execute bodies here, not a
  * silent runtime "wrong argument". Kept as a Pick (not the whole class) so the
  * standalone MCP host's full `DocmostClient` AND the in-app host's OWN narrower
@@ -123,20 +122,20 @@ export type SharedToolExecute = (
 ) => Promise<unknown>;
 
 export interface SharedToolSpec {
-  /** camelCase tool name passed to McpServer.registerTool. Since issue #412 the
-   *  external MCP name equals the in-app key (mcpName === inAppKey). */
+  /** camelCase tool name passed to McpServer.registerTool. The external MCP
+   *  name equals the in-app key (mcpName === inAppKey). */
   mcpName: string;
   /** camelCase key in the ai-SDK tools object (the in-app layer). */
   inAppKey: string;
   /**
-   * Write-class of the tool (#489), declared on EVERY spec (a registration-time
+   * Write-class of the tool, declared on EVERY spec (a registration-time
    * assert enforces completeness; `satisfies Record<string, SharedToolSpec>`
    * makes it a compile error to omit). 'readOnly' = a pure read that mutates
    * NOTHING durable, so it is safe to auto-retry once after a transport break.
    * 'write' = anything that mutates a page/comment/share/diagram/etc — a
    * transport error is INDETERMINATE (the server may have applied it before the
-   * connection reset), so it is NEVER blind-retried (a retry would double-apply,
-   * the #435 incident class). Consumed by the external-MCP retry path
+   * connection reset), so it is NEVER blind-retried (a retry would
+   * double-apply). Consumed by the external-MCP retry path
    * (mcp-clients.service.ts) to gate its single auto-retry.
    */
   writeClass: 'readOnly' | 'write';
@@ -227,7 +226,7 @@ const mcpJson = (data: unknown) => ({
 
 /**
  * Compact HARD-RULES block injected into the drawioCreate / drawioUpdate
- * descriptions (issue #424 — the jgraph/drawio-mcp pattern of putting the
+ * descriptions (the jgraph/drawio-mcp pattern of putting the
  * must-follow rules right where the model reads them at call time). Deliberately
  * terse; the long-form authoring guidance lives in drawioGuide.
  */
@@ -484,13 +483,12 @@ export const SHARED_TOOL_SPECS = {
 
   // --- single-block structural write (patch / insert) ---
   //
-  // CANONICAL description merges both layers: the MCP copy's "WITHOUT resending
-  // the whole document" + "cheaper/safer than a full-document replace" guidance
-  // AND the in-app copy's "keeps the same node id" + "Reversible via page
-  // history" framing — nothing either side conveyed is dropped. Sibling tools are
-  // named in transport-neutral prose ("the page-JSON view", "a full-document
-  // replace") to match the rest of the registry, so a description reads the same
-  // on both layers.
+  // The description covers both layers' guidance: patch WITHOUT resending the
+  // whole document, cheaper/safer than a full-document replace, keeps the same
+  // node id, reversible via page history. Sibling tools are named in
+  // transport-neutral prose ("the page-JSON view", "a full-document replace") to
+  // match the rest of the registry, so a description reads the same on both
+  // layers.
   patchNode: {
     mcpName: 'patchNode',
     inAppKey: 'patchNode',
@@ -820,10 +818,9 @@ export const SHARED_TOOL_SPECS = {
     mcpName: 'importPageMarkdown',
     inAppKey: 'importPageMarkdown',
     writeClass: 'write',
-    // IN-APP ONLY (issue #411): the external /mcp surface no longer exposes
-    // importPageMarkdown — the registry loop in index.ts skips inAppOnly specs,
-    // so this stays available to the in-app agent (round-tripping an EXPORTED
-    // Docmost-Markdown file) but is removed from the public MCP tool set. Plain
+    // IN-APP ONLY: the registry loop in index.ts skips inAppOnly specs, so this
+    // is available to the in-app agent (round-tripping an EXPORTED
+    // Docmost-Markdown file) but not part of the public MCP tool set. Plain
     // authoring-markdown body replace on the MCP surface is updatePageMarkdown.
     inAppOnly: true,
     description:
@@ -869,17 +866,13 @@ export const SHARED_TOOL_SPECS = {
       client.copyPageContent(sourcePageId as string, targetPageId as string),
   },
 
-  // --- surgical text edit (folds in the documented drift-bug fix) ---
+  // --- surgical text edit ---
   //
-  // CANONICAL description is the CORRECTED in-app wording: a formatting-only
-  // change is REFUSED into failed[] (not silently stripped-and-retried). The
-  // stale MCP claim that "Markdown wrappers are tolerated via a strip-and-retry
-  // fallback" is intentionally absent here. NOT the same thing as the markdown
-  // LOCATOR tier (#658), which is real and now stated up front: stripping finds
-  // the text, it never turns a formatting change into an applied edit. The old
-  // wording claimed find AND replace were "literal text, not markdown", which
-  // contradicted the tail sentence and taught agents that a `find` carrying
-  // backticks can never match — measured false (matchedVia: "markdown").
+  // A formatting-only change is REFUSED into failed[] (not silently
+  // stripped-and-retried). That is distinct from the markdown LOCATOR tier,
+  // which the description states up front: stripping finds the text, it never
+  // turns a formatting change into an applied edit, and a `find` carrying
+  // backticks can match through it (matchedVia: "markdown").
   editPageText: {
     mcpName: 'editPageText',
     inAppKey: 'editPageText',
@@ -1207,13 +1200,9 @@ export const SHARED_TOOL_SPECS = {
       'to trash later.',
     tier: 'deferred',
     catalogLine: 'createPage — create a new page with a Markdown body in a space.',
-    // Reconciled schema DRIFT: the MCP copy pinned `content` to .min(1) while
-    // the in-app copy left it unbounded and DOCUMENTS an empty body as valid
-    // ("may be empty") — creating an empty page to fill in later is a real use
-    // case. The looser (no-min) form is kept, so createPage now also accepts an
-    // empty body (harmless — it creates an empty page) and no previously-valid
-    // in-app input is ever rejected. `title`/`spaceId` keep the MCP .min(1)
-    // (an empty title or space is never valid).
+    // `content` has no .min(1): an empty body is valid ("may be empty") —
+    // creating an empty page to fill in later is a real use case.
+    // `title`/`spaceId` keep .min(1) (an empty title or space is never valid).
     buildShape: (z) => ({
       title: z.string().min(1).describe('The title of the new page.'),
       content: z.string().describe('The page body as Markdown (may be empty).'),
@@ -1256,14 +1245,11 @@ export const SHARED_TOOL_SPECS = {
       'parent is given. Reversible: move it back at any time.',
     tier: 'deferred',
     catalogLine: 'movePage — move a page under a new parent or to the space root.',
-    // Reconciled schema DRIFT: the MCP copy exposed a `position` field
-    // (fractional-index ordering) that the in-app copy lacked. Unified by
-    // KEEPING position (the in-app client already accepts an optional position
-    // arg, so the in-app execute now forwards it) — it is optional, so no
-    // previously-valid in-app call is rejected. `parentPageId` is `.nullable()`
-    // on both, so a real JSON null moves to root on either transport; the MCP
-    // execute additionally coerces the strings 'null'/'' to null as a robustness
-    // fallback (kept in its execute body, not in the shared schema).
+    // `position` (fractional-index ordering) is optional and forwarded by both
+    // executes. `parentPageId` is `.nullable()` on both, so a real JSON null
+    // moves to root on either transport; the MCP execute additionally coerces
+    // the strings 'null'/'' to null as a robustness fallback (kept in its
+    // execute body, not in the shared schema).
     buildShape: (z) => ({
       pageId: z.string().min(1).describe('The id of the page to move.'),
       parentPageId: z
@@ -1464,7 +1450,7 @@ export const SHARED_TOOL_SPECS = {
     },
   },
 
-  // Full-body replace from PLAIN Markdown (issue #411). Pairs with
+  // Full-body replace from PLAIN Markdown. Pairs with
   // updatePageJson (which takes a ProseMirror document): this one takes a
   // markdown string and re-imports the whole body. `client.updatePage` runs it
   // through updatePageContentRealtime -> markdownToProseMirrorCanonical, so
@@ -1472,8 +1458,7 @@ export const SHARED_TOOL_SPECS = {
   // canonicalized. Distinct from importPageMarkdown, which re-imports a
   // self-contained EXPORTED Docmost-Markdown file (with comment anchors +
   // diagrams); this tool takes ordinary authoring markdown. Shared spec, so the
-  // registry loop registers it on BOTH hosts (external MCP + in-app agent) —
-  // #411 replaced the old inline in-app `updatePageContent` tool with this.
+  // registry loop registers it on BOTH hosts (external MCP + in-app agent).
   updatePageMarkdown: {
     mcpName: 'updatePageMarkdown',
     inAppKey: 'updatePageMarkdown',
@@ -1510,15 +1495,9 @@ export const SHARED_TOOL_SPECS = {
             'edit on; the guarded write rejects a stale overwrite (re-read on 409).',
         ),
     }),
-    // Single canonical execute on BOTH hosts (the tool was in-app only before,
-    // so there is no external-MCP behavior to preserve). NOTE (rename #411): the
-    // old inline in-app tool projected the client result to { pageId, updated };
-    // the registry now returns the raw client result { success, modified,
-    // message, pageId, verify? } instead. Deliberate: no code reads the removed
-    // `.updated` field, the raw result is strictly more informative to the model
-    // (it surfaces footnote/verify warnings), and it matches the on-both-hosts
-    // registry convention. The result-shape change is the ONLY behavior delta of
-    // this rename; the write path (updatePage -> markdown canonicalize) is identical.
+    // Single canonical execute on BOTH hosts. Returns the raw client result
+    // { success, modified, message, pageId, verify? }, which surfaces
+    // footnote/verify warnings to the model.
     execute: (client, { pageId, content, title, baseHash }) =>
       client.updatePage(
         pageId as string,
@@ -1564,18 +1543,16 @@ export const SHARED_TOOL_SPECS = {
     },
   },
 
-  // --- comment tools (unified from the per-layer inline definitions, #294) ---
+  // --- comment tools ---
   //
-  // createComment and resolveComment previously carried a "per-transport
-  // divergence" note in BOTH layers; #294 unifies their schema + description
-  // here. Only the four tools that genuinely exist in BOTH layers live in the
-  // registry: create/list/resolve comment and checkNewComments.
+  // Only the four tools that exist in BOTH layers live in the registry:
+  // create/list/resolve comment and checkNewComments.
   //
   // updateComment and deleteComment are intentionally NOT here: they exist
   // ONLY on the standalone MCP server. The in-app agent deliberately exposes no
   // hard comment edit/delete tool (comment edits are irreversible / not
   // version-tracked; see the guardrail tests in ai-chat-tools.service.spec.ts),
-  // so there is nothing to unify — they stay inline in index.ts.
+  // so they stay inline in index.ts.
 
   createComment: {
     mcpName: 'createComment',
@@ -1755,11 +1732,8 @@ export const SHARED_TOOL_SPECS = {
       'thread and its replies intact (it is not a deletion).',
     tier: 'core',
     catalogLine: 'resolveComment — resolve or reopen a comment thread.',
-    // Reconciled schema: `resolved` drifted — the MCP copy made it optional
-    // with .default(true) (resolve is the common case, documented), the in-app
-    // copy made it required. The MCP form is kept (a strict superset: it never
-    // rejects a previously-valid input and adds a sensible default), and
-    // commentId keeps the MCP copy's stricter .min(1).
+    // `resolved` is optional with .default(true) (resolve is the common case,
+    // documented); commentId keeps .min(1).
     buildShape: (z) => ({
       commentId: z
         .string()
@@ -1842,25 +1816,20 @@ export const SHARED_TOOL_SPECS = {
     },
   },
 
-  // --- table tools (unified from the per-layer inline definitions, #294) ---
+  // --- table tools ---
   //
-  // These tools carried a "NOT shared" note in BOTH layers because of a single
-  // parameter-NAME drift: the MCP layer named the table reference `table` while
-  // the in-app layer named it `tableRef`. #294 reconciles that drift by unifying
-  // on the MCP name `table` — renaming the MCP public parameter would break
-  // external MCP clients, whereas the in-app parameter is model-facing
-  // (prompt-only) and safe to rename. The in-app execute bodies now destructure
-  // `table` instead of `tableRef` (nothing else changes). Descriptions take the
-  // MCP copy's richer wording (it documented `#<index>`, padding, header-row
-  // behavior) plus the in-app copy's "Reversible via page history" note; sibling
-  // tool references are phrased transport-neutrally.
+  // The table reference parameter is named `table` on both layers (the MCP
+  // public name — renaming it would break external MCP clients). Descriptions
+  // document `#<index>`, padding and header-row behavior plus the "Reversible
+  // via page history" note; sibling tool references are phrased
+  // transport-neutrally.
   //
   // NOT here (kept inline in index.ts): tableGet / getTable. Its MCP tool name
   // is noun-first (`tableGet`) while the in-app key is verb-first (`getTable`),
   // so it breaks the mcpName === inAppKey naming convention the registry enforces
   // (shared-tool-specs.contract.spec.ts). Renaming either public name would break
   // external clients or the in-app tool key, so it stays per-transport (its in-app
-  // param was still aligned to `table` for consistency with the migrated trio below).
+  // param is also named `table`, like the trio below).
 
   tableInsertRow: {
     mcpName: 'tableInsertRow',
@@ -1952,14 +1921,11 @@ export const SHARED_TOOL_SPECS = {
       ),
   },
 
-  // --- footnote + image write tools (promoted from inline MCP-only, #410) ---
+  // --- footnote + image write tools ---
   //
-  // These three were previously registered inline in index.ts as MCP-only,
-  // because the in-app AI-chat agent had no equivalent. #410 promotes them so the
-  // in-app agent (esp. the Researcher role) can attach real footnotes/images
-  // instead of writing literal `^[...]` / placeholder text via editPageText. The
-  // schema + description are MOVED VERBATIM from the old inline registrations so
-  // external MCP clients see identical tool names, fields and text.
+  // Shared so the in-app agent (esp. the Researcher role) can attach real
+  // footnotes/images instead of writing literal `^[...]` / placeholder text via
+  // editPageText; external MCP clients see the same tool names, fields and text.
 
   insertFootnote: {
     mcpName: 'insertFootnote',
@@ -2081,7 +2047,7 @@ export const SHARED_TOOL_SPECS = {
       }),
   },
 
-  // --- draw.io diagrams (issue #423 stage 1, #424 stage 2) ---
+  // --- draw.io diagrams ---
 
   drawioGet: {
     mcpName: 'drawioGet',
@@ -2595,7 +2561,7 @@ export function isRetryableWriteClass(
 }
 
 /**
- * Registration-time assert (#489): EVERY spec must declare a valid write-class.
+ * Registration-time assert: EVERY spec must declare a valid write-class.
  * `satisfies Record<string, SharedToolSpec>` already makes an omission a compile
  * error, but this guards a raw/cast construction path and documents the invariant
  * at the point of use. Runs once on import — both hosts import this module, so
@@ -2619,16 +2585,15 @@ export function assertEverySpecDeclaresWriteClass(): void {
 assertEverySpecDeclaresWriteClass();
 
 /**
- * Registration-time assert (#494): every spec that a host registers through the
+ * Registration-time assert: every spec that a host registers through the
  * shared-registry loop MUST carry a callable execute path for THAT host. On the
  * MCP host (index.ts) the loop runs `mcpExecute` else `spec.execute!` — a spec
  * with neither throws a TypeError at CALL time (fires only once the model picks
  * that tool, in production, on the MCP host). On the in-app host
  * (ai-chat-tools.service.ts) the loop does `inAppExecute ?? execute`, then
  * `if (!run) continue` — a spec with neither is SILENTLY dropped, so the tool
- * simply vanishes from the agent with no error at all. A `// mirror this` comment
- * is not a guard; this closes the mirror with a real structural check that fires
- * at module load on BOTH hosts (both import this file), turning a latent runtime
+ * simply vanishes from the agent with no error at all. This check fires at
+ * module load on BOTH hosts (both import this file), turning a latent runtime
  * TypeError / silent-drop into a loud startup failure.
  *
  * `inlineBothHosts` specs are exempt: both hosts register them inline with a

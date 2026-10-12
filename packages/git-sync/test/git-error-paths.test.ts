@@ -2,8 +2,7 @@
  * Error-path coverage for the `VaultGit` git wrapper (engine/git.ts).
  *
  * These tests exclusively exercise the NON-ZERO-EXIT / SPAWN-FAILURE branches
- * that the rest of the suite leaves untested (reviewer-flagged branch-coverage
- * gap): the `run()` unified-error throw, the dedicated per-method throws in
+ * that the rest of the suite leaves untested: the `run()` unified-error throw, the dedicated per-method throws in
  * `lsTree` / `diffNameStatus`, the `assertGitAvailable` preflight +
  * `runRaw` spawn-error (`||`-fallthrough) path, and the `ensureRepo`
  * config-pin try/catch wrapper.

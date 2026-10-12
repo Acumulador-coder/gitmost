@@ -1,14 +1,9 @@
 /**
  * Foreign-markdown normalizer — an input-liberal / output-canonical adapter that
  * runs at the IMPORT boundary, BEFORE the canonical parser
- * (`markdownToProseMirror`, this package).
- *
- * OWNED BY THIS PACKAGE (#493): the normalizer used to live only in
- * apps/server's import path, so the MCP page-write path (`updatePageMarkdown` ->
- * `markdownToProseMirrorCanonical`) handled the SAME foreign input differently
- * (no front-matter strip, no `[^id]` reference-footnote rewrite) than the server
- * importer. Moving it here — and calling it from `markdownToProseMirrorCanonical`
- * — makes every canonical import boundary treat foreign markdown identically.
+ * (`markdownToProseMirror`, this package). It lives here so the server file
+ * importer and the MCP write path (`markdownToProseMirrorCanonical`) treat
+ * foreign markdown identically.
  *
  * The canonical parser is deliberately STRICT: it only understands Docmost's
  * canonical markdown surface (Obsidian-style `> [!type]` callouts, Pandoc/Obsidian
@@ -68,7 +63,7 @@ function escapeRegExp(value: string): string {
  * body an inert run of characters — the tokenizer then closes only on our own
  * closing `]`. (A balanced `[link](url)` inside a body still round-trips because
  * the escaped form renders the literal brackets, which is the safe reading for a
- * footnote body; the alternative — brittle balance tracking — risks worse.)
+ * footnote body.)
  */
 function escapeFootnoteBody(body: string): string {
   return body.replace(/[[\]]/g, '\\$&');
@@ -96,9 +91,8 @@ function rewriteRefsOutsideInlineCode(
   // position). On an untrusted import this is a request-thread ReDoS. A real
   // footnote line is short, so for an oversized line we skip the inline-code
   // protection entirely and leave the line UNTOUCHED (rewriting it wholesale
-  // could corrupt a `[^id]` that legitimately lives inside inline code). This is
-  // a conservative bypass: an over-8KB line simply does not get its reference
-  // footnotes inlined — acceptable for a pathological input.
+  // could corrupt a `[^id]` that legitimately lives inside inline code): an
+  // over-8KB line does not get its reference footnotes inlined.
   if (line.length > INLINE_SPLIT_MAX_LINE) return line;
 
   // Alternation: an inline-code span (one or more backticks, then anything up to
@@ -192,9 +186,8 @@ function convertReferenceFootnotes(markdown: string): string {
   // Do NOT rebuild this as an alternation over `[...defs.keys()]`: a giant
   // `(id1|id2|...)` alternation over thousands of ids can blow the V8 regex
   // compiler's stack — a fatal, UNCATCHABLE "RegExpCompiler Allocation failed"
-  // on prefix-chain ids (`a`, `aa`, `aaa`, ...) that kills the whole process
-  // (worse than the earlier per-def thread-hang). A fixed scanner has no
-  // id-dependent compilation cost and cannot blow up.
+  // on prefix-chain ids (`a`, `aa`, `aaa`, ...) that kills the whole process.
+  // A fixed scanner has no id-dependent compilation cost.
   const refRe = /\[\^([^\]]+)\]/g;
   const rewriteSegment = (segment: string): string =>
     segment.replace(refRe, (whole, id: string) => {
@@ -245,11 +238,9 @@ function convertReferenceFootnotes(markdown: string): string {
  *
  * LINE-ANCHORED (the same shape the canonical parser uses in
  * prosemirror-markdown/page-file.ts): the block opens only on `---\n` at the
- * very start and closes only on a `\n---` line. The retired editor-ext
- * `markdownToHtml` front-matter strip (removed in #347) closed on the FIRST
- * `---` ANYWHERE (an unanchored close), so a value
- * containing a triple-dash (e.g. `title: Q1 --- Q2`) truncated the front-matter
- * and leaked the rest into the body. An optional leading BOM is tolerated.
+ * very start and closes only on a `\n---` line, so a value containing a
+ * triple-dash (e.g. `title: Q1 --- Q2`) does not truncate it. An optional
+ * leading BOM is tolerated.
  */
 const YAML_FRONT_MATTER_RE = /^\uFEFF?---\n[\s\S]*?\n---\n?/;
 
@@ -257,10 +248,9 @@ const YAML_FRONT_MATTER_RE = /^\uFEFF?---\n[\s\S]*?\n---\n?/;
  * Normalize a foreign markdown string from a FILE IMPORT into Docmost's canonical
  * markdown surface so the strict canonical parser accepts it losslessly: normalize
  * line endings, strip a leading YAML front-matter block, then rewrite GFM reference
- * footnotes into inline footnotes. Add further fixture-driven foreign-surface cases
- * here as they are found.
+ * footnotes into inline footnotes.
  *
- * FRONT-MATTER STRIP IS IMPORT-ONLY (#493 review): use this ONLY at the server
+ * FRONT-MATTER STRIP IS IMPORT-ONLY: use this ONLY at the server
  * file-import boundary, where a `.md` file really can open with an Obsidian/Hugo
  * YAML header. Do NOT use it on the canonical AGENT-WRITE path — see
  * {@link normalizeAgentMarkdown} for why a full-body agent rewrite must NOT strip
@@ -284,17 +274,11 @@ export function normalizeForeignMarkdown(markdown: string): string {
  * `[^id]` reference footnotes to inline `^[body]` — but DELIBERATELY NOT strip a
  * leading YAML front-matter block.
  *
- * WHY the split (#493 review): the reference-footnote rewrite is the drift the
- * MCP page-write path (`updatePageMarkdown` -> `markdownToProseMirrorCanonical`)
- * needed unified with the server import (an agent may paste GFM footnotes). The
- * front-matter strip, however, is a FILE-import concern: on a full-body agent
- * rewrite a leading `---…---` is (almost) always a `horizontalRule` the
- * serializer emitted plus a later rule/heading — NOT a foreign YAML header — so
- * `YAML_FRONT_MATTER_RE` would match it and SILENTLY DELETE the page's leading
- * content (a page that starts with a horizontal rule and contains a second `---`
- * lost everything up to it). Agent writes must never lose already-stored content,
- * so this variant skips the strip. It IS a no-op on canonical serialized content
- * (which never emits `[^id]:` reference-definition lines).
+ * On a full-body agent rewrite a leading `---…---` is (almost) always a
+ * `horizontalRule` the serializer emitted plus a later rule/heading — NOT a
+ * foreign YAML header — so `YAML_FRONT_MATTER_RE` would match it and silently
+ * delete the page's leading content. It is a no-op on canonical serialized
+ * content (which never emits `[^id]:` reference-definition lines).
  */
 export function normalizeAgentMarkdown(markdown: string): string {
   if (!markdown) return markdown;

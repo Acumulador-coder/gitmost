@@ -7,11 +7,9 @@
  * it is never applied to replacement text or inserted node content, so no
  * formatting is ever lost.
  *
- * CANONICAL HOME (#414/#493): this is the single source of truth for locator
- * markdown-stripping. `node-ops.ts` (which lives here) uses it directly, and the
- * mcp-side `text-normalize.ts` now IMPORTS `stripInlineMarkdown` and the shared
- * `stripWrappersAndLinks` primitive from here (via `@docmost/prosemirror-markdown`)
- * instead of keeping a drifting copy — mcp only adds its own thin
+ * This is the single source of truth for locator markdown-stripping:
+ * `node-ops.ts` uses it directly, and the mcp-side `text-normalize.ts` imports
+ * `stripInlineMarkdown` and `stripWrappersAndLinks` from here, adding only
  * `stripBalancedWrappers`/`closestBlockHint` on top.
  */
 
@@ -143,21 +141,20 @@ export function stripInlineMarkdown(s: string): string {
   return out;
 }
 
-/* ─────────────────────────── Fold canon (#658) ─────────────────────────────
- * The single source of truth (R3) for the character-class tables the matching
+/* ─────────────────────────── Fold canon ────────────────────────────────────
+ * The single source of truth for the character-class tables the matching
  * layer (mcp editPageText / createComment / footnote-normalize-merge) folds
  * before comparing. TWO independent whitespace classifications live here on
  * purpose:
- *   - LEGACY_SPACE — byte-identical to the historic anchor-normalizer whitespace
- *     predicate (JS `\s`, which already includes NBSP and U+FEFF). The
- *     createComment pass-1 anchor + footnote merge are rebuilt from it so their
- *     golden behaviour is preserved exactly.
- *   - FOLD_DELETE / FOLD_SPACE — the new self-healing classes: zero-width / join
+ *   - LEGACY_SPACE — the anchor-normalizer whitespace predicate (JS `\s`, which
+ *     includes NBSP and U+FEFF), used by the createComment pass-1 anchor and the
+ *     footnote merge.
+ *   - FOLD_DELETE / FOLD_SPACE — the self-healing classes: zero-width / join
  *     control chars are DELETED and non-breaking / special spaces are FOLDED to a
  *     single normal space, so a `find` that differs from the document only by
  *     invisible characters still localizes.
- * Note U+FEFF (BOM / ZWNBSP) deliberately moves from LEGACY_SPACE (a space) to
- * FOLD_DELETE (invisible junk) in the fold classes only.
+ * Note U+FEFF (BOM / ZWNBSP) is a space in LEGACY_SPACE but FOLD_DELETE
+ * (invisible junk) in the fold classes.
  */
 
 /** Typographic double-quote variants mapped to ASCII `"`. */

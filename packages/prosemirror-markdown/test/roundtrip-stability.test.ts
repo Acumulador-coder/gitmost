@@ -13,7 +13,7 @@ import {
 // ---------------------------------------------------------------------------
 // Round-trip STABILITY matrix for image + the media family.
 //
-// Guards the "empty-string-vs-absent" churn class (GS-EDIT-REVERT family): a
+// Guards the "empty-string-vs-absent" churn class: a
 // stored node authored WITHOUT a string attr (alt/title/caption/aria-label/...)
 // must not gain a phantom `attr: ""` after `markdownToProseMirror(convert…)`.
 // Each spec sweeps the at-risk string attrs at DEFAULT (absent) and at a real
@@ -132,18 +132,15 @@ describe("round-trip stability matrix (image + media family)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// THIRD STATE: an attr EXPLICITLY stored as a literal "" (GS-EDIT-REVERT: a user
-// typed alt/title/name/... then deleted it, so Tiptap persisted `attr: ""` — a
-// value DISTINCT from "attr was never set"). Unlike the absent case above, this
-// state is NOT first-pass byte-stable: the fix's `"" -> default` coercion is a
+// THIRD STATE: an attr EXPLICITLY stored as a literal "" (a user typed
+// alt/title/name/... then deleted it, so Tiptap persisted `attr: ""` — a value
+// DISTINCT from "attr was never set"). Unlike the absent case above, this state
+// is NOT first-pass byte-stable: the `"" -> default` coercion is a
 // deliberate ONE-TIME normalization on the FIRST sync round-trip, stable
 // thereafter. We therefore assert a DIFFERENT contract — "converges to default
 // on pass 1, then idempotent from pass 2 on" — for every empty-string-class attr
-// across the node family (image/video/pdf/attachment).
-//
-// IMPORTANT for a future sync/QA pass: the pass-1 `"" -> null` diff is the
-// converter canon, not corruption. It appears at most once per affected node and
-// must NOT be flagged as "the converter is losing/corrupting page data".
+// across the node family (image/video/pdf/attachment). The pass-1 `"" -> null`
+// diff appears at most once per affected node and is not data loss.
 // ---------------------------------------------------------------------------
 describe("round-trip third state: explicit empty string converges once, then idempotent", () => {
   for (const spec of SPECS) {

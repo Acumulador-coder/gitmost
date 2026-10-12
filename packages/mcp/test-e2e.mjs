@@ -215,7 +215,7 @@ async function main() {
       check("insertImage: image node present after persist", !!oldAttachmentId, oldAttachmentId);
 
       // replaceImage: must create a NEW attachment with a clean, fetchable URL.
-      // The 200 fetch is the assertion that catches the in-place-overwrite HTTP 500 regression.
+      // The 200 fetch asserts it is not an in-place overwrite (which some Docmost versions answer with HTTP 500).
       const rep = await client.replaceImage(pageId, oldAttachmentId, urlB);
       check("replaceImage: new attachment id differs from old", rep.newAttachmentId !== oldAttachmentId, `${oldAttachmentId} -> ${rep.newAttachmentId}`);
       check("replaceImage: src has no ?v= cache-buster", !rep.src.includes("?v="), rep.src);
@@ -441,7 +441,7 @@ async function main() {
       }
     }
 
-    // 6h. markdown converter fixpoint (#476): pins the converter fixpoint
+    // 6h. markdown converter fixpoint: pins the converter fixpoint
     // THROUGH the live server/collab path, not just the package tests. The
     // unit corpus (docmost-md-roundtrip) proves the converter alone is a
     // fixpoint; this asserts the property survives the real pipeline — export

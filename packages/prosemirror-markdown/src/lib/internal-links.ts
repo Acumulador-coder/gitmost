@@ -24,8 +24,7 @@
  * space-qualified, root-relative page path `/s/<space>/p/<slug>` (with optional
  * trailing slash). Because it is a subset, every link we mark internal here is
  * guaranteed to also satisfy the server regex, hence guaranteed backlink-able and
- * export-rewritable. A unit test pins the exact accept/reject set as the guard
- * against drift.
+ * export-rewritable. A unit test pins the exact accept/reject set.
  *
  * FAIL-TOWARD-EXTERNAL
  * --------------------
@@ -35,10 +34,9 @@
  * soft degradation (a new tab); a false-internal would produce broken SPA
  * navigation, so "external" is the conservative default.
  *
- * Precedent for the target internal shape: the file importer already promotes
- * internal anchors (`apps/server/src/integrations/import/utils/import-formatter.ts`
- * `$a.attr('data-internal','true')`) and editor-ext reads it
- * (`packages/editor-ext/src/lib/link.ts`).
+ * The file importer promotes internal anchors the same way
+ * (`apps/server/src/integrations/import/utils/import-formatter.ts`) and
+ * editor-ext reads the result (`packages/editor-ext/src/lib/link.ts`).
  */
 
 /**

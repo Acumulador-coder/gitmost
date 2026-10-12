@@ -1,6 +1,5 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Comments mixin over the shared client context. See client/context.ts for the
+// shared base.
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import { assertFullUuid } from "./errors.js";
 import {
@@ -94,7 +93,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-// Public method surface of CommentsMixin (issue #450) — a NAMED type so the factory
+// Public method surface of CommentsMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements ICommentsMixin` fails to compile on drift.
@@ -248,7 +247,7 @@ export function CommentsMixin<TBase extends GConstructor<DocmostClientContext>>(
    * (incl. the markdown-strip fallback) has already failed.
    *
    * Checked in BOTH the pass-1 (normalizeForMatch) and fold (foldForMatch) tier
-   * spaces (#658): a selection that straddles a block boundary only once its
+   * spaces: a selection that straddles a block boundary only once its
    * invisible characters are folded is still diagnosed as multi-block, instead
    * of degrading to a "closest block" hint in exactly the target case.
    */
@@ -744,14 +743,12 @@ export function CommentsMixin<TBase extends GConstructor<DocmostClientContext>>(
     //
     // NOTE: do NOT pre-filter by page.updatedAt — creating a comment does not
     // bump it (verified on a live server), so such a filter silently misses
-    // comments on pages that were not otherwise edited. The complete tree walk
-    // already restricts the scope correctly, so no recent-feed allow-list is
-    // needed any more.
+    // comments on pages that were not otherwise edited.
     //
     // The subtree scope (parentPageId given) already INCLUDES the root node
     // itself: /pages/tree seeds getPageAndDescendants with id = parentPageId, so
     // no separate getPageRaw fetch for the parent is needed.
-    // #534: the enumerateSpacePages seed (`/pages/tree`) 404s for a bad or
+    // The enumerateSpacePages seed (`/pages/tree`) 404s for a bad or
     // inaccessible spaceId; wrap it so that 404 becomes an actionable "spaceId
     // not accessible" hint instead of the opaque "Space permissions not found".
     // Only the whole enumeration is wrapped (the only 404 source here) — see the
@@ -762,8 +759,7 @@ export function CommentsMixin<TBase extends GConstructor<DocmostClientContext>>(
       );
 
     // 2. Fetch comments for each page, keep ones created after since. Runs with
-    // bounded concurrency (#490) instead of one-at-a-time — the per-page reads are
-    // independent, so a large working set no longer costs O(N) serial round-trips.
+    // bounded concurrency — the per-page reads are independent.
     // Order is preserved (mapWithConcurrency keeps input order), so the output is
     // deterministic regardless of which fetch finishes first.
     const perPage = await mapWithConcurrency(

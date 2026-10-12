@@ -68,18 +68,16 @@ export interface ICommentNotificationJob {
 }
 
 /**
- * GENERAL_QUEUE payload for the off-critical-path comment inline-mark mirror
- * (#399). The comment DB row is the source of truth and is already updated
- * synchronously (ms); this job flips/removes the inline `comment` mark in the
- * collaborative Y.Doc for connected clients, OFF the HTTP response path, so
- * `POST /api/comments/resolve` no longer waits the whole Y.Doc load + store
- * pipeline (was ~4.5s p95). The mark op is idempotent, so BullMQ retries are
- * safe.
+ * GENERAL_QUEUE payload for the off-critical-path comment inline-mark mirror.
+ * The comment DB row is the source of truth and is updated synchronously; this
+ * job flips/removes the inline `comment` mark in the collaborative Y.Doc for
+ * connected clients, OFF the HTTP response path, so `POST /api/comments/resolve`
+ * does not wait for the Y.Doc load + store pipeline. The mark op is idempotent,
+ * so BullMQ retries are safe.
  *
  * `action`:
- *   - 'resolve' / 'unresolve' → flip the mark's `resolved` attribute (exactly
- *     what the synchronous resolveCommentMark path did);
- *   - 'delete' → strip the anchor mark entirely (ephemeral suggestion #329).
+ *   - 'resolve' / 'unresolve' → flip the mark's `resolved` attribute;
+ *   - 'delete' → strip the anchor mark entirely (ephemeral suggestion).
  * `ts` is the DB-mutation timestamp (ms). The worker's race-guard uses it (with
  * the row's authoritative resolved state) to skip a resolve/unresolve event
  * that a newer, opposite event has already superseded (out-of-order drain).

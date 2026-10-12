@@ -3,11 +3,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { attachMediaPlaceholder } from './media-utils';
 
 /**
- * F3(a): the media placeholder used to be undone ONLY by the success event
- * (`load` / `loadedmetadata`). A 404/403, a deleted attachment, or a
- * `<video preload="metadata">` that never reaches `loadedmetadata` therefore
- * left the node pulsing forever AND permanently non-interactive
- * (`pointer-events: none`) — with no log at all.
+ * The media placeholder must be undone by the failure path too, not only by the
+ * success event (`load` / `loadedmetadata`): a 404/403, a deleted attachment, or
+ * a `<video preload="metadata">` that never reaches `loadedmetadata` would
+ * otherwise leave the node pulsing forever AND non-interactive
+ * (`pointer-events: none`), with no log.
  */
 afterEach(() => {
   vi.restoreAllMocks();

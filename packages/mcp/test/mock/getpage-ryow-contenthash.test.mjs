@@ -1,4 +1,4 @@
-// #647 refinement A — getPage's conversion cache MUST be keyed by the server's
+// getPage's conversion cache MUST be keyed by the server's
 // `contentHash`, NOT `updatedAt`. On the live branch the server serves FRESH
 // content under a debounce-stale `updatedAt`; keying by `updatedAt` would cache
 // the fresh markdown under the old key and the NEXT read would hit that stale

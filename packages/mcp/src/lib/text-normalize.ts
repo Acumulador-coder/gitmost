@@ -2,9 +2,9 @@
  * Locator normalization helpers for mcp. The two PRIMITIVES —
  * `stripInlineMarkdown` (lenient locator normalizer) and `stripWrappersAndLinks`
  * (strict balanced-wrapper/link collapse) — live in the canonical package
- * `@docmost/prosemirror-markdown` (#493 dedup: they used to be forked verbatim
- * here). This module now only re-exports `stripInlineMarkdown` and adds the two
- * mcp-only helpers built on top: `stripBalancedWrappers` and `closestBlockHint`.
+ * `@docmost/prosemirror-markdown`. This module re-exports `stripInlineMarkdown`
+ * and adds the two mcp-only helpers built on top: `stripBalancedWrappers` and
+ * `closestBlockHint`.
  *
  * They are used ONLY as a fallback for LOCATING (after an exact match fails) and
  * for formatting-vs-plain intent detection; never applied to replacement text or

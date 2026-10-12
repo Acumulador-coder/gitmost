@@ -1,4 +1,4 @@
-// Drift guards for the stage-3 drawio tools (issue #425): the three high-level
+// Drift guards for the stage-3 drawio tools: the three high-level
 // tools must be in the shared registry, routed in SERVER_INSTRUCTIONS, expose
 // the right schema fields, and carry an `execute` (they call CLIENT methods, so
 // unlike drawioShapes/drawioGuide they are NOT inlineBothHosts).

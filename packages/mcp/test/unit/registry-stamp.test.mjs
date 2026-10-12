@@ -17,12 +17,12 @@ import { createHash } from "node:crypto";
 import { computeRegistryStamp } from "../../scripts/gen-registry-stamp.mjs";
 import { REGISTRY_STAMP } from "../../build/index.js";
 
-// Guard tests for the build/src-skew stamp (issues #447/#486). The codegen script
+// Guard tests for the build/src-skew stamp. The codegen script
 // exports `computeRegistryStamp(srcDir)` — a sha256 over the WHOLE src/ tree
 // (every src/**/*.ts EXCEPT *.generated.ts), each file folded in as its
 // POSIX-relative path + its normalized content (CRLF->LF, single trailing newline
-// stripped). Hashing the whole tree (not just tool-specs.ts) is #486: an edit to
-// client.ts / a client/* module without a rebuild must ALSO redden. The in-app
+// stripped). The whole tree is hashed (not just tool-specs.ts) so an edit to
+// client.ts / a client/* module without a rebuild also reddens. The in-app
 // loader (apps/server/.../docmost-client.loader.ts) DUPLICATES this enumerate+
 // normalize+sha256 to refuse a stale build. These tests pin the algorithm and
 // assert the built stamp matches the current src.
@@ -62,7 +62,7 @@ test("computeRegistryStamp returns a 64-char lowercase hex sha256", () => {
   }
 });
 
-// #486 CORE: an edit to a NON-tool-specs source file (client.ts) must change the
+// An edit to a NON-tool-specs source file (client.ts) must change the
 // stamp. Under the old single-file (tool-specs.ts only) hash this edit was
 // invisible and a stale build/ served the old client.ts silently.
 test("editing client.ts (not tool-specs.ts) changes the stamp (#486)", () => {

@@ -226,7 +226,7 @@ export function replaceNodeById(
  * Unlike `replaceNodeById` (which substitutes EVERY match), this walks to the
  * FIRST match only and splices `newNodes` in its position, so ordering and the
  * neighbouring blocks are preserved byte-for-byte. It deliberately does NOT
- * touch further duplicates: the caller (#159 semantics) must have already
+ * touch further duplicates: the caller must have already
  * verified the id is unambiguous via a `replaceNodeById` dry pass, so a single
  * splice here is safe and every other block is untouched.
  *
@@ -304,7 +304,7 @@ export function deleteNodeById(
 
 /**
  * Throw a clear, model-actionable error when a node-id write op did NOT match
- * exactly one node (#159). `count === 0` -> "no node found"; `count > 1` ->
+ * exactly one node. `count === 0` -> "no node found"; `count > 1` ->
  * "ambiguous, refused" — Docmost duplicates block ids on copy/paste, so a write
  * by id could clobber/remove EVERY duplicate. The caller skips the write for any
  * `count !== 1` (the transform returns null), so this only REPORTS; nothing was
@@ -457,7 +457,7 @@ function getSchemaNames(): { nodes: Set<string>; marks: Set<string> } {
 /**
  * Depth-first walk of the JSON `content` tree looking for the FIRST node whose
  * SHAPE the Yjs encode path will reject with an opaque
- * `Unknown node type: undefined` (issue #409). Returns `{ path, summary }` for
+ * `Unknown node type: undefined`. Returns `{ path, summary }` for
  * the offending node, or `null` when every node (and every mark) is a known
  * Docmost schema type.
  *
@@ -634,14 +634,12 @@ function findAnchorChain(
 }
 
 // ===========================================================================
-// List seam coalescing (#535)
+// List seam coalescing
 //
 // When a markdown/JSON insert places a list block directly next to an existing
 // sibling list of the SAME node type, the two must become ONE list (items
 // appended/prepended) rather than two adjacent lists — otherwise the serializer
-// correctly emits a `<!-- -->` separator between them (that separator is right
-// for two genuinely-separate lists; the bug is that the extra sibling was ever
-// created). Coalescing is STRICTLY LOCAL to the two seams of the active
+// emits a `<!-- -->` separator between them. Coalescing is STRICTLY LOCAL to the two seams of the active
 // insertion — never a global "collapse all adjacent lists" normalization, which
 // would destroy intentionally-separate lists elsewhere.
 // ===========================================================================
@@ -811,7 +809,7 @@ export function insertNodeRelative(
       if (!Array.isArray(out.content)) out.content = [];
       const at = out.content.length;
       out.content.push(fresh);
-      // Coalesce the left seam with the prior tail block (#535).
+      // Coalesce the left seam with the prior tail block.
       coalesceSeams(out.content, at, out.content.length);
       return { doc: out, inserted: true };
     }
@@ -920,7 +918,7 @@ export function insertNodesRelative(
       const at = out.content.length;
       out.content.push(...fresh);
       // Coalesce the left seam with the prior tail block; the run's right side
-      // has no neighbour at the top level (#535).
+      // has no neighbour at the top level.
       coalesceSeams(out.content, at, out.content.length);
       return { doc: out, inserted: true };
     }

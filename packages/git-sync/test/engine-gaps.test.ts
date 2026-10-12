@@ -7,8 +7,7 @@ import { sanitizeTitle } from '../src/engine/sanitize';
 import { firstDivergence } from './roundtrip-helpers';
 import { serializePageFile, parsePageFile } from '@docmost/prosemirror-markdown';
 
-// Engine-layer coverage gaps flagged by the PR #119 reviewers (test-strategy
-// report, Module 2 `src/engine`). Each block targets a specific under-covered
+// Engine-layer coverage gaps. Each block targets a specific under-covered
 // branch directly. PURE units (no IO) are driven by plain inputs; the push/pull
 // appliers are driven by FAKES that record calls — no real git/fs/network.
 
@@ -236,19 +235,13 @@ describe('firstDivergence (roundtrip-helpers.ts)', () => {
 
 // --- 5. push.ts:applyPushActions — prefetch-move failure isolation ------------
 //
-// The reviewer asked to exercise the per-entry try/catch around the rename/move
-// PREFETCH (push.ts ~L644-672): one move's prefetch should fail in isolation
-// while OTHER actions still apply. IMPORTANT FINDING (documented, not a skip of
-// the invariant): the prefetch helpers (`resolveParentPageIdViaTree`,
-// `metaAtViaTree`) SWALLOW their own IO errors internally (each wraps readFile /
-// showFileAtRef / parseDocmostMarkdown in try/catch and returns null), so an
-// injected `readFile`/`showFileAtRef` throw NEVER propagates into the L644-672
-// catch — that catch is defensive dead code reachable only by a future change to
-// the helpers (the source comment says exactly this). It therefore cannot be hit
-// through the public deps WITHOUT modifying production code (forbidden here).
+// The prefetch helpers (`resolveParentPageIdViaTree`, `metaAtViaTree`) SWALLOW
+// their own IO errors (each wraps readFile / showFileAtRef / parseDocmostMarkdown
+// in try/catch and returns null), so the per-entry catch around the rename/move
+// PREFETCH in applyPushActions is defensive and cannot be reached through the
+// public deps.
 //
-// What IS testable — and is the invariant the reviewer cares about — is the
-// OBSERVABLE isolation: a move whose tree files are unreadable is isolated (it
+// What IS tested is the OBSERVABLE isolation: a move whose tree files are unreadable is isolated (it
 // resolves to a no-op Docmost call, never aborting the batch) while updates,
 // creates and deletes in the SAME batch still apply.
 describe('applyPushActions (push.ts) — move prefetch isolation', () => {

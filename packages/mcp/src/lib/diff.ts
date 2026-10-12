@@ -7,33 +7,26 @@
  * result to text + integrity counts instead of decorations, so a diff can be
  * previewed without a browser.
  *
- * recreateTransform here comes from @docmost/editor-ext (issue #582) — the SAME
+ * recreateTransform here comes from @docmost/editor-ext — the SAME
  * implementation the in-app history diff renders with, so the MCP verify report
  * and the UI can never disagree about what changed. It exposes the usual
  * recreateTransform(fromDoc, toDoc, { complexSteps, wordDiffs, simplifyDiff })
- * signature. (It used to come from a published fork of the same library, whose
- * array diff was quadratic; #581 replaced that with a linear fastCreatePatch in
- * editor-ext and capped the per-node word-diff bomb at its root.)
+ * signature.
  *
  * If recreateTransform / the changeset throws on a pathological document pair,
  * OR the pair is too large to diff cheaply (see the size guard below), we fall
  * back to a coarse block-level text diff so the tool never hard-fails and never
  * pins the event loop.
  *
- * SIZE GUARD (issue #464 — prod CPU-DoS). The diff pipeline is synchronous and
- * super-linear in the size of the pair; a large/heavily-changed doc used to run
- * for seconds-to-hours and starve the whole process (BullMQ, Redis lock
- * renewals, embeddings). It never THROWS — it just never finishes — so the
- * try/catch below cannot save us. Because diffDocs runs on EVERY in-app/MCP
- * content edit's verify report, we PRE-FLIGHT the doc size and route anything
- * above a measured cap straight to the coarse fallback (the same shape the catch
- * produces). Same cap+fallback pattern as the ELK-layout DoS fix (#440 /
- * c917dcc3). The guard STAYS after #581/#582: the algorithm is 1.5-5x faster, so the
- * NODE cap moved up (150 -> 200), but the BYTE cap moved DOWN (12 KiB -> 4 KiB),
- * because the byte-heavy worst case lives OUTSIDE the algorithm #581 fixed (in
- * ChangeSet.addSteps) and 12 KiB was admitting 300-660ms blocks while advertising a
- * ~200ms budget. Net: this SHRINKS the precise-diff envelope. Both caps are measured
- * against inputs the guard actually ADMITS — see below.
+ * SIZE GUARD (CPU-DoS). The diff pipeline is synchronous and super-linear in
+ * the size of the pair; a large/heavily-changed doc can run for seconds or more
+ * and starve the whole process (BullMQ, Redis lock renewals, embeddings). It
+ * never THROWS — it just never finishes — so the try/catch below cannot save
+ * us. Because diffDocs runs on EVERY in-app/MCP content edit's verify report, we
+ * PRE-FLIGHT the doc size and route anything above a measured cap straight to
+ * the coarse fallback (the same shape the catch produces). Same cap+fallback
+ * pattern as the ELK-layout guard. Both caps are measured against inputs the
+ * guard actually ADMITS — see below.
  */
 
 import { Node } from "@tiptap/pm/model";
@@ -58,12 +51,12 @@ export interface DiffIntegrity {
   callouts: [number, number];
   codeBlocks: [number, number];
   /**
-   * Diagram block atoms (#600). Both are atoms whose ENTIRE payload lives in
+   * Diagram block atoms. Both are atoms whose ENTIRE payload lives in
    * attrs (src/attachmentId), so deleting one moves no prose and no marks — the
    * only trace in the text delta is the single leaf placeholder `textBetween`
    * emits for an atom, i.e. a 1-char delta indistinguishable from fixing a typo.
-   * The count is what NAMES the loss (attribution), which is the blind spot
-   * codeBlocks closed for code.
+   * The count is what NAMES the loss (attribution), as the codeBlocks count
+   * does for code.
    *
    * Counted as TWO keys, not one "diagrams" bucket: a bucket would report a
    * drawio replaced by an excalidraw as `1 -> 1` (clean) and omit it from
@@ -73,13 +66,13 @@ export interface DiffIntegrity {
   drawio: [number, number];
   excalidraw: [number, number];
   /**
-   * Block-atom DATA CARRIERS (#619). Same blind zone as the diagram atoms above:
+   * Block-atom DATA CARRIERS. Same blind zone as the diagram atoms above:
    * each is a top-level block whose ENTIRE payload lives in `attrs`
    * (src/attachmentId/sourcePageId/…), so deleting one moves no prose and no
    * marks — the only trace in the text delta is the single leaf placeholder
    * `textBetween` emits for an atom, a 1-char change indistinguishable from a
-   * typo fix. The count is what NAMES the loss (attribution), which is the blind
-   * spot codeBlocks/drawio closed for their kinds.
+   * typo fix. The count is what NAMES the loss (attribution), as the
+   * codeBlocks/drawio counts do for their kinds.
    *
    * Counted as SEPARATE keys, never one "media"/"embeds" bucket: a bucket would
    * report e.g. a video replaced by an audio as `1 -> 1` (clean) and omit it
@@ -135,27 +128,22 @@ function countNodes(doc: any, pred: (node: any) => boolean): number {
   return n;
 }
 
-// --- Issue #464/#465/#582: pre-flight size guard for the precise diff ---------
+// --- Pre-flight size guard for the precise diff -----------------------------
 // Defaults are BENCHMARK-derived (scripts/diff-size-guard-bench.mjs) on the
-// CURRENT pipeline — editor-ext's recreateTransform (complexSteps:false,
+// current pipeline — editor-ext's recreateTransform (complexSteps:false,
 // wordDiffs:true, simplifyDiff:true) + ChangeSet.addSteps + simplifyChanges —
-// with the same goal as #465: keep the WORST ADMITTED case's synchronous block
-// inside the ~200ms budget. "Admitted" is the load-bearing word: a cap may only be
-// justified by inputs the guard actually LETS THROUGH. (#582 originally calibrated
-// the node axis on corner docs of 13-15 KB — above the byte cap, i.e. docs the
-// guard REFUSES — so those numbers justified nothing. The generator now
-// binary-searches the text length so a corner doc lands JUST UNDER the byte cap.)
+// with the goal of keeping the WORST ADMITTED case's synchronous block inside
+// the ~200ms budget. "Admitted" is the load-bearing word: a cap may only be
+// justified by inputs the guard actually LETS THROUGH, so the bench
+// binary-searches the text length so a corner doc lands JUST UNDER the byte cap.
 //
-//   BYTE AXIS — TIGHTENED, 12 KiB -> 4 KiB. This is the axis that actually binds,
-//   and the old cap did NOT hold the budget it advertised. The byte-heavy worst case
-//   is a large text node REWRITTEN wholesale. Its cost is NOT in the diff —
-//   editor-ext's #581 word-diff caps bound that (recreateTransform is a few ms here)
-//   — but in ChangeSet.addSteps, which re-diffs the replaced range internally and
-//   which #581 did NOT touch. Splitting the two stages on one rewritten text node
-//   makes that plain: at 6 KB recreateTransform is 17ms vs addSteps 194ms; at 12 KB
-//   it is 0.7ms vs addSteps 362ms. So the old 12 KiB cap was ADMITTING blocks of
-//   300-660ms all along (seconds before #581) while claiming a ~200ms budget.
-//   Tightening it is a DoS FIX, not a feature regression.
+//   BYTE AXIS — 4 KiB. This is the axis that actually binds. The byte-heavy
+//   worst case is a large text node REWRITTEN wholesale. Its cost is NOT in the
+//   diff — editor-ext's word-diff caps bound that (recreateTransform is a few ms
+//   here) — but in ChangeSet.addSteps, which re-diffs the replaced range
+//   internally. Splitting the two stages on one rewritten text node: at 6 KB
+//   recreateTransform is 17ms vs addSteps 194ms; at 12 KB it is 0.7ms vs
+//   addSteps 362ms.
 //
 //   The adversary picks the TOKEN DENSITY, not just the byte count: addSteps works
 //   token-by-token, so the same bytes made of short unique tokens (base36 counters)
@@ -167,14 +155,14 @@ function countNodes(doc: any, pred: (node: any) => boolean): number {
 //      5 KiB |     —       |  170 ms  |  163 ms  |  136 ms  | refuse
 //      6 KiB |   234 ms    |  202 ms  |  195 ms  |  174 ms  | refuse (over budget)
 //      8 KiB |   345 ms    |  264 ms  |  268 ms  |  250 ms  | refuse
-//     12 KiB |   449 ms    |  435 ms  |  437 ms  |  402 ms  | refuse (the OLD cap)
+//     12 KiB |   449 ms    |  435 ms  |  437 ms  |  402 ms  | refuse
 //   4 KiB is therefore the largest cap under which EVERY admitted shape stays inside
 //   ~200ms. Operators who want precise diffs on byte-heavy docs and accept the block
-//   can opt in: MCP_DIFF_MAX_BYTES=6144 (~200-235ms) or =12288 (~400-660ms, the old
-//   behaviour). The aggregate word-diff shape (many ~2 KB nodes, half edited) is
-//   cheap by comparison (125 KB / 129 nodes -> 96 ms) and is NOT what binds here.
+//   can opt in: MCP_DIFF_MAX_BYTES=6144 (~200-235ms) or =12288 (~400-660ms). The
+//   aggregate word-diff shape (many ~2 KB nodes, half edited) is cheap by
+//   comparison (125 KB / 129 nodes -> 96 ms) and is NOT what binds here.
 //
-//   NODE AXIS — 200 (was 150), and under the default byte cap it is SUBSUMED: it can
+//   NODE AXIS — 200, and under the default byte cap it is SUBSUMED: it can
 //   never trip. Even the cheapest possible node (an empty paragraph, ~21 B of JSON)
 //   only gets ~190 nodes into 4 KiB, and a doc of TEXT blocks (~55 B each) tops out
 //   at ~68 blocks / ~137 nodes — so the byte cap always refuses first. Corner docs
@@ -189,9 +177,7 @@ function countNodes(doc: any, pred: (node: any) => boolean): number {
 //   and 200 is where the budget lands (at a 6 KiB byte budget: 151 nodes -> 78 ms,
 //   201 nodes -> 116 ms; at 12 KiB: 227 nodes -> 185 ms, 251 -> 227 ms). It also
 //   still bounds byte-cheap/node-heavy shapes (deep nesting) if the byte cap is
-//   raised. NOTE the consequence: #582 does NOT enlarge the precise-diff envelope —
-//   it SHRINKS it. The 150->200 node raise admits nothing new for prose, because the
-//   byte cap refuses those docs first.
+//   raised.
 //
 // Either metric over its cap routes to the coarse fallback. Both are env-tunable
 // for operators who accept more CPU in exchange for exact diffs on larger docs.

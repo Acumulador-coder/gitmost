@@ -15,7 +15,7 @@ import {
 } from './db';
 
 /**
- * acceptInvitation atomicity (issue #324, tail of #244).
+ * acceptInvitation atomicity.
  *
  * acceptInvitation() reads the invitation OUTSIDE the transaction, then inside a
  * single tx: inserts the invited user, adds them to the default group, and

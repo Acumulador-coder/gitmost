@@ -5,14 +5,13 @@ import { AiMcpServerRepo } from '@docmost/db/repos/ai-chat/ai-mcp-server.repo';
 import { getTestDb, destroyTestDb, createWorkspace, createUser } from './db';
 
 /**
- * AiMcpServerRepo `tool_allowlist` jsonb round-trip (PR #172 / issue #173 §3).
+ * AiMcpServerRepo `tool_allowlist` jsonb round-trip.
  *
- * The fix under test is a DB round-trip, so a unit test cannot observe it: the
- * write must land as a real jsonb ARRAY (not a double-encoded string scalar),
- * and the read must repair any legacy string-scalar rows. The read-side
- * `parseToolAllowlist` MASKS a write regression (it parses the string back), so
- * without this integration check, reverting `::text::jsonb` to `::jsonb` would
- * keep every unit test green while silently corrupting the column again.
+ * Only a DB round-trip can observe this: the write must land as a real jsonb
+ * ARRAY (not a double-encoded string scalar), and the read must repair any
+ * legacy string-scalar rows. The read-side `parseToolAllowlist` masks a write
+ * regression (it parses the string back), so changing `::text::jsonb` to
+ * `::jsonb` keeps every unit test green and only this check catches it.
  */
 describe('AiMcpServerRepo tool_allowlist jsonb round-trip [integration]', () => {
   let db: Kysely<any>;
@@ -55,10 +54,8 @@ describe('AiMcpServerRepo tool_allowlist jsonb round-trip [integration]', () => 
     expect(Array.isArray(found?.toolAllowlist)).toBe(true);
   });
 
-  // #476 (deliberate behaviour change): an empty allowlist used to be
-  // normalized to SQL NULL, which downstream means "no restriction" — so an
-  // admin's deny-all `[]` silently became allow-all. It must now round-trip as
-  // a real jsonb `[]` (deny-all), distinct from NULL.
+  // An empty allowlist must round-trip as a real jsonb `[]` (deny-all), distinct
+  // from SQL NULL, which downstream means "no restriction".
   it('an empty allowlist round-trips as jsonb [] (deny-all), not null (#476)', async () => {
     const row = await repo.insert({
       workspaceId: ws,
@@ -117,10 +114,8 @@ describe('AiMcpServerRepo tool_allowlist jsonb round-trip [integration]', () => 
     expect(healed?.toolAllowlist).toEqual(['alpha', 'beta']);
   });
 
-  // #476 (deliberate behaviour change, replaces the old FAIL-OPEN pin): a
-  // present-but-corrupt tool_allowlist used to degrade to null ("no
-  // restriction"), silently handing the agent ALL of the server's tools. It
-  // must now FAIL CLOSED to `[]` (deny-all) and log an error.
+  // A present-but-corrupt tool_allowlist must FAIL CLOSED to `[]` (deny-all) and
+  // log an error, not degrade to null ("no restriction", i.e. ALL tools).
   it('FAIL-CLOSED: a present-but-corrupt tool_allowlist reads back as [] (deny-all) + error log (#476)', async () => {
     const errorSpy = jest
       .spyOn(Logger.prototype, 'error')

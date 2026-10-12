@@ -1,4 +1,4 @@
-// ID-based cell operations for `drawioEditCells` (issue #425, stage 3).
+// ID-based cell operations for `drawioEditCells`.
 //
 // Instead of resending the whole XML (whose diff is fragile — draw.io reorders
 // attributes, and a {search,replace} text match breaks on it), the model sends
@@ -13,7 +13,7 @@
 // is any deleted cell. Ids are STABLE across edits so diffs stay meaningful.
 //
 // Operations apply to the parsed DOM of the current model; the caller re-lints
-// and rebuilds the .drawio.svg through the existing #423 pipeline afterwards.
+// and rebuilds the .drawio.svg through the existing lint/preview pipeline.
 
 import { JSDOM } from "jsdom";
 

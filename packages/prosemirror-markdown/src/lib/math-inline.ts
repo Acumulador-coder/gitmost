@@ -1,5 +1,5 @@
 /**
- * Shared inline-math boundary rule (#293 canon #6).
+ * Shared inline-math boundary rule.
  *
  * Pandoc's inline-math rule lives here because it is used in TWO directions that
  * MUST agree byte-for-byte on which `$…$` spans are math:

@@ -14,7 +14,7 @@ import {
 } from './db';
 
 /**
- * Integration coverage for the #184 phase-1 durable agent run: real SQL against
+ * Integration coverage for the durable agent run: real SQL against
  * docmost_test. Proves the core invariant primitives — a run is a first-class
  * lifecycle row, at most one is active per chat, a detached run's progress
  * survives with NO subscriber, an explicit stop settles it as aborted, a

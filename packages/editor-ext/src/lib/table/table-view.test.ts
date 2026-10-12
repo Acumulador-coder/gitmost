@@ -15,21 +15,20 @@ import { TableCell } from './cell';
 import { TableHeader } from './header';
 
 /**
- * Regression guard for the table CPU burn.
+ * Guard for the table CPU burn.
  *
- * The table node had NO node view installed (the `View:` option only ever
- * reached prosemirror-tables' columnResizing plugin, whose nodeViews lose to
- * the direct EditorView prop), so ProseMirror fell back to its default
- * `ignoreMutation`, which returns false for every mutation on a node that has
- * a contentDOM. Every class write on `.tableWrapper` (the header-pin
- * controller) was then read as a foreign DOM change, ProseMirror re-rendered
- * the table, the wrapper died, the controller died, its replacement re-applied
- * the classes — ~150 `view.updateState` calls per second at idle, with header
- * pinning permanently broken as a bonus.
+ * Without a table node view (the `View:` option only reaches prosemirror-tables'
+ * columnResizing plugin, whose nodeViews lose to the direct EditorView prop),
+ * ProseMirror falls back to its default `ignoreMutation`, which returns false
+ * for every mutation on a node that has a contentDOM. Every class write on
+ * `.tableWrapper` (the header-pin controller) is then read as a foreign DOM
+ * change: ProseMirror re-renders the table, the wrapper and its controller die,
+ * the replacement re-applies the classes — ~150 `view.updateState` calls per
+ * second at idle, and header pinning breaks.
  *
- * These tests assert the two halves of the fix: the node view is actually
- * REGISTERED on the extension, and its `ignoreMutation` really does ignore
- * mutations outside `contentDOM`.
+ * These tests assert both halves: the node view is actually REGISTERED on the
+ * extension, and its `ignoreMutation` really does ignore mutations outside
+ * `contentDOM`.
  */
 
 const schema = new Schema({
@@ -246,9 +245,8 @@ describe('CustomTable node view registration', () => {
 
 /**
  * The unit tests above call TableView directly, so they would ALL stay green if
- * the node view stopped owning the table DOM again — which is the exact failure
- * that caused this bug (the `View:` option went to a plugin that was never in
- * the plugin set). These tests therefore drive a REAL Editor and assert on the
+ * the node view stopped owning the table DOM (e.g. the `View:` option going to a
+ * plugin that is not in the plugin set). These tests therefore drive a REAL Editor and assert on the
  * observable property: a class write on the wrapper produces no `updateState`
  * and does not destroy the wrapper, while real content edits still reach the
  * document.
@@ -264,13 +262,10 @@ describe('table node view in a real editor', () => {
   /**
    * `resizable` defaults to FALSE here on purpose: it is the configuration in
    * which columnResizing is definitely absent from the plugin set, so the
-   * CPU-burn tests below observe OUR node view and nothing else. (Historically
-   * pm-tables' columnResizing installed its own fallback table node view, which
-   * also ignores wrapper attribute mutations and would therefore mask the
-   * regression — removing our `addNodeView` still yielded 0 updateState calls.
-   * CustomTable now passes `View: null`, so that fallback no longer exists, but
-   * keeping these tests on the resizing-free path keeps them independent of
-   * that decision.)
+   * CPU-burn tests below observe OUR node view and nothing else: a fallback
+   * node view from columnResizing would also ignore wrapper attribute mutations
+   * and mask a missing `addNodeView`. (CustomTable passes `View: null`; the
+   * resizing-free path keeps these tests independent of that.)
    */
   function makeEditor({
     resizable = false,
@@ -338,12 +333,6 @@ describe('table node view in a real editor', () => {
     expect(wrapper.classList.contains('tableHeaderPinned')).toBe(true);
   });
 
-  // NOTE — the former 'owns the table DOM even when columnResizing contributes
-  // its own view' test lived here. It rested on a premise that is no longer
-  // true (CustomTable passes `View: null`, so columnResizing never offers a
-  // node view at all) and duplicated the `editable=true` case of the
-  // parametrised ownership test in the 'column resizing' block below.
-
   it('still lets real content edits inside the table reach the document', () => {
     const { editor, element } = makeEditor();
     const view: any = editor.view;
@@ -404,15 +393,14 @@ describe('table node view in a real editor', () => {
   });
 
   /**
-   * Regression guard for "table column resizing stopped working".
+   * Column resizing in the body editor.
    *
    * Upstream gates columnResizing on `resizable && editor.isEditable` inside
    * `addProseMirrorPlugins()`, which runs ONCE at construction. The body editor
-   * is constructed with a constant `editable: false` (page-editor.tsx, Ф7) and
-   * only becomes editable later via `setEditable`, which does not rebuild
-   * plugins — so the plugin was never installed and no column could ever be
-   * dragged. A unit test of the option cannot catch this: the whole bug is
-   * "the plugin is not in the plugin set", which only a real Editor shows.
+   * is constructed with a constant `editable: false` (page-editor.tsx) and only
+   * becomes editable later via `setEditable`, which does not rebuild plugins —
+   * so with that gate the plugin is never installed. Only a real Editor shows
+   * whether the plugin is in the plugin set.
    */
   describe('column resizing', () => {
     const hasColumnResizing = (editor: Editor) =>
@@ -631,7 +619,7 @@ describe('table node view in a real editor', () => {
      * prosemirror-tables' live preview writes `style.width` straight into the
      * colgroup owned by OUR TableView (which otherwise writes `min-width`), and
      * the commit re-renders that colgroup through `TableView.update()`. Pins
-     * both the user-facing result and the af06bab6 ownership invariant UNDER
+     * both the user-facing result and the TableView ownership invariant UNDER
      * drag load, which is the only runtime force that perturbs table geometry.
      */
     it('commits a column width on a real drag and keeps TableView owning the DOM', () => {
@@ -675,13 +663,11 @@ describe('table node view in a real editor', () => {
     });
 
     /**
-     * Z1: a column going from "has width" back to "no width" must actually lose
+     * A column going from "has width" back to "no width" must actually lose
      * its `width`. `getColStyleDeclaration` writes EITHER `width` or
      * `min-width`, so without clearing the opposite property the stale `width`
      * survives undo while the <table> recomputes — a visibly inconsistent
-     * table. Unreachable before this branch (colwidth never changed at runtime
-     * without columnResizing); reachable now via undo, version restore, or a
-     * remote collab edit.
+     * table. Reachable via undo, version restore, or a remote collab edit.
      */
     it('clears a committed column width again on a real undo', () => {
       const { editor, element } = makeEditor({

@@ -159,7 +159,7 @@ export interface PullActions {
 }
 
 /**
- * PURE pull-action planner (R-Pull-2, test-strategy report §5). Takes the live
+ * PURE pull-action planner. Takes the live
  * tree nodes + completeness + existing tracked files and returns the full set of
  * decisions with NO IO:
  *

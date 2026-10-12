@@ -5,16 +5,16 @@ import fc from 'fast-check';
 import { canonicalizeContent, docsCanonicallyEqual } from 'docmost-client';
 
 // ---------------------------------------------------------------------------
-// Gaps NOT covered by canonicalize.test.ts (test-strategy report §2 diff):
+// Cases NOT covered by canonicalize.test.ts:
 //   - the *.align family (drawio/excalidraw/video/embed AND image, whose
-//     align default is unified to "center" per #293 canon #4): a "center"
-//     default is dropped, a non-default value is kept;
+//     align default is "center"): a "center" default is dropped, a
+//     non-default value is kept;
 //   - comment.resolved: TRUE is PRESERVED (only resolved:false is normalized);
 //   - link.target / link.rel NON-default values are kept;
 //   - property: canonicalizeContent is a fixpoint, docsCanonicallyEqual is
 //     reflexive and symmetric.
-// The base file already covers id-stripping, null-drop, link/comment/orderedList
-// default-drop, key-order insensitivity, and a real-diff negative — not re-added.
+// The base file covers id-stripping, null-drop, link/comment/orderedList
+// default-drop, key-order insensitivity, and a real-diff negative.
 // ---------------------------------------------------------------------------
 
 describe('canonicalizeContent — *.align default family', () => {
@@ -47,8 +47,8 @@ describe('canonicalizeContent — *.align default family', () => {
       attrs: { id: 'i-1', src: '/a.png', align: 'left' },
     });
     expect(kept.attrs).toEqual({ src: '/a.png', align: 'left' });
-    // #293 canon #4 unified the image align default to "center" (matching
-    // editor-ext), so a center image now DROPS align exactly like the diagram/
+    // The image align default is "center" (matching
+    // editor-ext), so a center image DROPS align exactly like the diagram/
     // media family — bare `![](src)` images stay canonically clean.
     const center = canonicalizeContent({
       type: 'image',

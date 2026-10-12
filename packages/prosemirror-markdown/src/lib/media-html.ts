@@ -1,12 +1,11 @@
 /**
- * Shared schema-HTML builders for the media/discriminator family (#293 canon
- * #8).
+ * Shared schema-HTML builders for the media/discriminator family.
  *
- * Canon #8 gives ten node types (youtube/video/audio/drawio/excalidraw —
+ * Ten node types (youtube/video/audio/drawio/excalidraw —
  * image-form; pdf/attachment/embed — link-form; pageEmbed/transclusionReference
  * — standalone) a readable markdown TOP-LEVEL form (`![](src)`/`[text](src)`/a
- * bare comment) plus a discriminator `<!--name {…}-->` comment. But TWO other
- * paths still need the RAW SCHEMA-HTML form of each node:
+ * bare comment) plus a discriminator `<!--name {…}-->` comment. TWO other
+ * paths need the RAW SCHEMA-HTML form of each node:
  *
  *   1. The serializer's raw-HTML/columns path (`blockToHtml`): a comment node is
  *      dropped by the DOM parse stage that reads a raw-HTML block back, so inside

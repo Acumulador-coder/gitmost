@@ -11,10 +11,10 @@ import { copy } from "./copy";
 import { fastCreatePatch } from "./fastCreatePatch";
 
 // ---------------------------------------------------------------------------
-// Word-diff bomb guard (issue #581). `addReplaceTextSteps` runs an O(words²)
+// Word-diff bomb guard. `addReplaceTextSteps` runs an O(words²)
 // diffWordsWithSpace/diffChars over the FULL node text; a single huge text node
-// (e.g. a pasted document into one paragraph) froze the UI on its own. These caps
-// bound that cost. Starting values chosen from the #581 benchmark; tune there.
+// (e.g. a pasted document into one paragraph) can freeze the UI on its own. These
+// caps bound that cost; values chosen by benchmark (perf.bench.ts).
 // ---------------------------------------------------------------------------
 
 /**
@@ -247,8 +247,8 @@ export class RecreateTransform {
   }
 
   /**
-   * Build the char/word diff for a text replacement, guarding the word-diff bomb
-   * (issue #581). The result feeds the EXISTING step-building loop unchanged; a
+   * Build the char/word diff for a text replacement, guarding the word-diff bomb.
+   * The result feeds the step-building loop; a
    * "whole-text replace" is expressed in the same {removed}/{added} shape the loop
    * already understands (removed run, then added run → one replaceWith).
    */

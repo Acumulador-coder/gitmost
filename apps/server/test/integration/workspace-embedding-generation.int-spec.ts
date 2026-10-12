@@ -3,7 +3,7 @@ import { WorkspaceRepo } from '@docmost/db/repos/workspace/workspace.repo';
 import { getTestDb, destroyTestDb, createWorkspace } from './db';
 
 /**
- * #599 (review F4) — the ATOMIC POINTER FLIP, against a REAL Postgres.
+ * The ATOMIC POINTER FLIP, against a REAL Postgres.
  *
  * `WorkspaceRepo.setEmbeddingGeneration` is the crown of the fingerprint lifecycle:
  * ONE `UPDATE workspaces SET settings = ...` whose jsonb expression must
@@ -14,15 +14,13 @@ import { getTestDb, destroyTestDb, createWorkspace } from './db';
  *   (b) preserve every sibling namespace, both under `settings.ai` (provider /
  *       search / chat / mcp) and at the top level of `settings`; and
  *   (c) SELF-HEAL a `settings.ai` or `settings.ai.embedding` that is not an object
- *       (the D6 `jsonb_typeof = 'object'` CASE): `'"x"'::jsonb || '{...}'::jsonb`
+ *       (the `jsonb_typeof = 'object'` CASE): `'"x"'::jsonb || '{...}'::jsonb`
  *       raises `cannot concatenate a non-object jsonb`, which would make every flip
  *       of that workspace fail FOREVER.
  *
- * None of that was covered by a test: the unit spec mocks `setEmbeddingGeneration`
- * wholesale and the lifecycle spec mocks the whole EmbeddingGenerationService, so a
- * regression that dropped the CASE, clobbered a sibling or split the write into two
- * statements would have passed green. It is raw SQL — only a real database can
- * check it, so this runs against one.
+ * The unit spec mocks `setEmbeddingGeneration` wholesale and the lifecycle spec
+ * mocks the whole EmbeddingGenerationService; this is raw SQL, so only a real
+ * database can check it.
  */
 describe('WorkspaceRepo.setEmbeddingGeneration — the atomic flip [integration]', () => {
   let db: Kysely<any>;
@@ -120,7 +118,7 @@ describe('WorkspaceRepo.setEmbeddingGeneration — the atomic flip [integration]
   });
 
   /**
-   * D6 — the jsonb_typeof CASE. `COALESCE` only guards a NULL; a SCALAR `ai` makes
+   * The jsonb_typeof CASE. `COALESCE` only guards a NULL; a SCALAR `ai` makes
    * the `||` merge raise `cannot concatenate a non-object jsonb`, and every flip of
    * that workspace fails forever (the workspace can never leave its swap window).
    *

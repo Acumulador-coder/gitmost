@@ -1,10 +1,10 @@
-// #502: the two layered markdown extensions (`$…$` math, schemeless fuzzy
+// The two layered markdown extensions (`$…$` math, schemeless fuzzy
 // autolink) are decided PER CALLER of the shared write importer, not hardcoded in
 // the wrapper — because the callers need OPPOSITE behavior:
 //   - AGENT-authored plain markdown (updatePageMarkdown, patch_node/insert_node)
 //     -> extensions OFF: a `$…$` config span stays literal, a bare `www.host` is
 //     not autolinked, an explicit `https://…` still links.
-//   - FULL-FILE round-trip import (import_page_markdown, #328 lossless) ->
+//   - FULL-FILE round-trip import (import_page_markdown, lossless) ->
 //     DEFAULTS (extensions ON): an exported math node's `$x^2$` re-imports AS a
 //     math node, so the export→import pair is NOT broken.
 // This unit file pins the importer contract at each of those semantics. The

@@ -21,7 +21,7 @@
  * opener whose closing `-->` sits at the very end of the file. Any earlier
  * literal occurrence is left in the body untouched.
  *
- * NOTE on comments: in this version the comment THREAD records are preserved in
+ * NOTE on comments: the comment THREAD records are preserved in
  * the file but are NOT pushed back to the server on import — only the inline
  * comment marks (anchors) embedded in the body are restored. Managing comment
  * records stays with the comment tools/UI.

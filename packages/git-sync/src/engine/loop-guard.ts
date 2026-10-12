@@ -5,10 +5,8 @@
  * signals — the body HASH of what we pushed (this module) and the `updatedAt`
  * returned by the write — recorded per page at push time.
  *
- * This module owns the PURE, deterministic body-hash. The CONSUMPTION on the
- * pull side (comparing an incoming page's body hash against the last pushed hash
- * to decide "this is our own write, ignore it") is a future increment — here we
- * only PRODUCE the hash and the per-page push record (see `src/push.ts`).
+ * This module owns only the PURE, deterministic body-hash (exported from the
+ * package index); the engine does not consume it on the pull side.
  */
 import { createHash } from "node:crypto";
 

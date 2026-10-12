@@ -231,7 +231,7 @@ function commonSuffixLen(a: string, b: string, cap: number): number {
  * left-to-right pass instead of a regex because the regex is O(n^2) on a long
  * run of unmatched `[` (each `[` restarts the `[^\]]*` scan) — an agent-supplied
  * `replace` of `"[".repeat(100000)` would synchronously block the MCP server's
- * event loop for seconds (#657 review). A four-phase state machine can't
+ * event loop for seconds. A four-phase state machine can't
  * backtrack, so it is O(n) on every input.
  */
 function hasMarkdownLinkPattern(s: string): boolean {
@@ -281,10 +281,10 @@ interface Splice {
 /**
  * Apply a set of pre-computed, disjoint splices to one block's flattened slot
  * array (sorted by changedStart). Mark inheritance over each changed region is
- * the historic uniform-region / nearest-text-neighbour logic (#658 keeps it: the
- * per-tier diff only changes WHICH slots are the changed region, not how the
- * inserted text inherits marks). The caller guarantees changed regions are
- * atom-free (valid match ranges).
+ * the uniform-region / nearest-text-neighbour logic (the per-tier diff only
+ * changes WHICH slots are the changed region, not how the inserted text
+ * inherits marks). The caller guarantees changed regions are atom-free (valid
+ * match ranges).
  */
 function applySplices(
   chars: CharSlot[],
@@ -384,7 +384,7 @@ function hasFoldSensitiveInvisible(s: string): boolean {
  * run's tail behind, see the endSlot computation) plus its fold index. `overlapping`
  * resumes one folded char past a valid match (for the replaceAll merge scan);
  * otherwise it resumes past the whole match (non-overlapping). A candidate whose
- * slot range touches an atom slot is skipped (range validity by slots, #658).
+ * slot range touches an atom slot is skipped (range validity by slots).
  */
 function findValidFoldMatches(
   chars: CharSlot[],
@@ -867,7 +867,7 @@ export function applyTextEdits(
     // AND `find` itself contains literal marker-pairs. That strict conjunction
     // proves the LITERAL markers — not merely the text — are present, so a
     // cleanup edit (`**bold**` -> `bold`) applies as ordinary text. A bare
-    // exact-match exception would revive the original bug for single markers
+    // exact-match exception would let single markers through
     // (`find:"жирный", replace:"*жирный*"` exact-matches, single `*` undetected).
     const literalException =
       normalized === false && containsLiteralMarkerPairs(edit.find);

@@ -1,4 +1,4 @@
-// Unit tests for the drawio-xml module (issue #423): the linter (a positive
+// Unit tests for the drawio-xml module: the linter (a positive
 // baseline + a negative case per rule, each asserting rule + cellId), the
 // decode chain (plain nested XML AND draw.io's compressed <diagram> via pako),
 // encode/round-trip byte-stability, hash stability, style parsing and the
@@ -244,7 +244,7 @@ test("prepareModel: returns bbox, cellCount, hash and lints", () => {
   assert.equal(p.hash, mxHash(normalizeXml(VALID_MODEL)));
 });
 
-// --- comment auto-strip (issue #505) ---------------------------------------
+// --- comment auto-strip -----------------------------------------------------
 
 // The model organically inserts `<!-- ... -->` into diagram XML. prepareModel
 // (the shared path for drawioCreate/drawioUpdate/drawioEditCells) strips them
@@ -476,7 +476,7 @@ test("encode/build: a title with < > \" & round-trips without corrupting the SVG
   assert.match(file, /name="A &lt; B &gt; C &quot; D &amp; E">/);
 });
 
-// --- #507: content= is entity-encoded XML, never base64 --------------------
+// --- content= is entity-encoded XML, never base64 -------------------------
 
 // A model whose cell values carry Cyrillic, ё and an em dash — exactly the
 // characters draw.io's Latin-1 atob mangles when content= is base64.
@@ -541,7 +541,7 @@ test("#507 negative: non-ASCII in a cell value AND in the title round-trip clean
   assert.equal(unescapeAttr(nameMatch[1]), title);
 });
 
-// --- #507 F1: literal tab/newline/CR in an attribute value survive the
+// --- Literal tab/newline/CR in an attribute value survive the
 // content= round-trip. The whole mxfile XML lives in one content="..." attr;
 // XML attribute-value normalization collapses a LITERAL tab/newline/CR to a
 // single space on DOM read, so the escape must emit numeric char-refs instead.
@@ -585,7 +585,7 @@ test("#507 F1: regex fallback decodes tab/newline/CR char-refs (agrees with DOM 
   assert.equal(decodeDrawioSvg(svg), CTRL_MODEL);
 });
 
-// --- embedded browser raster (#629) ----------------------------------------
+// --- embedded browser raster ----------------------------------------
 //
 // Shared contract: the browser embeds a real PNG of the diagram into the root
 // SVG attribute data-raster="data:image/png;base64,<b64>". The extractor must
@@ -648,7 +648,7 @@ test("#629 extractDrawioRaster: oversized attribute -> null without decoding it"
 test("#629 extractDrawioRaster: an oversized value whose bytes WOULD be a valid PNG is rejected by the length cap ALONE (memory guard is non-vacuous)", () => {
   // The "A".repeat(...) case above decodes to 0x00-bytes, which the PNG-signature
   // check would ALSO reject — so disabling the length cap leaves it null and the
-  // guard goes untested (the reviewer's mutation: 0 failures). Here the oversized
+  // guard goes untested. Here the oversized
   // bytes START WITH the PNG signature, so ONLY the pre-decode length cap can
   // reject them. Disabling `base64.length > MAX_RASTER_BASE64_LENGTH` makes this
   // decode to a valid PNG Buffer and the assertion turns RED — pinning the guard.

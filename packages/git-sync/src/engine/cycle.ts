@@ -61,8 +61,7 @@ export interface RunCycleDeps {
    * the cycle with a `CycleAbortedError` instead of writing blind after a
    * possible lock loss: no ref moves before `main`'s compare-and-swap, and the
    * next cycle re-applies the same changes, which is idempotent. A COARSE
-   * best-effort guard; a fully fenced cross-process single-writer still needs
-   * the fencing-token redesign (follow-up).
+   * best-effort guard, not a fenced cross-process single-writer.
    */
   signal?: AbortSignal;
 }

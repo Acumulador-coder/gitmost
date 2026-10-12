@@ -9,22 +9,19 @@ import { convertProseMirrorToMarkdown } from "../src/lib/markdown-converter.js";
 import { markdownToProseMirror } from "../src/lib/markdown-to-prosemirror.js";
 
 /**
- * SERIALIZER-CONTRACT GUARD (#293 canon #inventory, bug 3).
+ * SERIALIZER-CONTRACT GUARD.
  *
  * The markdown serializer (`convertProseMirrorToMarkdown`) dispatches on
  * `node.type` in a big `switch`. Any node type that reaches the `default` arm
  * is NOT serialized as itself — it silently collapses to its children's text
- * (or, for an ATOM node with no children, to the empty string). The canon
- * inventory flagged exactly this class: had the editor schema declared inline
- * atoms like `emoji`/`date`/`toc`, a document could carry one and the converter
- * would drop it with no case and no error (a git-sync data-loss on the data
- * path).
+ * (or, for an ATOM node with no children, to the empty string) — a silent
+ * git-sync data loss.
  *
  * INVARIANT: every node type declared in the package schema
  * (`docmostExtensions`) has an EXPLICIT serializer case. This test derives the
  * node-type set from the live schema and asserts a `case "<name>":` exists in
  * the serializer source for each. A future node added to the schema WITHOUT a
- * serializer case (the emoji/date/toc failure mode) fails here loudly.
+ * serializer case fails here loudly.
  *
  * We scan the SOURCE (not behavioral output) because it is the only formulation
  * that reliably catches a missing case for EVERY node kind: a missing case on a
@@ -101,10 +98,9 @@ describe("serializer contract: inline atoms are not dropped to empty", () => {
 });
 
 /**
- * Raw-HTML path (columns) round-trips for the two marks fixed alongside the
- * contract test. A column renders its inline content via `inlineToHtml`, whose
- * mark switch previously lacked a `spoiler` case (bug 1) and dropped a link's
- * `title` (bug 2).
+ * Raw-HTML path (columns) round-trips for `spoiler` and a link's `title`: a
+ * column renders its inline content via `inlineToHtml`, whose mark switch must
+ * handle both.
  */
 
 // Walk a ProseMirror tree and return the first text run whose marks include the

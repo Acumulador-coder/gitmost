@@ -1,5 +1,5 @@
-// Unit tests for the Mermaid flowchart -> graph parser (issue #425, acceptance
-// #6, OPTIONAL). Verifies a flowchart with a branch + a subgraph parses to a
+// Unit tests for the Mermaid flowchart -> graph parser.
+// Verifies a flowchart with a branch + a subgraph parses to a
 // graph the from_graph pipeline renders as valid, editable drawio, and that a
 // non-flowchart diagram is rejected with a clear error.
 import { test } from "node:test";

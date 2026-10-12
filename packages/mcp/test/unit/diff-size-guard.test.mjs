@@ -1,22 +1,19 @@
-// Issue #464 — prod CPU-DoS pre-flight size guard for diffDocs; recalibrated in
-// #582 for the fixed editor-ext recreateTransform (defaults: 200 nodes / 4 KiB).
+// Pre-flight CPU-DoS size guard for diffDocs (defaults: 200 nodes / 4 KiB).
 //
 // diffDocs synchronously runs recreateTransform + ChangeSet.addSteps; on a large,
 // heavily-changed doc that pins the event loop for seconds WITHOUT throwing. A
 // pre-flight size guard routes any doc over MCP_DIFF_MAX_NODES /
 // MCP_DIFF_MAX_BYTES straight to the coarse fallback (`fellBack:true`).
 //
-// THE BUDGET CLAIM, STATED HONESTLY. The caps exist so that every ADMITTED pair
-// completes inside a ~200ms synchronous block. That is a claim about the docs the
-// guard LETS THROUGH, and #582 found it was false: the previous 12 KiB byte cap
-// admitted byte-heavy pairs costing 300-660ms, because the dominant cost sits in
-// ChangeSet.addSteps (which #581 did not touch), not in recreateTransform. The byte
-// cap is now 4 KiB, the largest value under which the worst admitted shape measured
-// inside the budget. The tests below therefore pin BOTH sides of the cap:
+// THE BUDGET CLAIM. The caps exist so that every ADMITTED pair completes inside
+// a ~200ms synchronous block — a claim about the docs the guard LETS THROUGH. The
+// dominant cost sits in ChangeSet.addSteps, not in recreateTransform, and 4 KiB
+// is the largest byte cap under which the worst admitted shape measured inside
+// the budget. The tests below therefore pin BOTH sides of the cap:
 //   - "the worst ADMISSIBLE byte-heavy pair stays inside the budget" (the dangerous
 //     zone: under the byte cap but expensive), and
 //   - "a pair just over the byte cap falls back" (deterministically, in ~1ms).
-// The budget test is non-vacuous: restoring the old 12 KiB cap makes it FAIL.
+// The budget test is non-vacuous: a 12 KiB byte cap makes it FAIL.
 //
 // These tests assert the BEHAVIOR of the guard (budget + fast + coarse-mode +
 // asymmetry + env knobs). A sibling test (diff-guard-skips-recreate.test.mjs) proves
@@ -53,7 +50,7 @@ function clearEnv() {
 
 // ---------------------------------------------------------------------------
 // Over-threshold (by node count) -> FAST + coarse mode.
-// A fully re-written 600-para doc is the worst case that drove the incident;
+// A fully re-written 600-para doc is the worst case;
 // with the guard it must return in well under the ~200ms budget and in coarse
 // mode. Without the guard this single call takes multiple SECONDS.
 // ---------------------------------------------------------------------------
@@ -84,7 +81,7 @@ test("over-threshold doc falls back to coarse mode and returns fast", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Under-threshold (small) doc -> precise diff, NOT coarse mode. No regression.
+// Under-threshold (small) doc -> precise diff, NOT coarse mode.
 // ---------------------------------------------------------------------------
 test("under-threshold doc uses the precise diff (no fallback note)", () => {
   clearEnv();
@@ -241,17 +238,16 @@ test("integrity counts are still correct on a guard-tripped (coarse) doc", () =>
 });
 
 // ---------------------------------------------------------------------------
-// #582 NODE CAP (150 -> 200) — and the honest statement of what it buys.
+// NODE CAP (200) — and what it buys.
 //
 // Under the DEFAULT byte cap (4 KiB) the node cap is SUBSUMED: it can never trip.
 // A text block costs ~55 B of JSON, so only ~68 of them (~137 nodes) fit under
 // 4 KiB; even the cheapest possible node (an EMPTY paragraph, ~21 B) only gets
-// ~190 nodes in. The byte cap always refuses first. So the 150 -> 200 raise admits
-// nothing new for prose — the node cap survives purely as defence-in-depth, and it
-// becomes live only when an operator RAISES MCP_DIFF_MAX_BYTES.
+// ~190 nodes in. The byte cap always refuses first, so the node cap is
+// defence-in-depth and becomes live only when an operator RAISES
+// MCP_DIFF_MAX_BYTES.
 //
-// These two tests pin exactly that, rather than the (false) claim that bigger pages
-// now get precise diffs:
+// These two tests pin exactly that:
 //   1. subsumption — a 201-node doc cannot be built under the byte cap at all;
 //   2. the node cap still works in the regime where it IS reachable (byte cap
 //      raised), including the 150 -> 200 window.
@@ -351,9 +347,8 @@ test("the node cap still guards when the byte cap is raised (150→200 window)",
 });
 
 // ---------------------------------------------------------------------------
-// #582 THE DANGEROUS ZONE — a doc UNDER the byte cap can still be EXPENSIVE, and
-// that is the only thing the byte cap is for. Nothing used to test it, which is how
-// the 12 KiB cap shipped while admitting 300-660ms blocks under a "~200ms" comment.
+// THE DANGEROUS ZONE — a doc UNDER the byte cap can still be EXPENSIVE, and
+// that is the only thing the byte cap is for.
 //
 // The adversarial worst case is text REWRITTEN wholesale with the SHORTEST possible
 // unique tokens: ChangeSet.addSteps re-diffs the replaced range token by token, so
@@ -361,9 +356,8 @@ test("the node cap still guards when the byte cap is raised (150→200 window)",
 // words). This is agent/user-authored content, so the attacker picks the density.
 //
 // NON-VACUITY: the second pair below sits just over the byte cap, so the guard
-// refuses it in ~1ms. Restore the old cap (MCP_DIFF_MAX_BYTES=12288) and it is
-// ADMITTED instead, costs 400-660ms, and this test FAILS. That is precisely the
-// regression the tightened cap removes.
+// refuses it in ~1ms. With MCP_DIFF_MAX_BYTES=12288 it would be ADMITTED, cost
+// 400-660ms, and this test would FAIL.
 // ---------------------------------------------------------------------------
 
 /** One paragraph packed with the shortest unique tokens, up to `budget` JSON bytes. */

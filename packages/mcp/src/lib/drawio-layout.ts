@@ -1,4 +1,4 @@
-// ELK auto-layout for draw.io models (issue #424, stage 2). The model declares
+// ELK auto-layout for draw.io models. The model declares
 // the LOGICAL structure (which nodes exist, which containers nest which
 // children, which edges connect what) with rough or arbitrary coordinates; this
 // module runs an Eclipse Layout Kernel "layered" pass (via elkjs — a pure-JS
@@ -21,7 +21,7 @@ const DEFAULT_H = 60;
 // DoS bounds for the ELK layout. The mxGraph XML is LLM-supplied (layout:"elk"
 // in drawioCreate/drawioUpdate). elkjs' layout() returns a Promise but runs the
 // crossing-minimisation SYNCHRONOUSLY — it blocks whatever thread it runs on for
-// the whole pass. A ~1MB XML (well under the stage-1 16MB cap) can carry
+// the whole pass. A ~1MB XML (well under the 16MB input cap) can carry
 // thousands of nodes. We (a) cap the graph size before ever calling ELK and
 // (b) run the layout in a WORKER THREAD so the main event loop stays free, with
 // the wall-clock timeout enforced by terminating that worker. On either bound we
@@ -31,10 +31,9 @@ const DEFAULT_H = 60;
 //   - Edges dominate the layered-crossing cost, so allow a bit more headroom
 //     (1000) than nodes but still bound them.
 //   - The timeout is a HARD kill of the worker thread — the only way to interrupt
-//     synchronous JS. The in-process setTimeout race we used before was an
-//     illusion: the timer could never fire while the SAME thread was blocked
-//     inside elkjs, so it "protected" nothing. Now the timer runs on the main
-//     thread while ELK runs on the worker, so it can actually fire and terminate.
+//     synchronous JS. An in-process setTimeout could never fire while the same
+//     thread is blocked inside elkjs; here the timer runs on the main thread
+//     while ELK runs on the worker, so it can fire and terminate.
 const ELK_MAX_NODES = 500;
 const ELK_MAX_EDGES = 1000;
 // Wall-clock ceiling for a single layout pass. Overridable for tests (a tiny

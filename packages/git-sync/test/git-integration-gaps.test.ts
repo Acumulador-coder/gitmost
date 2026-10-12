@@ -11,8 +11,7 @@ import {
   BOT_AUTHOR_EMAIL,
 } from '../src/engine/git';
 
-// Integration coverage gaps for `git.ts` flagged by the PR #119 reviewers
-// (test-strategy report, Module 2). These create REAL temp git repos (mirroring
+// Integration coverage gaps for `git.ts`. These create REAL temp git repos (mirroring
 // test/git.test.ts's setup/teardown) to exercise the actual `git` binary, since
 // the behaviors under test (the `-z` NUL-token alignment, copy detection, and
 // per-invocation committer identity) only manifest against real git.
@@ -149,7 +148,7 @@ describe('VaultGit integration gaps (temp repo)', () => {
 
   // --- 8. diffNameStatus: copy (C) status lines -------------------------------
   //
-  // DOCUMENTED OUTCOME (reported as such): `C` (copy) rows are NOT reachable
+  // `C` (copy) rows are NOT reachable
   // through the engine's actual git invocation. `diffNameStatus` invokes
   // `git diff --name-status -M -z` — `-M` enables rename detection ONLY; copy
   // detection requires `-C`/`--find-copies`, which the engine does NOT pass. So a

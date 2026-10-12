@@ -4,15 +4,15 @@ import { computePinTop, pinOffsetWatcher, EDITOR_PIN_OFFSET_VAR } from './offset
 import { TablePinController } from './controller';
 
 /**
- * Regression tests for the Safari/WebKit 100%-CPU feedback loop in the table
- * header-pin stack. Three coupled observers used to drive each other:
+ * Tests for the Safari/WebKit 100%-CPU feedback loops in the table header-pin
+ * stack, where coupled observers can drive each other:
  *
- *  - `computePinTop()` returned a float, so `pinOffsetWatcher.publish()`'s
- *    dedupe never held and every ResizeObserver tick rewrote a `:root` custom
- *    property (a full-document style recalc in WebKit);
- *  - the fit IntersectionObserver's callback wrote a class onto the wrapper
+ *  - a float from `computePinTop()` defeats `pinOffsetWatcher.publish()`'s
+ *    dedupe, so every ResizeObserver tick rewrites a `:root` custom property (a
+ *    full-document style recalc in WebKit);
+ *  - the fit IntersectionObserver's callback writes a class onto the wrapper
  *    that IS its own root, and WebKit re-evaluates intersection after callback
- *    style writes — so the two modes could chase each other forever.
+ *    style writes — so the two modes can chase each other forever.
  *
  * These assert the observable properties: an integer offset, a single custom
  * property write for jittering-but-equal values, one evaluation per frame no
@@ -384,8 +384,8 @@ describe('pinOffsetWatcher observation scope', () => {
     pinOffsetWatcher.sync();
     flush();
 
-    // This is THE regression guard: observing the body closed the write ->
-    // relayout -> re-measure -> write feedback loop that pegged Safari at 100%.
+    // Observing the body would close the write -> relayout -> re-measure ->
+    // write feedback loop that pegs Safari at 100% CPU.
     expect(observed).not.toContain(document.body);
     expect(observed).not.toContain(document.documentElement);
     expect(observed).toEqual([header, header, toolbar]);
@@ -954,8 +954,7 @@ describe('TablePinController oscillation latch', () => {
     const ctrl = track(new TablePinController(wrapper, table));
 
     // Constructing a controller must NOT start the watcher: nothing consumes
-    // --editor-pin-offset until a header row is pinned (an idle page with four
-    // unpinned tables used to run the watcher anyway — the CPU burn).
+    // --editor-pin-offset until a header row is pinned.
     expect(pinOffsetWatcher.refs).toBe(0);
 
     io.emit(true); // -> native

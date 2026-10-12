@@ -1,4 +1,4 @@
-// Mock-HTTP integration tests for the getPage conversion cache (issue #479).
+// Mock-HTTP integration tests for the getPage conversion cache.
 // A local http.createServer stands in for Docmost (same harness style as
 // get-page-context.test.mjs) so everything is deterministic and offline.
 //

@@ -1,6 +1,5 @@
 /**
- * Hostile inline-text corpus for the generative flat-document round-trip suite
- * (#351, PR 1).
+ * Hostile inline-text corpus for the generative flat-document round-trip suite.
  *
  * These arbitraries are a DIRECT PORT of the "supported space" guardrails that
  * `test/markdown-roundtrip.property.test.ts` proved empirically against the live
@@ -12,9 +11,9 @@
  * The corpus deliberately spans the CommonMark / canon hostile alphabet
  * (`* _ [ ] ( ) { } | < > & # ! ~ = + -`), unicode / emoji / RTL, and the legal
  * mark combinations on runs — INCLUDING the `code` mark combined with other
- * marks, which #515 made legal (the schema's `code` mark now declares
- * `excludes: ""`, and the serializer nests the backtick span inside the other
- * marks, falling back to lossless schema-HTML for a heterogeneous neighbour run).
+ * marks (the schema's `code` mark declares `excludes: ""`; the serializer nests
+ * the backtick span inside the other marks, falling back to lossless schema-HTML
+ * for a heterogeneous neighbour run).
  */
 import fc from 'fast-check';
 import { getSchema } from '@tiptap/core';
@@ -22,7 +21,7 @@ import { getSchema } from '@tiptap/core';
 import { docmostExtensions } from '../../src/lib/docmost-schema.js';
 
 // ---------------------------------------------------------------------------
-// Canonical mark order (#515).
+// Canonical mark order.
 //
 // ProseMirror stores a text node's marks sorted by their SCHEMA RANK, and the
 // importer therefore always hands back e.g. [bold, code] (never [code, bold]).
@@ -71,15 +70,12 @@ export const unicodeWordArb = fc.constantFrom(
  * LETTER), and a CJK extension-B ideograph — each glued to an ASCII letter so the
  * token is still a single markdown-inert "word".
  *
- * These exist to reach a shape the corpus was STRUCTURALLY unable to generate
- * (#515 review F2): an astral code point sitting IMMEDIATELY BEFORE or AFTER a
- * text run, with no space between. safeTextArb below always used to open and
- * close a run with an ASCII word, so an astral character could never land on a
- * run BOUNDARY — and a boundary is exactly where it matters: the serializer's
+ * They put an astral code point IMMEDIATELY BEFORE or AFTER a text run, with no
+ * space between — a run BOUNDARY, which is where it matters: the serializer's
  * emphasis-flanking guard inspects the neighbouring character, and reading it as
- * a UTF-16 unit yields a lone SURROGATE, which used to be misclassified as a word
- * boundary and made the exporter emit markdown whose emphasis `marked` then
- * refuses to open (a byte-STABLE mark loss the round-trip property cannot see).
+ * a UTF-16 unit yields a lone SURROGATE; misclassifying that as a word boundary
+ * would emit markdown whose emphasis `marked` refuses to open (a byte-STABLE
+ * mark loss the round-trip property cannot see).
  *
  * `astralHeadArb` puts the astral char FIRST (it becomes the character right
  * after the preceding run), `astralTailArb` puts it LAST (right before the
@@ -111,12 +107,12 @@ const makeSafeTextArb = (
 
 /**
  * A "safe special" text string: a space-joined sequence of tokens that always
- * BEGINS and ENDS with an alphanumeric word (or, since #515, a word carrying an
- * ASTRAL code point on that very edge — see astralHeadArb/astralTailArb), with
+ * BEGINS and ENDS with an alphanumeric word (or a word carrying an ASTRAL code
+ * point on that very edge — see astralHeadArb/astralTailArb), with
  * any isolated special chars (or unicode words) confined to the MIDDLE, each
  * space-flanked by words.
  *
- * Both boundary guarantees matter (verbatim from the sibling test):
+ * Both boundary guarantees matter:
  *   * Leading word: the line never opens with a block/inline trigger
  *     (">", "*", "-", "#", "1." ...).
  *   * Trailing word: adjacent text runs CONCATENATE with no separator, so a run
@@ -125,7 +121,7 @@ const makeSafeTextArb = (
  *     space-flanked even after concatenation.
  * An astral-bearing edge token preserves BOTH (an astral letter/emoji is not a
  * markdown trigger and cannot combine with a neighbouring run's characters into
- * one), while exposing the flanking boundary the corpus previously hid.
+ * one), while exposing the flanking boundary.
  */
 export const safeTextArb: fc.Arbitrary<string> = makeSafeTextArb(
   fc.oneof({ weight: 5, arbitrary: wordArb }, { weight: 1, arbitrary: astralHeadArb }),
@@ -167,7 +163,7 @@ export const urlArb: fc.Arbitrary<string> = fc
 /**
  * A text run with an OPTIONAL single non-code formatting mark (bold/italic/
  * strike/underline/superscript/subscript/spoiler), a `code` mark ALONE or
- * COMBINED with another mark (#515 — `code` declares `excludes: ""` now, so the
+ * COMBINED with another mark (`code` declares `excludes: ""`, so the
  * combination is legal and byte-stable: the serializer nests the backtick span
  * inside the other marks, and a heterogeneous run of neighbours takes the
  * lossless schema-HTML fallback), or a link, or an inline comment anchor. Marks
@@ -176,7 +172,7 @@ export const urlArb: fc.Arbitrary<string> = fc
  * The mark set here is broadened past the sibling test's {bold,italic,strike}
  * to also cover underline / superscript / subscript / spoiler / textStyle /
  * highlight, so the marks-on-text generator exercises every mark the schema
- * declares — now INCLUDING the `code`+other combinations (#515).
+ * declares, INCLUDING the `code`+other combinations.
  *
  * Multi-mark runs are emitted in the schema's CANONICAL mark order (see
  * `canonicalMarks`): ProseMirror stores a node's marks sorted by schema rank, so
@@ -213,9 +209,8 @@ export const markedTextRunArb: fc.Arbitrary<any> = fc.oneof(
   // Sole code mark (backtick span). safeTextArb is backtick-free, so the span
   // content cannot contain an inner backtick.
   safeTextArb.map((t) => ({ type: 'text', text: t, marks: [{ type: 'code' }] })),
-  // #515: `code` COMBINED with another attribute-free mark (bold/italic/strike/
-  // underline/superscript/subscript/spoiler) or a color-less highlight — the
-  // combination the schema used to forbid via `excludes: "_"`.
+  // `code` COMBINED with another attribute-free mark (bold/italic/strike/
+  // underline/superscript/subscript/spoiler) or a color-less highlight.
   fc
     .tuple(
       safeTextArb,
@@ -235,7 +230,7 @@ export const markedTextRunArb: fc.Arbitrary<any> = fc.oneof(
       text: t,
       marks: canonicalMarks([{ type: 'code' }, { type: m }]),
     })),
-  // #515: `code` + link (the code span becomes the link text: [`x`](href)).
+  // `code` + link (the code span becomes the link text: [`x`](href)).
   fc
     .tuple(phraseArb, urlArb)
     .map(([t, href]) => ({
@@ -243,7 +238,7 @@ export const markedTextRunArb: fc.Arbitrary<any> = fc.oneof(
       text: t,
       marks: canonicalMarks([{ type: 'code' }, { type: 'link', attrs: { href } }]),
     })),
-  // #515: `code` + a COLORED highlight (an HTML-form mark, so the code span is
+  // `code` + a COLORED highlight (an HTML-form mark, so the code span is
   // wrapped in <mark style=…> rather than `==…==`).
   fc
     .tuple(safeTextArb, fc.constantFrom('#ffcc00', 'yellow'))
@@ -298,13 +293,13 @@ export const mentionArb: fc.Arbitrary<any> = fc
 export const hardBreakArb: fc.Arbitrary<any> = fc.constant({ type: 'hardBreak' });
 
 /**
- * #515 review F2: a code+EMPHASIS run (the only shape that can glue a bare `**` /
+ * A code+EMPHASIS run (the only shape that can glue a bare `**` /
  * `*` / `~~` / `==` delimiter to a backtick) sandwiched with NO separator between
  * a run ENDING in an astral code point and a run STARTING with one.
  *
- * This adjacency is what the serializer's flanking guard has to judge, and it is
- * the shape that used to lose the emphasis mark BYTE-STABLY (so P2, the byte
- * fixpoint, is blind to it; only P1's semantic comparison sees the missing mark).
+ * This adjacency is what the serializer's flanking guard has to judge; a mark
+ * lost here is lost BYTE-STABLY (so P2, the byte fixpoint, is blind to it; only
+ * P1's semantic comparison sees the missing mark).
  * Letting safeTextArb merely *permit* astral edges is not enough — the three
  * pieces have to LAND next to each other, which random assembly of a paragraph's
  * runs does only once in some hundreds of documents. Emitting them as one segment
@@ -332,7 +327,7 @@ export const astralAdjacentCodeEmphasisArb: fc.Arbitrary<any[]> = fc
  * between two plain alphanumeric words — a three-node segment, like
  * `astralAdjacentCodeEmphasisArb` above.
  *
- * WHY A NEW ARBITRARY: `safeTextArb` is documented to ALWAYS begin and end with
+ * WHY A SEPARATE ARBITRARY: `safeTextArb` is documented to ALWAYS begin and end with
  * an alphanumeric word, and that guarantee is load-bearing (a leading `>`/`*`/
  * `-`/`#` would be a block trigger; a run ending in a bare `<` next to a run
  * starting with a letter would form a fake HTML tag). It is NOT weakened here —
@@ -342,22 +337,21 @@ export const astralAdjacentCodeEmphasisArb: fc.Arbitrary<any[]> = fc
  *
  * WHAT IT CATCHES: `**Модель: **WB` is not a closing delimiter run (CommonMark:
  * a closer preceded by whitespace is not right-flanking), so the emphasis mark
- * was SILENTLY DROPPED and two literal asterisks were stamped into the text —
- * byte-stably, so P2 stayed green and only P1 can see it. The `==` highlight was
- * worse: `== x==` broke BOTH properties.
+ * would be dropped and two literal asterisks stamped into the text —
+ * byte-stably, so only P1 can see it. For the `==` highlight, `== x==` breaks
+ * BOTH properties.
  *
  * The run is SANDWICHED between two words so the expelled space lands in a
  * NEIGHBOURING run, where it survives the round trip verbatim — this arbitrary
  * therefore isolates the MARK question. The far more dangerous LINE-START
  * position (where an expelled space shifts a block trigger right and silently
- * turns the paragraph into a list / heading / quote / code block) is NOT a
- * "pre-existing, unrelated" stripping quirk — it is its own data-loss class, and
- * it has its own generator: `blockInitialIndentedMarkArb` below.
+ * turns the paragraph into a list / heading / quote / code block) is its own
+ * data-loss class with its own generator: `blockInitialIndentedMarkArb` below.
  *
  * `code` and `link` are deliberately NOT in the mark set: a backtick span has
  * its own CommonMark rule (a space on BOTH sides is stripped by the parser) and
  * a link's `[ x ](url)` brackets are self-delimiting — neither is
- * flanking-sensitive, and the code-span rule is a separate, pre-existing shape.
+ * flanking-sensitive, and the code-span rule is a separate shape.
  */
 export const edgeSpaceMarkedRunArb: fc.Arbitrary<any[]> = fc
   .tuple(
@@ -404,8 +398,8 @@ export const edgeSpaceMarkedRunArb: fc.Arbitrary<any[]> = fc
  * the dangerous one. The serializer expels that whitespace outside the `**`, so
  * it lands at COLUMN 0 of the line; CommonMark allows 1..3 spaces of indent
  * before ANY block trigger and turns 4 spaces / a tab into an INDENTED CODE
- * BLOCK. Before the escaper learned to strip leading indentation, this shape
- * silently changed the BLOCK TYPE:
+ * BLOCK. Without the escaper's leading-indentation strip this shape would
+ * silently change the BLOCK TYPE:
  *   p("first") + p(bold("    x"), "y")  ->  "first\n\n    **x**y"  ->  codeBlock
  *   p(bold(" "), "- item")              ->  "- item"               ->  bulletList
  * Both defects are visible to P1 (the block type changes) AND to P2 (the second
@@ -413,8 +407,8 @@ export const edgeSpaceMarkedRunArb: fc.Arbitrary<any[]> = fc
  * arbitrary makes the whole class reachable rather than seed-dependent.
  *
  * Only bare-delimiter marks: an HTML-form mark keeps the space INSIDE its tag,
- * where it is dropped by the HTML parser instead — a different, pre-existing
- * shape that has nothing to do with block triggers.
+ * where it is dropped by the HTML parser instead — a different shape that has
+ * nothing to do with block triggers.
  */
 export const blockInitialIndentedMarkArb: fc.Arbitrary<any[]> = fc
   .tuple(
@@ -446,8 +440,8 @@ const sameMarks = (a: any[] | undefined, b: any[] | undefined): boolean =>
 
 /**
  * Canonicalize a generated inline-content array the way ProseMirror stores it,
- * then trim the markdown-fragile edges. (Ported verbatim from
- * markdown-roundtrip.property.test.ts "normalizeInline":)
+ * then trim the markdown-fragile edges (same as "normalizeInline" in
+ * markdown-roundtrip.property.test.ts):
  *   1) MERGE adjacent text runs with IDENTICAL marks (the editor coalesces
  *      them; split same-mark runs export to ambiguous "**a****b**").
  *   2) Collapse CONSECUTIVE hard breaks (two render a blank line marked eats).
@@ -474,12 +468,10 @@ export function normalizeInline(nodes: any[]): any[] {
 }
 
 /**
- * #493 commit 1: a plain-text run whose text DELIBERATELY OPENS with a markdown
- * BLOCK trigger — ATX heading `#`, bullet `-`/`*`/`+`, blockquote `>`, ordered
- * `N.`/`N)`, or a table `|` — followed by safe text. Pre-#493 the corpus
- * self-censored these away (safeTextArb's leading-word guarantee); the paragraph
- * serializer now BLOCK-ESCAPES a leading trigger, so the generative round-trip
- * itself proves the data-loss class is closed rather than avoiding it.
+ * A plain-text run whose text DELIBERATELY OPENS with a markdown BLOCK trigger —
+ * ATX heading `#`, bullet `-`/`*`/`+`, blockquote `>`, ordered `N.`/`N)`, or a
+ * table `|` — followed by safe text. The paragraph serializer BLOCK-ESCAPES a
+ * leading trigger, and this run exercises that end-to-end.
  *
  * DELIBERATELY excludes the code-fence (backtick) trigger — the backtick is a
  * code-span delimiter that re-pairs globally (see specialCharArb's note), an
@@ -507,7 +499,7 @@ export const hardBreakThenTriggerArb: fc.Arbitrary<any[]> = fc
   .map(([hb, trigger]) => [hb, trigger]);
 
 /**
- * #493 (setext data-loss): a WHOLE-LINE setext underline landing on a
+ * A WHOLE-LINE setext underline landing on a
  * continuation line. A setext underline is a line of ONLY `-` (any count) or
  * ONLY `=` (any count) that FOLLOWS a paragraph line; on re-parse it turns the
  * preceding line into a heading and DROPS its own text. The block-escape must
@@ -517,7 +509,7 @@ export const hardBreakThenTriggerArb: fc.Arbitrary<any[]> = fc
  * the closing hardBreak is not dropped by normalizeInline). Covers underlines
  * of every length: `--` (the two-dash case the bullet/thematic arms miss), a
  * lone `=`, `==`/`====` (neutralized by the inline `==` escape), and `---`/
- * `----` (regression for the existing thematic case).
+ * `----` (the thematic case).
  */
 export const hardBreakThenSetextArb: fc.Arbitrary<any[]> = fc
   .tuple(
@@ -538,8 +530,7 @@ export const hardBreakThenSetextArb: fc.Arbitrary<any[]> = fc
  * (blockTriggerLeadRunArb) so the paragraph OPENS with a markdown block trigger;
  * and a `hardBreak + trigger` segment can appear anywhere in the rest, so a
  * trigger also lands at the start of a CONTINUATION line — both exercising the
- * serializer's per-line block-escape end-to-end. (Ported, with the #493
- * leading-trigger + post-hardBreak dimensions added.)
+ * serializer's per-line block-escape end-to-end.
  */
 export const inlineContentArb: fc.Arbitrary<any[]> = fc
   .tuple(

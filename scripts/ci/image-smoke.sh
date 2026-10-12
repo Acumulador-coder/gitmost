@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# Boot-smoke for the exact Docker image that is about to be pushed (issue #476).
+# Boot-smoke for the exact Docker image that is about to be pushed.
 #
-# Retrospective class "local logic is right, the integration property was never
-# checked" (#353/#452/#361): every other CI job builds and tests code from the
-# working tree, but the IMAGE watchtower pulls was never actually started
-# anywhere before this gate. This script boots the built image against the
-# publish job's postgres/redis services and asserts four integration
-# properties end-to-end:
+# Every other CI job tests code from the working tree; this script boots the
+# built image (the one watchtower pulls) against the publish job's
+# postgres/redis services and asserts four integration properties end-to-end:
 #   S1  the app boots and /api/health answers (startup migrator + boot)
 #   S2  the first-run workspace setup endpoint works (API + DB writes)
 #   S3  the client dist is inside the image and served
-#   S4  hashed assets are served immutable (#452) with the precompressed
+#   S4  hashed assets are served immutable with the precompressed
 #       brotli copy shipped in the image
 set -euo pipefail
 
@@ -73,7 +70,7 @@ echo "OK S4: hashed asset served with immutable cache-control"
 grep -qi '^content-encoding:.*br' <<<"$HDRS" || fail "S4: $ASSET not served brotli-precompressed (content-encoding: br missing)"
 echo "OK S4: hashed asset served with the precompressed brotli copy"
 
-# S5: the ~700KB Lucide icon catalog (#696) must stay in its OWN lazy chunk and
+# S5: the ~700KB Lucide icon catalog must stay in its OWN lazy chunk and
 # NEVER be pulled into an eager bundle referenced by index.html — a single static
 # import anywhere in the eager graph would drag it into the entry bundle. We
 # assert a sentinel string that exists ONLY in the catalog data ("firefighter",

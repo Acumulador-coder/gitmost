@@ -9,8 +9,8 @@ jest.mock('@sindresorhus/slugify', () => ({
 
 import { ImportService } from './import.service';
 
-// #502 BLOCKER 1: the server markdown import path (`/pages/import`) now accepts an
-// optional `disableMarkdownExtensions` flag threaded into `processMarkdown`.
+// The server markdown import path (`/pages/import`) accepts an optional
+// `disableMarkdownExtensions` flag threaded into `processMarkdown`.
 //   - MCP agent `createPage` sends it TRUE  -> extensions OFF (a `$…$` config span
 //     stays literal, a schemeless `www.host` is not autolinked).
 //   - a HUMAN file upload omits it (default FALSE) -> extensions ON, so a real

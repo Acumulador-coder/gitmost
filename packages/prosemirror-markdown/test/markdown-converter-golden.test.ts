@@ -3,9 +3,8 @@ import { describe, expect, it } from 'vitest';
 // collaboration.ts and mutates global DOM at import time).
 import { convertProseMirrorToMarkdown } from '../src/lib/markdown-converter.js';
 
-// markdown-converter.ts is the weakest pure module (report §2). These golden
-// tests close the gaps the base markdown-converter.test.ts leaves open:
-// columns/column wrapper, embed/audio/pdf (used to emit nothing), drawio/
+// Golden tests for what markdown-converter.test.ts does not cover:
+// columns/column wrapper, embed/audio/pdf, drawio/
 // excalidraw data-align presence rule, the remaining inline-mark matrix,
 // paragraph.textAlign, subpages + unknown-in-container fallback, escaping
 // idempotence, table-cell pipe/newline sanitization, and empty/single-column
@@ -103,7 +102,7 @@ describe('inline-mark matrix (underline/sub/sup/highlight±color/textStyle/comme
       [[{ type: 'underline' }], '<u>m</u>'],
       [[{ type: 'subscript' }], '<sub>m</sub>'],
       [[{ type: 'superscript' }], '<sup>m</sup>'],
-      // #293 canon #7: a no-color highlight now serializes as `==m==` (Obsidian
+      // A no-color highlight serializes as `==m==` (Obsidian
       // syntax); only a COLORED highlight keeps the `<mark style=…>` HTML form.
       [[{ type: 'highlight' }], '==m=='],
       [
@@ -139,7 +138,7 @@ describe('inline-mark matrix (underline/sub/sup/highlight±color/textStyle/comme
 
 describe('paragraph.textAlign -> attached <!--attrs--> comment (#293 #9)', () => {
   it('non-default alignment emits a trailing <!--attrs {"textAlign":…}--> comment', () => {
-    // #293 canon #9: a non-default paragraph alignment now round-trips as an
+    // A non-default paragraph alignment round-trips as an
     // ATTACHED HTML comment at the END of the block line instead of the old
     // `<p style="text-align:center">` wrapper (which the maintainer had to patch
     // A14->A15->A16). The importer's applyAttachedComments step reads the comment
@@ -184,7 +183,7 @@ describe('subpages token + unknown-in-container fallback', () => {
 
 describe('escaping idempotence (SPEC §11 phantom-diff guard)', () => {
   it('escapeAttr escapes ONLY & and " in an attribute context, and is idempotent', () => {
-    // #293 canon #6: a TOP-LEVEL mathBlock now serializes as a `$$` fence, so
+    // A TOP-LEVEL mathBlock serializes as a `$$` fence, so
     // to exercise the schema-HTML `text` attr (which DOES go through escapeAttr)
     // we wrap the math in a COLUMN — the raw-HTML path keeps the `<div>` form.
     const col = (child: any) => ({
@@ -263,7 +262,7 @@ describe('empty / single-column tables', () => {
 // ---------------------------------------------------------------------------
 describe('media / attachment / container full-attribute golden coverage', () => {
   it('video: emits all optional attrs in the comment JSON in stable order (align center omitted)', () => {
-    // #293 canon #8 image-form: src in the target, all OTHER non-default attrs in
+    // Image-form: src in the target, all OTHER non-default attrs in
     // the comment JSON (stable order alt/attachmentId/width/height/size/
     // aspectRatio; align="center" is the default and is omitted).
     expect(
@@ -391,7 +390,7 @@ describe('media / attachment / container full-attribute golden coverage', () => 
         },
       ],
     });
-    // blockToHtml orderedList path emits <ol start="3"> (FIXED #351), and
+    // blockToHtml orderedList path emits <ol start="3">, and
     // inlineToHtml maps bold->strong, code->code.
     expect(out).toContain(
       '<ol start="3"><li><p><strong>a</strong></p></li><li><p><code>b</code></p></li></ol>',

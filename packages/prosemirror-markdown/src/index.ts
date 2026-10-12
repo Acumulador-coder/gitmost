@@ -8,10 +8,9 @@
  * the converter surface.
  */
 // DEFAULT (Node) entry: install the jsdom-backed HTML parser as a side effect
-// BEFORE re-exporting the converter surface, so every Node consumer (server,
-// mcp, git-sync) keeps the identical jsdom import behaviour with no code change.
-// The browser entry (`./browser.js`) installs the native-`DOMParser` parser
-// instead and never loads this module, so jsdom stays out of client bundles.
+// BEFORE re-exporting the converter surface. The browser entry (`./browser.js`)
+// installs the native-`DOMParser` parser instead and never loads this module, so
+// jsdom stays out of client bundles.
 import "./lib/dom-parser.node.js";
 
 export * from "./lib/index.js";

@@ -5,19 +5,16 @@ import { convertProseMirrorToMarkdown } from "../src/lib/markdown-converter.js";
 import { markdownToProseMirror } from "../src/lib/markdown-to-prosemirror.js";
 
 /**
- * #493 commit 1 — the paragraph serializer's leading-block-escape closes the
- * data-loss class where a paragraph whose text opens at column 0 with a markdown
- * block trigger (`#`/`-`/`*`/`+`/`>`, an ordered `N.`/`N)`, a code fence, a
- * table `|`, a callout opener, or a thematic break) silently re-parsed into a
- * heading / list / quote / code block / table / horizontalRule on the git-sync
- * doc -> markdown -> doc cycle. The thematic-break case was the worst: a
- * horizontalRule carries NO text, so the line's text was lost entirely.
+ * The paragraph serializer's leading-block-escape: a paragraph whose text opens
+ * at column 0 with a markdown block trigger (`#`/`-`/`*`/`+`/`>`, an ordered
+ * `N.`/`N)`, a code fence, a table `|`, a callout opener, or a thematic break)
+ * must not re-parse into a heading / list / quote / code block / table /
+ * horizontalRule on the doc -> markdown -> doc cycle (a horizontalRule carries
+ * NO text, so that case would lose the text entirely).
  *
- * This is the deterministic PIN, one assertion per trigger, exercised through
- * the REAL converter round-trip (not a mock): each bare trigger line now
- * round-trips as a SINGLE paragraph with its text byte-preserved — proving the
- * class is closed WITHOUT the former client-side ZWSP workaround (removed) or
- * the generative suite's leading-word self-censorship (removed).
+ * Deterministic pin, one assertion per trigger, through the REAL converter
+ * round-trip: each bare trigger line round-trips as a SINGLE paragraph with its
+ * text byte-preserved.
  */
 
 const doc = (...nodes: any[]) => ({ type: "doc", content: nodes });

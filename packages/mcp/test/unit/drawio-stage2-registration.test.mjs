@@ -1,4 +1,4 @@
-// Drift guards for the stage-2 drawio tools (issue #424): the new tools must be
+// Drift guards for the stage-2 drawio tools: the tools must be
 // wired into the shared registry AND routed in SERVER_INSTRUCTIONS, and the
 // hard-rules block must be injected into the create/update descriptions. These
 // complement the generic server-instructions.test.mjs / tool-specs.test.mjs.

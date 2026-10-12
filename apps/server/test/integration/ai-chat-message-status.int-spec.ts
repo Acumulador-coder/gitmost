@@ -269,12 +269,10 @@ describe('AiChatMessageRepo.update + sweepStreaming [integration]', () => {
   });
 
   it('default findAllByChat returns the FULL transcript past 50 rows — no recent-tail window (#202)', async () => {
-    // PR #202 swapped the model-history rebuild in AiChatService.handle from
-    // findRecent(chatId, ws, 50) to findAllByChat(chatId, ws) WITHOUT a limit
-    // arg. This pins the behavioral guarantee that switch relies on: a chat
-    // longer than the old 50-msg window comes back in FULL (oldest -> newest),
-    // so no early turns are silently dropped from what the model sees. The old
-    // 50-cap would have returned only the last 50 of these 60 rows.
+    // The model-history rebuild in AiChatService.handle uses
+    // findAllByChat(chatId, ws) WITHOUT a limit arg: a long chat (60 rows here)
+    // comes back in FULL (oldest -> newest), so no early turns are silently
+    // dropped from what the model sees.
     const longChat = (
       await createChat(db, { workspaceId, creatorId: userId })
     ).id;

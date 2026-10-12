@@ -1,8 +1,7 @@
 // Footnote-marker extraction in the integrity diff (diff.ts `footnoteMarkers`,
 // surfaced via diffDocs(...).integrity.footnoteMarkers).
-//
-// The existing diff.test.mjs covers the basic legacy `[N]` body markers and the
-// default notes-heading split. These add the cases it does not:
+// diff.test.mjs covers the basic legacy `[N]` body markers and the default
+// notes-heading split; these add:
 //  - real footnoteReference nodes take precedence over legacy `[N]` text,
 //  - the notesHeading parameter is configurable,
 //  - footnoteReference nodes are numbered 1..n by reading position.

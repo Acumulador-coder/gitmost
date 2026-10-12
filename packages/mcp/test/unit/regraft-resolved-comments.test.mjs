@@ -8,8 +8,8 @@ import {
 } from "../../build/lib/comment-anchor.js";
 
 /**
- * #493 commit 6 — resolved-comment anchors must survive a full markdown rewrite
- * (updatePageMarkdown). An agent read HIDES resolved anchors (#337), so its
+ * Resolved-comment anchors must survive a full markdown rewrite
+ * (updatePageMarkdown). An agent read HIDES resolved anchors, so its
  * markdown drops them; a naive full write would erase the resolved comment marks.
  * `regraftResolvedComments(oldDoc, newDoc)` re-anchors them onto the matching
  * text. These exercise the real anchoring (no mock).
@@ -106,10 +106,9 @@ test("applyCommentMarkInDoc preserves an arbitrary mark's attrs (resolved:true)"
   assert.equal(commentMarkOf(marked[0]).attrs.resolved, true);
 });
 
-// #555 (review of #514) — two DISTINCT resolved anchors on IDENTICAL text used to
-// both land on occurrence #0, and the second comment mark was silently dropped at
-// toYdoc (a span can carry only one comment mark). The regraft now spreads them
-// over DISTINCT occurrences, and surfaces an unavoidable drop through the sink.
+// Two DISTINCT resolved anchors on IDENTICAL text must land on DISTINCT
+// occurrences (a span can carry only one comment mark, so sharing one would drop
+// the second at toYdoc); an unavoidable drop is surfaced through the sink.
 
 test("two distinct resolved comments on identical text land on distinct occurrences (both survive)", () => {
   // OLD: the word "note" is commented twice, in two different places.
@@ -177,7 +176,7 @@ test("regraft without a sink stays silent (backwards compatible)", () => {
   assert.equal(textNodes(out).filter((n) => commentMarkOf(n)).length, 0);
 });
 
-// #603 guard interaction — the free-occurrence search must never place a comment
+// Guard interaction — the free-occurrence search must never place a comment
 // mark inside a mark-forbidding block (a codeBlock), where a materialized comment
 // mark would make y-prosemirror delete the whole node (permanent data loss).
 const codeBlock = (t) => ({ type: "codeBlock", content: [text(t)] });

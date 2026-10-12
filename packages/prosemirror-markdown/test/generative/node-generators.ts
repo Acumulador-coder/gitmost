@@ -1,13 +1,13 @@
 /**
- * Flat single-node document generators (#351, PR 1).
+ * Flat single-node document generators.
  *
  * For every schema node type that can stand alone, a fast-check arbitrary
  * producing `{ type:'doc', content:[ <the target node> ] }` with generated attrs
  * (via nodeAttrsArb) and the minimal REQUIRED immediate children the schema
  * demands (a heading's inline text, a listItem's one paragraph, a table's
  * minimal rows, details' summary+content, a callout's one paragraph). Kept
- * FLAT: a single target node, no deep nesting — nested structural generation is
- * PR 2.
+ * FLAT: a single target node, no deep nesting — nested structural generation
+ * lives in doc-generator.ts.
  *
  * The `mode` threads through to the attribute arbitraries:
  *   - 'p1'   : the round-trip-safe attribute space (P1 semantic round-trip).
@@ -45,17 +45,10 @@ const para = (content: any[]) => ({ type: 'paragraph', content });
  * survives into the text: `` `a [ 0` `` comes back as `` `a \[ 0` ``. The run's
  * TEXT silently mutates on every git-sync cycle.
  *
- * This is a PRE-EXISTING converter bug, NOT a #515 regression: the serializer on
- * `gitea/develop` produces the identical corrupted `` `a \[ 0` `` for a doc whose
- * code run carries NO other mark (a shape that has always been expressible). It
- * is pinned as a documented `it.fails` repro in markdown-converter-gaps.test.ts
- * ("footnote body + inline code + bracket"); fixing it means changing the
- * footnote canon (the bracket cannot simply be left raw — that breaks the
- * footnote parse outright), which is out of scope here.
- *
- * The corpus previously dodged this only by luck of the seed. Excluding the shape
- * keeps the generative properties honest about the SUPPORTED space instead of
- * flaking on a known, separately-tracked gap.
+ * This known converter gap is pinned as an `it.fails` repro in
+ * markdown-converter-gaps.test.ts ("footnote body + inline code + bracket");
+ * fixing it means changing the footnote canon. Excluding the shape keeps the
+ * generative properties on the SUPPORTED space.
  */
 const withoutBracketsInCodeRuns = (n: any): any => {
   if (n?.type !== 'text') return n;
@@ -290,7 +283,7 @@ const gen = {
           { weight: 5, arbitrary: markedTextRunArb.map((n) => [n]) },
           // A marked run carrying a LEADING/TRAILING SPACE, sandwiched between
           // two plain words (see edgeSpaceMarkedRunArb): the shape safeTextArb
-          // structurally cannot produce, and the one that used to lose its mark
+          // structurally cannot produce, and the one that can lose its mark
           // byte-stably (`**Модель: **WB-MGE`).
           { weight: 2, arbitrary: edgeSpaceMarkedRunArb },
         ),
@@ -323,11 +316,10 @@ export function buildGenerators(mode: AttrMode): NamedGen[] {
  * with a one-line reason. Excluding a type means it is kept OUT of the round-
  * trip generators — it does NOT weaken any property.
  *
- * NOTE (empirical): the candidates the issue flagged for review — pageEmbed,
- * subpages, transclusionSource/Reference, mention, status — were PROBED against
- * the live converter and DO round-trip P1/P2 with placeholder ids, so they are
- * COVERED by real generators rather than allowlisted here. The allowlist below
- * holds only types with no standalone flat generator by construction.
+ * pageEmbed, subpages, transclusionSource/Reference, mention and status DO
+ * round-trip P1/P2 with placeholder ids, so they are COVERED by real generators.
+ * The allowlist below holds only types with no standalone flat generator by
+ * construction.
  */
 export const KNOWN_UNCOVERED: Record<string, string> = {
   // The root node; it is the wrapper every generated doc already is, never a

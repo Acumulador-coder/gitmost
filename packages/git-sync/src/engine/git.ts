@@ -532,7 +532,7 @@ export class VaultGit {
    * Remove STALE git lock files left by an INTERRUPTED git operation (a hard
    * crash / OOM-kill / abrupt container stop leaves `*.lock` files). Git then
    * refuses every later operation on that ref or file, which WEDGES the space's
-   * sync loop (bug D3-N3). We target a fixed list (`ENGINE_LOCKS` unless one is
+   * sync loop. We target a fixed list (`ENGINE_LOCKS` unless one is
    * given, NOT a `*.lock` glob) and remove a lock ONLY when it is provably stale
    * by mtime: a lock older than STALE_LOCK_MIN_AGE_MS cannot have a live holder
    * (a live git op is killed after GIT_EXEC_TIMEOUT_MS). A FRESH lock — e.g. one
@@ -983,8 +983,8 @@ export function vaultGitEnv(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     // Locale-independent output (defense in depth). We never parse localized
-    // prose, but pinning the locale prevents a future regression where some
-    // git message we DO key on is translated by an inherited LC_ALL/LANG.
+    // prose, but pinning the locale keeps any git message we do key on
+    // untranslated regardless of an inherited LC_ALL/LANG.
     LC_ALL: "C",
     LANG: "C",
     // Never page (we already pass --no-pager, but a stray GIT_PAGER could still

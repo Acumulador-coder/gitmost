@@ -5,7 +5,7 @@ import { Transform } from "@tiptap/pm/transform";
 import { recreateTransform } from "./recreateTransform";
 
 /**
- * Issue #581 — randomized round-trip PROPERTY test for the linear array diff
+ * Randomized round-trip PROPERTY test for the linear array diff
  * (`fastCreatePatch` / `fastArrayDiff`). The fixed cases in
  * `recreateTransform.test.ts` cover the branches a human thought to write; the
  * failure modes of a custom Myers diff with five interacting heuristics live in

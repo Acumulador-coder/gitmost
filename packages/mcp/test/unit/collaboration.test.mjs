@@ -165,12 +165,12 @@ test("markdownToProseMirror (comment path) PRESERVES an inline footnote (no cano
 });
 
 // ---------------------------------------------------------------------------
-// Schema-forbidden marks (the July code-block data-loss incident). The docmost
-// codeBlock spec declares `marks: ""`, but PMNode.fromJSON does NOT validate
-// marks against parent specs, so a doc carrying a comment mark inside a
-// codeBlock used to slide through applyDocToFragment into the live Y.Doc —
-// where the next schema-full client materialization made y-prosemirror DELETE
-// the whole codeBlock. Both write paths must now reject such a doc loudly.
+// Schema-forbidden marks. The docmost codeBlock spec declares `marks: ""`, but
+// PMNode.fromJSON does NOT validate marks against parent specs, so a doc
+// carrying a comment mark inside a codeBlock could slide through
+// applyDocToFragment into the live Y.Doc — where the next schema-full client
+// materialization makes y-prosemirror DELETE the whole codeBlock. Both write
+// paths must reject such a doc loudly.
 // ---------------------------------------------------------------------------
 
 /** A paragraph + codeBlock doc; `poison` adds a comment mark inside the code. */

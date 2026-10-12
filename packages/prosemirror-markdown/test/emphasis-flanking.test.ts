@@ -6,8 +6,8 @@ import { markdownToProseMirror } from '../src/lib/markdown-to-prosemirror.js';
 // A bare `**` / `*` / `~~` delimiter between an edge PUNCTUATION character of
 // the marked text and a neighbouring WORD character never opens/closes in
 // CommonMark (`**x:**A`, `A**(x)**`, `**x🙂**A` — an emoji is a symbol, i.e.
-// punctuation). The mark used to be silently lost and the delimiters stamped
-// into the text; the serializer now takes the lossless HTML form for that node.
+// punctuation), so the mark would be lost and the delimiters stamped into the
+// text; the serializer takes the lossless HTML form for that node.
 // ---------------------------------------------------------------------------
 
 const doc = (...inline: any[]) => ({

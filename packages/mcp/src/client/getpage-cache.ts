@@ -1,10 +1,9 @@
-// Content-addressed LRU cache for the PM->Markdown conversion in getPage
-// (issue #479). getPage is the dominant agent op (812 calls / 2h, p95 840ms);
-// the bulk of its cost is convertProseMirrorToMarkdown — a full ProseMirror-tree
-// walk over the page content (hundreds of KB of JSON on large pages) run on
-// EVERY read. Since agents re-read far more than they write (812 reads vs 28
-// writes in the sample), most conversions re-produce the SAME markdown from
-// UNCHANGED content. This cache skips the recomputation on a hit.
+// Content-addressed LRU cache for the PM->Markdown conversion in getPage.
+// getPage is the dominant agent op, and most of its cost is
+// convertProseMirrorToMarkdown — a full ProseMirror-tree walk over the page
+// content (hundreds of KB of JSON on large pages). Agents re-read far more than
+// they write, so most conversions re-produce the same markdown from unchanged
+// content; this cache skips the recomputation on a hit.
 //
 // KEY = (pageId, updatedAt, optionsHash):
 //   - pageId: the page's CANONICAL UUID (resultData.id), not the agent-supplied
@@ -14,7 +13,7 @@
 //     key -> automatic, precise invalidation (no stale markdown is ever served).
 //   - optionsHash: a stable hash of the conversion options. getPage passes
 //     `{dropResolvedCommentAnchors:true}` while exportPageMarkdown passes the
-//     defaults (#328) — DIFFERENT output for the same content, so the options
+//     defaults — DIFFERENT output for the same content, so the options
 //     MUST be part of the key or a hit would serve the wrong variant.
 //
 // BOUNDS: evict the LEAST-recently-used entry when EITHER the entry count OR the

@@ -12,7 +12,7 @@ import {
 } from './db';
 
 /**
- * Real-DB coverage for CommentRepo.deleteCommentIfChildless (#338 F4/F6).
+ * Real-DB coverage for CommentRepo.deleteCommentIfChildless.
  *
  * This is the guard that keeps an ephemeral-suggestion hard-delete from
  * cascade-destroying a reply (`comments.parent_comment_id` is ON DELETE CASCADE).

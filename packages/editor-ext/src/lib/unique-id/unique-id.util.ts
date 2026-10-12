@@ -75,8 +75,7 @@ export function addUniqueIdsToDoc(
   // Edit the document to (a) add ids where missing and (b) dedupe collisions. A
   // duplicate id otherwise lets copy/paste/import produce two nodes sharing an
   // id, so MCP addressed edits (patch_node / delete_node "before/after id") hit
-  // the wrong node or both (#206 editor-pm-7). This previously only filled
-  // missing ids and never deduplicated existing ones.
+  // the wrong node or both.
   const seenIds = new Set<string>();
   let tr = EditorState.create({
     doc: contentNode,

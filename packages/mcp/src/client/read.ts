@@ -1,6 +1,4 @@
-// Auto-split from client.ts (issue #450). Mixin over the shared client context.
-// Bodies are VERBATIM from the original DocmostClient; only the enclosing class
-// changed to a mixin factory. See client/context.ts for the shared base.
+// Mixin over the shared client context (see client/context.ts).
 import type { GConstructor, DocmostClientContext } from "./context.js";
 import axios, { AxiosInstance } from "axios";
 import {
@@ -61,7 +59,7 @@ import {
   mergeFootnoteDefinitions,
 } from "../lib/transforms.js";
 
-// Public method surface of ReadMixin (issue #450) — a NAMED type so the factory
+// Public method surface of ReadMixin — a NAMED type so the factory
 // return type is expressible in the emitted .d.ts (the anonymous mixin class
 // carries the base's protected shared state, which would otherwise trip TS4094).
 // Derived from the class below; `implements IReadMixin` fails to compile on drift.
@@ -159,7 +157,7 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
 
   /**
    * Fetch a space's page hierarchy (or one subtree) as a nested tree in a SINGLE
-   * request — the #443 `getTree` tool. Shares its whole code path with
+   * request — the `getTree` tool. Shares its whole code path with
    * `listPages(tree:true)`: `enumerateSpacePages` issues one `POST /pages/tree`
    * (with the cursor-BFS only as a fallback for stock upstream servers that lack
    * the endpoint), then `buildPageTree` nests the flat, permission-filtered,
@@ -199,7 +197,7 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
   }
 
   /**
-   * "Where am I / what's around" for a single page — the #443 `getPageContext`
+   * "Where am I / what's around" for a single page — the `getPageContext`
    * tool. Metadata only (no page content), using exactly TWO server requests:
    *
    *   1. `POST /pages/breadcrumbs` — a recursive CTE that walks UP from the page.
@@ -324,14 +322,9 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
    *
    * Primary path (fork server): a SINGLE `POST /pages/tree` returns the whole
    * space (or a subtree) as a flat, permission-filtered list in one request, in
-   * the exact node shape buildPageTree consumes. This replaces the old
-   * per-node BFS, which issued N sidebar requests and — after the server moved
-   * to cursor pagination — silently lost every child past the first sidebar
-   * page (the obsolete `page` param was stripped by ValidationPipe).
-   *
-   * The subtree variant (rootPageId given) INCLUDES the root node itself
-   * (getPageAndDescendants seeds with id = rootPageId), unlike the old BFS
-   * which started from the root's children.
+   * the exact node shape buildPageTree consumes. The subtree variant
+   * (rootPageId given) INCLUDES the root node itself (getPageAndDescendants
+   * seeds with id = rootPageId).
    *
    * Fallback path (stdio mode may target STOCK upstream Docmost, which lacks
    * `/pages/tree`): on a 404/405 it falls back to the cursor-based BFS below,
@@ -428,7 +421,7 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
   /** Raw page info including the ProseMirror JSON content and slugId. */
 
   /**
-   * Overridable seam over convertProseMirrorToMarkdown (issue #479). Production
+   * Overridable seam over convertProseMirrorToMarkdown. Production
    * just delegates; it exists as a method so a unit test can spy on it and
    * assert the conversion is genuinely SKIPPED on a getPage cache HIT (the whole
    * point of the cache) — an ESM named import cannot be intercepted otherwise.
@@ -443,7 +436,7 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
   async getPage(pageId: string, format: "markdown" | "text" = "markdown") {
     await this.ensureAuthenticated();
 
-    // #502 `format:"text"`: a flat, deterministic, machine-diffable rendering
+    // `format:"text"`: a flat, deterministic, machine-diffable rendering
     // (block-per-line, inline marks/comment anchors dropped, non-text nodes ->
     // stable placeholders like `[image]` / `[table RxC]`). The server produces
     // it via its `jsonToText` path (the SAME serializer that feeds search), so
@@ -483,22 +476,19 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
     // round-trip deliberately does NOT pass this flag — resolved anchors there
     // must be preserved.)
     //
-    // Content-addressed conversion cache (issue #479): the PM->Markdown walk is
-    // the dominant cost of this hot read op. Key on the page's canonical UUID +
-    // a VERSION token + a hash of the conversion options. A hit returns the cached
+    // Content-addressed conversion cache: the PM->Markdown walk is the dominant
+    // cost of this hot read op. Key on the page's canonical UUID + a VERSION
+    // token + a hash of the conversion options. A hit returns the cached
     // markdown and skips the walk; a miss converts and stores. The cached value is
     // the conversion output BEFORE the {{SUBPAGES}} substitution below, which uses
     // live subpage data and stays outside the cache — so the final result is
     // byte-identical to the uncached path.
     //
-    // #647 refinement A — the version token is the server's `contentHash` when
-    // present, NOT `updatedAt`. On the live branch the server serves fresh content
-    // under a DEBOUNCE-STALE `updatedAt`, so keying by `updatedAt` would cache the
-    // fresh markdown under the old key and the NEXT read (updatedAt still unmoved)
-    // would hit that entry and serve stale markdown — getPage would not be RYOW.
-    // `contentHash` changes exactly when the content changes, so it is the correct
-    // cache-invalidation key. `updatedAt` remains the fallback for any caller/
-    // server that does not surface a hash (older server, unexpected shape).
+    // The version token is the server's `contentHash` when present, NOT
+    // `updatedAt`: on the live branch the server serves fresh content under a
+    // debounce-stale `updatedAt`, so keying by it would let the next read hit the
+    // old key and serve stale markdown. `updatedAt` is the fallback for a server
+    // that does not surface a hash.
     const convertOptions = { dropResolvedCommentAnchors: true };
     let content = "";
     if (resultData.content) {
@@ -527,7 +517,7 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
         this.onMetricFn?.("mcp_getpage_cache_hits_total", 1);
       } else {
         // Goes through the convertPageMarkdown seam (not the raw import) so a
-        // test can assert the conversion is SKIPPED on a hit (issue #479 F2).
+        // test can assert the conversion is SKIPPED on a hit.
         content = this.convertPageMarkdown(resultData.content, convertOptions);
         if (cacheKey) this.getPageCache.set(cacheKey, content);
         // A non-cacheable page (missing id/updatedAt) is still a genuine
@@ -538,12 +528,9 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
 
     // Always fetch subpages to provide context to the agent.
     //
-    // NOT parallelizable with the page fetch (issue #479 asked to check): the
-    // sidebar-pages endpoint REQUIRES spaceId in its POST body, and spaceId is
-    // only known FROM this page fetch's response (resolvePageId yields the UUID
-    // but never the spaceId). So `Promise.all([pageFetch, subpagesFetch])` would
-    // have to invent a spaceId it does not have — the two calls are inherently
-    // sequential. Correctness wins; the conversion cache above is the real speedup.
+    // Not parallelizable with the page fetch: the sidebar-pages endpoint
+    // requires spaceId in its POST body, and spaceId is only known from this
+    // page fetch's response (resolvePageId yields the UUID, never the spaceId).
     let subpages: any[] = [];
     try {
       // `pageId` may be a slugId, but the sidebar-pages endpoint requires the
@@ -600,22 +587,6 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
   }
 
   /**
-   * Fetch an INTERNAL Docmost file (authed loopback) for sandbox mirroring.
-   * `src` is normalized to `/api/files/<id>/<file>`; `this.client.baseURL`
-   * already ends in `/api`, so we strip the leading `/api` and request the
-   * relative path with the client's Authorization header. Returns the raw bytes
-   * and the response Content-Type (mime), defaulting to octet-stream.
-   *
-   * The fetch is size-bounded (hard 64 MiB ceiling) purely to protect memory;
-   * the authoritative per-blob cap is enforced by the sandbox `put`. The path is
-   * resolved via resolveInternalFilePath, which REJECTS (throws) any traversal
-   * or percent-encoded src that would let an attacker-controlled `attrs.src`
-   * escape `/api/files/` and reach another internal endpoint (SSRF). That throw
-   * happens before this.client.get, so a malicious src is counted as a failed
-   * mirror — it never reaches the network.
-   */
-
-  /**
    * Compact outline of a page's top-level blocks (no full document body).
    * Cheap way to locate sections/tables and grab block ids before drilling in
    * with getNode / patchNode / insertNode.
@@ -644,15 +615,15 @@ export function ReadMixin<TBase extends GConstructor<DocmostClientContext>>(Base
    * id-less block: tables, lists, quotes, dividers, callouts, images, code
    * blocks).
    *
-   * `format` (#413):
+   * `format`:
    *  - `"markdown"` (DEFAULT): serialize the block via the canonical converter
    *    (`{type:"doc",content:[node]}` -> `convertProseMirrorToMarkdown`) — a read
    *    "for editing": pair it with `patchNode({markdown})` to rewrite the block.
    *    Comment anchors (`<span data-comment-id>`, INCLUDING resolved ones) are
    *    NOT stripped here (unlike getPage): losing them on write-back would
    *    orphan the thread. Returns `{ ..., format:"markdown", markdown }`.
-   *  - `"json"`: return the raw ProseMirror subtree as-is (lossless; the previous
-   *    default). Returns `{ ..., format:"json", node }`.
+   *  - `"json"`: return the raw ProseMirror subtree as-is (lossless).
+   *    Returns `{ ..., format:"json", node }`.
    *
    * AUTO fallback: a type that cannot be a document top-level child is NOT
    * expressible as a standalone markdown document, so a `"markdown"` request for

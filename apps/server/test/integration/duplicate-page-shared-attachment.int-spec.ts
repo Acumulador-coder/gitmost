@@ -12,17 +12,13 @@ import {
 } from './db';
 
 /**
- * #206 attach-1 — Duplicating a subtree where the SAME attachment is referenced
- * by more than one page must copy a working blob/row for EVERY copy, not just
- * the last page processed.
+ * Duplicating a subtree where the SAME attachment is referenced by more than one
+ * page must copy a working blob/row for EVERY copy, not just the last page
+ * processed.
  *
  * Setup: root page A and child page B both embed the same image (attachmentId X,
  * the attachment row owned by A in the DB). Duplicating A produces copies A' and
- * B'. Before the fix the per-attachmentId map held a single entry, so B's entry
- * clobbered A's and the row-ownership guard (`attachment.pageId !== oldPageId`)
- * then skipped the only DB row entirely: zero blobs copied, zero new rows, both
- * copies' images 404. The fix keys the map to a LIST and copies once per
- * referencing page, dropping the broken guard.
+ * B'; the per-attachmentId map holds a LIST and copies once per referencing page.
  *
  * This drives the real PageService.duplicatePage against a real Postgres with a
  * recording storage stub, and asserts: storage.copy called twice and two fresh

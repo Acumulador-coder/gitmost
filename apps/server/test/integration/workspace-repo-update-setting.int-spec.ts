@@ -80,7 +80,7 @@ describe('WorkspaceRepo.updateSetting (jsonb merge) [integration]', () => {
 });
 
 /**
- * #348 F6 — the DomainMiddleware workspace cache (WORKSPACE_SELF_HOSTED /
+ * The DomainMiddleware workspace cache (WORKSPACE_SELF_HOSTED /
  * WORKSPACE_BY_HOST, 15s TTL) caches security-relevant fields (enforceSso/
  * enforceMfa/status). Its correctness rests entirely on bustWorkspaceCache being
  * called from every mutator. This exercises the real invalidation with a working

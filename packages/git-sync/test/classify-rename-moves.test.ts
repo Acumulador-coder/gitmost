@@ -7,7 +7,7 @@ import type {
 } from '../src/engine/push';
 import type { DocmostMdMeta } from '@docmost/prosemirror-markdown';
 
-// FS→Docmost push #3 (SPEC §5/§6/§16). `classifyRenameMoves` is the PURE half of
+// FS→Docmost move/rename (SPEC §5/§6/§16). `classifyRenameMoves` is the PURE half of
 // the move/rename apply: it resolves each `{pageId, oldPath, newPath}` into the
 // Docmost op(s) it needs, with NO IO (both resolvers are injected). The key
 // design (SPEC §5) is that the file PATH is the source of truth for tree

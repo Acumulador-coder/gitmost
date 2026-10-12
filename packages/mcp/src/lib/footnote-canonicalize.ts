@@ -12,14 +12,14 @@
  * This module is the pure MIRROR only. The inline-authoring helpers
  * (`footnoteContentKey`, `makeFootnoteDefinition`, `generateFootnoteId`) used by
  * `insertInlineFootnote` live in `@docmost/prosemirror-markdown` (next to the
- * importer's `assembleFootnotes`, #414), so this file stays a pure mirror.
+ * importer's `assembleFootnotes`), so this file stays a pure mirror.
  *
  * Why it exists: every NON-editor write path (markdown import, updatePageJson,
  * docmostTransform, insertFootnote) builds ProseMirror JSON directly, so the
  * editor's footnote plugins never run and the canonical topology (sequential
  * numbering by first reference, one trailing list, no orphans, no raw `[^id]`)
- * was never enforced. Running this at the end of every write path closes that
- * gap; because it is idempotent, it is a no-op when the footnotes are already
+ * would not be enforced. Running this at the end of every write path enforces
+ * it; because it is idempotent, it is a no-op when the footnotes are already
  * canonical (no spurious mutations / git-sync churn).
  *
  * ENFORCEMENT RULE (#228): any NEW FULL-document persist path MUST call

@@ -1,5 +1,5 @@
-// Mock collab regression for the AMBIGUOUS-id refusal in patchNode / deleteNode
-// (#159, PR #185 review pt 1). When a page has TWO blocks sharing one attrs.id
+// Mock collab regression for the AMBIGUOUS-id refusal in patchNode / deleteNode.
+// When a page has TWO blocks sharing one attrs.id
 // (Docmost duplicates block ids on copy/paste), the transform's
 // `if (replaced !== 1) return null` / `if (deleted !== 1) return null` guard must
 // SKIP the collab write, and the call must then reject with an "ambiguous" error.
@@ -7,7 +7,7 @@
 // The replaceNodeById/deleteNodeById counts and assertUnambiguousMatch are unit-
 // tested in isolation (test/unit/node-ops.test.mjs); this exercises the END-TO-END
 // wiring through the real client method + a live Hocuspocus collab doc, so a
-// regression that loosened the guard (e.g. back to `=== 0`) would be caught here
+// regression that loosened the guard (e.g. to `=== 0`) would be caught here
 // where the isolated unit tests would not.
 //
 // Unlike the other mock tests (which deliberately avoid the collab WebSocket), this
