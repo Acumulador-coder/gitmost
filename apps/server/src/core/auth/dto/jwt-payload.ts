@@ -2,9 +2,9 @@
  * Provenance actor for a write: who the action is attributed to. Derived only
  * from the SIGNED token claim (never a request body), so 'agent' is unspoofable.
  * Single source of truth so a typo like 'agnet' can't slip through as a bare
- * string (#143 review). Distinct from `ActorType` (auth principal kind).
+ * string. Distinct from `ActorType` (auth principal kind).
  *
- * 'git-sync' marks writes made by the git-sync data plane (issue #194 §8.1). It NEVER
+ * 'git-sync' marks writes made by the git-sync data plane. It NEVER
  * travels in a user-facing token; it is set in-process on the collab connection
  * context by the native datasource, so it cannot be spoofed from a request.
  */
@@ -39,7 +39,7 @@ export type JwtPayload = {
 };
 
 // The AUTH-PRINCIPAL kind behind a collab token — distinct from `actor`
-// (provenance). Stamped into EVERY newly-minted collab token (#501): 'session'
+// (provenance). Stamped into EVERY newly-minted collab token: 'session'
 // for a normal user/session (incl. the internal AI agent, which is session-
 // backed), 'api_key' when the token was minted by an api-key principal (an
 // external MCP agent). The discriminator keys on the token's ORIGIN, so the

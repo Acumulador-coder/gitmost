@@ -61,7 +61,7 @@ export class VaultRegistryService {
    *     rewrite the engine's history on `main`.
    *   - http.receivepack=true / http.uploadpack=true — explicitly allow the
    *     receive/upload services over HTTP.
-   *   - core.symlinks=false — SECURITY (PR #119 review). A writer could push a
+   *   - core.symlinks=false — SECURITY. A writer could push a
    *     `.md` entry that is a SYMLINK (e.g. `leak.md -> /etc/passwd`); the vault
    *     is bare and the engine reads only blobs, and it never treats a mode-120000
    *     tree entry as a page. This keeps any checkout of the vault from
@@ -69,8 +69,8 @@ export class VaultRegistryService {
    *
    * Each key is read first and written only when its local value differs:
    * every `git config` write takes `config.lock`, and this runs on every
-   * /git request OUTSIDE the space lock, so unconditional writes collided with
-   * a running cycle's own config work (HTTP 500s, failed cycles). Concurrent
+   * /git request OUTSIDE the space lock, so unconditional writes would collide
+   * with a running cycle's own config work (HTTP 500s, failed cycles). Concurrent
    * calls for one space share a single in-flight run; it is forgotten once it
    * settles, so a later request re-verifies (e.g. after a vault re-init).
    * Returns the absolute vault path. Idempotent and safe to call before every

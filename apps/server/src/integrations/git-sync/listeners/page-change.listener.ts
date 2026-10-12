@@ -30,9 +30,8 @@ interface PageEventLike {
  * Loop-guard (best-effort): an event whose page row already reads
  * `lastUpdatedSource === 'git-sync'` is the orchestrator's OWN write, so we skip
  * it to avoid a write -> event -> sync echo. The guard ALWAYS runs (the page row
- * is fetched for every event, structural ones included). This is the cheap first
- * guard; a full bodyHash + updatedAt loop-guard is a later hardening step —
- * noted, not built here.
+ * is fetched for every event, structural ones included). A bodyHash + updatedAt
+ * loop-guard would be more precise.
  *
  * KNOWN OVER-SKIP (latency, NOT data loss): the guard keys ONLY on
  * `lastUpdatedSource`, and a user MOVE / RENAME / DELETE does NOT change that
@@ -41,8 +40,7 @@ interface PageEventLike {
  * `lastUpdatedSource === 'git-sync'` and is dropped on this fast debounced path.
  * No change is lost: the poll-safety interval (~GIT_SYNC_POLL_INTERVAL_MS, default
  * 15s) re-enumerates the space and reconciles it — the only cost is up to one poll
- * interval of extra latency before that structural change reaches git. The
- * bodyHash+updatedAt loop-guard above would close this gap precisely.
+ * interval of extra latency before that structural change reaches git.
  */
 @Injectable()
 export class PageChangeListener implements OnModuleDestroy {

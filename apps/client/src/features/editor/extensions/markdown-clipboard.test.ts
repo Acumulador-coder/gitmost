@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-// Markdown conversion now goes through the canonical package's BROWSER entry
-// (issue #347): the same converter the server import/export uses, resolved via
-// the `browser` exports condition so it runs on the native `DOMParser` (the
-// client jsdom vitest env provides one) with jsdom never bundled.
+// Markdown conversion goes through the canonical package's BROWSER entry: the
+// same converter the server import/export uses, resolved via the `browser`
+// exports condition so it runs on the native `DOMParser` (the client jsdom
+// vitest env provides one) with jsdom never bundled.
 import {
   convertProseMirrorToMarkdown,
   markdownToProseMirrorSync,
@@ -256,14 +256,14 @@ describe("stripHeaderSeparator", () => {
   });
 });
 
-// Output-level tests for the table clipboard regression: copying a table must
-// yield a real GFM pipe table, NOT one-value-per-line concatenated cells.
-// These exercise the actual markdown produced by convertProseMirrorToMarkdown —
-// the same serializer step the clipboardTextSerializer now runs (issue #347) —
-// so they pin the OUTPUT shape that the classifier-flag tests above do not cover.
-// Input is ProseMirror JSON (what the copied slice serializes to), matching the
-// clipboardTextSerializer's new call: it wraps the slice content in a synthetic
-// `doc` (and the bare-rows case in a `table`) and calls the converter.
+// Output-level tests for table clipboard: copying a table must yield a real GFM
+// pipe table, NOT one-value-per-line concatenated cells. These exercise the
+// actual markdown produced by convertProseMirrorToMarkdown — the serializer
+// step the clipboardTextSerializer runs — so they pin the OUTPUT shape that the
+// classifier-flag tests above do not cover. Input is ProseMirror JSON (what the
+// copied slice serializes to), matching the clipboardTextSerializer's call: it
+// wraps the slice content in a synthetic `doc` (and the bare-rows case in a
+// `table`) and calls the converter.
 describe("table clipboard markdown output (convertProseMirrorToMarkdown)", () => {
   // Trim each line and drop blanks so structural assertions are whitespace-robust.
   function lines(md: string): string[] {

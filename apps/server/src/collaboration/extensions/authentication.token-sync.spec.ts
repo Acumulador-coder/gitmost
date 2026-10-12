@@ -1,5 +1,5 @@
 /**
- * #709 — integration test for `AuthenticationExtension.onTokenSync`, the access
+ * Integration test for `AuthenticationExtension.onTokenSync`, the access
  * re-check a warm (parked) collab session triggers on return by re-sending its
  * token over the already-authenticated connection.
  *

@@ -19,9 +19,8 @@ const afterCommitHooks = new WeakMap<
 
 /**
  * Register a side effect to run ONLY AFTER the transaction that owns `trx`
- * commits. THE fix for "bust the cache inside the open transaction" bugs: a
- * cache-invalidation (or any read-your-write-visible side effect) done while the
- * writing transaction is still open opens a window where a concurrent reader
+ * commits. A cache-invalidation (or any read-your-write-visible side effect)
+ * done while the writing transaction is still open opens a window where a concurrent reader
  * repopulates the cache with the PRE-COMMIT (stale) row, so after commit the
  * cache holds the old value until its TTL. Deferring the effect to post-commit
  * closes that window.
@@ -100,9 +99,9 @@ const PG_UNIQUE_VIOLATION = '23505';
  * Whether `err` is a Postgres unique-violation (SQLSTATE `23505`). THE single
  * check so repos/services stop re-hardcoding the magic code.
  *
- * NOTE (#222): `core/ai-chat/roles/ai-agent-roles.service.ts` still carries its
- * own inline `23505` check on a separate, unmerged branch; it should adopt this
- * helper (and {@link violatedConstraint}) after #227 lands.
+ * NOTE: `core/ai-chat/roles/ai-agent-roles.service.ts` still carries its own
+ * inline `23505` check; it should adopt this helper (and
+ * {@link violatedConstraint}).
  */
 export function isUniqueViolation(err: unknown): boolean {
   return (err as { code?: unknown } | null | undefined)?.code === PG_UNIQUE_VIOLATION;
@@ -153,20 +152,18 @@ export function violatedConstraint(err: unknown): string | undefined {
  * silently fall back (an allowlist becomes "unrestricted", a model override is
  * ignored). Forcing the param through `::text` first binds it as text (sent
  * verbatim); `::jsonb` then parses it into a real array/object. Read-side
- * parsers repair rows written the old buggy way without a migration.
+ * parsers (parseJsonbValue) repair double-encoded rows.
  *
  * Returns `null` for null/undefined. By default it ALSO returns `null` for
  * "empty" values (an empty array, or an object with no own enumerable keys) —
  * most callers treat empty as "clear/unset", so an empty config never
  * round-trips as `[]`/`{}`.
  *
- * `preserveEmpty` (issue #476) opts a column OUT of that empty-to-null
- * normalization so `[]`/`{}` are persisted as real jsonb values. Needed where
- * empty and null mean DIFFERENT things: an empty `tool_allowlist` is
- * deny-all ("zero tools allowed"), while null is "no restriction" — collapsing
- * `[]` to null silently widened deny-all to allow-all. Deliberately an opt-in
- * flag, NOT a global change: the other jsonb callers (model_config, source)
- * keep the empty-means-unset contract.
+ * `preserveEmpty` opts a column OUT of that empty-to-null normalization so
+ * `[]`/`{}` are persisted as real jsonb values. Needed where empty and null
+ * mean DIFFERENT things: an empty `tool_allowlist` is deny-all ("zero tools
+ * allowed"), while null is "no restriction". The other jsonb callers
+ * (model_config, source) keep the empty-means-unset contract.
  */
 export function jsonbBind<T>(
   value: T | null | undefined,
@@ -186,9 +183,9 @@ export function jsonbBind<T>(
 /**
  * READ-side counterpart to {@link jsonbBind}: tolerantly decode a jsonb value
  * read back from the DB and validate its shape with `guard`. THE single place
- * the legacy double-encoding self-heal lives, so repos keep only a type-guard.
+ * the double-encoding self-heal lives, so repos keep only a type-guard.
  *
- * A row written by the old `::jsonb` bind round-trips as a JSON STRING (see the
+ * A row written with a plain `::jsonb` bind round-trips as a JSON STRING (see the
  * quirk in jsonbBind), so the driver hands back e.g. `'["a"]'` / `'{"k":1}'`
  * rather than the structure. This parses such a string once, then applies the
  * caller's `guard`. Returns `null` for null / an unparseable string / a value

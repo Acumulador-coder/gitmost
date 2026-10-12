@@ -459,8 +459,8 @@ describe("handleCreate optimistic-insert idempotency (find-then-skip)", () => {
 // handleCreate race-guard temporaryExpiresAt patch: when the server's
 // addTreeNode broadcast wins the race and inserts the node BEFORE the optimistic
 // updater runs, the updater must not re-insert. Two sub-branches:
-//  (a) the node the broadcast inserted carries NO deadline (an older broadcast
-//      omitted it) while the authoritative create response DOES → patch the
+//  (a) the node the broadcast inserted carries NO deadline while the
+//      authoritative create response DOES → patch the
 //      deadline on so the clock marker shows now, without a reload.
 //  (b) the existing node ALREADY has a deadline → do NOT overwrite it; return
 //      `prev` by reference (a no-op write).

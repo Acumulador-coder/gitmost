@@ -10,9 +10,7 @@ import {
 /**
  * The per-space lock used by the git-sync control plane: an in-process per-space
  * mutex (no overlapping cycles on one instance) PLUS a Redis leader lock
- * (single writer across replicas). Extracted from `GitSyncOrchestrator` so the
- * locking primitive is a single reusable, independently testable unit
- * (PR #119 refactor #2).
+ * (single writer across replicas).
  */
 @Injectable()
 export class SpaceLockService {
@@ -125,8 +123,8 @@ export class SpaceLockService {
    * retrying with a capped exponential backoff until `timeoutMs` elapses before
    * returning the skip sentinel. The poll cycle holds the lock while it
    * processes a whole space, so a legitimate external push that briefly overlaps
-   * a cycle should WAIT a moment rather than immediately 503 (bug: ~60% of
-   * pushes 503'd under continuous polling). The poll cycle passes NO retry (it
+   * a cycle should WAIT a moment rather than immediately 503 (under continuous
+   * polling most pushes would). The poll cycle passes NO retry (it
    * just skips and the next tick reconciles).
    */
   async withSpaceLock<T>(

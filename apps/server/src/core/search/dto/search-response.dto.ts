@@ -32,7 +32,7 @@ export class SearchResultDto {
   matchedTerms: string[];
 }
 
-// #530 Phase B — the semantic (vector) layer's per-request status.
+// Semantic (vector) layer's per-request status.
 //  - `state`:
 //      'off'   — the vector arm did not run at all: kill-switch, no embedding
 //                provider, or a degrade (sidecar down / embed timeout).
@@ -45,7 +45,7 @@ export class SearchResultDto {
 //                    keeps serving) -> `available: true`, real vector hits;
 //                (b) the arm was deliberately NOT raised because the configured
 //                    MODEL differs from the one that produced the served
-//                    generation's rows (#599 D2): a cosine across two independently
+//                    generation's rows: a cosine across two independently
 //                    trained embedding spaces is noise, so search serves lexical
 //                    only until the reindex completes -> `available: false`.
 //      'full'  — the arm ran and the active generation covers every page that
@@ -54,7 +54,7 @@ export class SearchResultDto {
 //    a 'stale' of sub-case (a); FALSE on (b).
 //  - `reason`: why the arm did NOT run — 'no-provider' / 'degraded' — or, on a
 //    'stale' state, simply 'stale'.
-//  - `indexed`/`total`: coverage of the ACTIVE generation (#599). `total` is the
+//  - `indexed`/`total`: coverage of the ACTIVE generation. `total` is the
 //    number of pages that actually produce >= 1 chunk, NOT the raw embeddable
 //    count (see EmbeddingGenerationService.computeCoverage). Present only when the
 //    vector arm ran.

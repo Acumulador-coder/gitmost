@@ -132,16 +132,10 @@ describe('PageEmbeddingRepo.deleteOtherGenerations (#599)', () => {
   });
 
   /**
-   * #599 (review F3) — an EMPTY `keep` must FAIL CLOSED.
-   *
-   * The guard used to be inverted: with `kept.length === 0` the fingerprint
-   * predicate was DROPPED, leaving `DELETE FROM page_embeddings WHERE workspace_id
-   * = $1` — a full wipe of the workspace's vector index, the generation currently
-   * serving search included. It is unreachable from today's two call sites (both
-   * pass a resolved sha256 fingerprint), but "unreachable" is exactly the state a
-   * refactor changes, and the defensive branch of a bulk DELETE must be the SAFE
-   * one: an empty keep-set can only mean the caller lost its fingerprints, never
-   * "purge everything" (that is deleteByWorkspace).
+   * An EMPTY `keep` must FAIL CLOSED: dropping the fingerprint predicate would
+   * leave `DELETE FROM page_embeddings WHERE workspace_id = $1`, wiping the
+   * generation currently serving search. An empty keep-set means the caller lost
+   * its fingerprints, never "purge everything" (that is deleteByWorkspace).
    */
   it('review F3 — an EMPTY keep set deletes NOTHING (fail-closed, not a full wipe)', async () => {
     const { db, compiled } = makeRecordingDb();

@@ -26,14 +26,10 @@ import {
 } from './history-budget';
 
 /**
- * Race-closure coverage for the "one active run per chat" guard (#184).
- *
- * THE BUG: two simultaneous POST /ai-chat/stream on the same chat both pass the
- * controller's cheap pre-check (TOCTOU), so the loser's run-row INSERT hits the
- * partial unique index. Previously that 23505 was SWALLOWED and the second turn
- * streamed UNTRACKED (no runId, not stoppable). THE FIX: beginRun surfaces a
- * RunAlreadyActiveError and stream() turns it into a 409 BEFORE any AI call —
- * the second turn never runs.
+ * Race coverage for the "one active run per chat" guard. Two simultaneous POST
+ * /ai-chat/stream on the same chat both pass the controller's cheap pre-check,
+ * so the loser's run-row INSERT hits the partial unique index; beginRun surfaces
+ * RunAlreadyActiveError and stream() turns it into a 409 before any AI call.
  */
 describe('AiChatService.stream — concurrent-run race rejection (#184)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -113,13 +109,11 @@ describe('AiChatService.stream — concurrent-run race rejection (#184)', () => 
 });
 
 /**
- * F3 — the LOAD-BEARING run-detach wiring: `effectiveSignal = handle.signal`
- * after runHooks.begin, then `abortSignal: effectiveSignal` passed to streamText.
- * That single line is what makes a run survive a browser disconnect (the agent
- * loop's abort is governed by the RUN's signal, not the socket): a regression to
- * the socket-bound signal would still pass every other test green while silently
- * breaking Stop + durability. These two tests pin the exact signal streamText
- * consumes on both paths.
+ * Run-detach wiring: `effectiveSignal = handle.signal` after runHooks.begin,
+ * then passed to streamText as `abortSignal`. That is what makes a run survive a
+ * browser disconnect; a socket-bound signal would pass every other test while
+ * breaking Stop + durability. These tests pin the signal streamText consumes on
+ * both paths.
  */
 describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -235,13 +229,11 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
 
     expect(begin).toHaveBeenCalledTimes(1);
     expect(streamTextMock).toHaveBeenCalledTimes(1);
-    // THE assertion: the agent loop's abort is wired to the RUN, so a browser
-    // disconnect (which aborts only `socketSignal`) cannot end the turn.
-    // NOTE (#444): the signal handed to streamText is now
-    // AbortSignal.any([effectiveSignal, degenerationController.signal]), so it is
-    // no longer identity-equal to `runSignal`. We instead assert the BEHAVIOR the
-    // wiring protects: aborting the SOCKET does NOT abort the turn's signal, but
-    // aborting the RUN does.
+    // The agent loop's abort is wired to the RUN, so a browser disconnect (which
+    // aborts only `socketSignal`) cannot end the turn. The signal handed to
+    // streamText is AbortSignal.any([effectiveSignal, degenerationController.signal]),
+    // not identity-equal to `runSignal`, so assert behaviour: aborting the socket
+    // does not abort it, aborting the run does.
     const passed = streamTextMock.mock.calls[0][0].abortSignal as AbortSignal;
     expect(passed).not.toBe(socketSignal);
     expect(passed.aborted).toBe(false);
@@ -271,8 +263,8 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
     });
 
     expect(streamTextMock).toHaveBeenCalledTimes(1);
-    // #444: the passed signal is AbortSignal.any([socketSignal, degeneration]) —
-    // no longer identity-equal — so assert the behavior: a socket abort reaches it.
+    // The passed signal is AbortSignal.any([socketSignal, degeneration]), so assert
+    // behaviour: a socket abort reaches it.
     const passed = streamTextMock.mock.calls[0][0].abortSignal as AbortSignal;
     expect(passed.aborted).toBe(false);
     socketController.abort();
@@ -280,16 +272,14 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
   });
 
   /**
-   * F9 — streamText's TERMINAL callbacks carry the #184 run lifecycle:
+   * streamText's terminal callbacks carry the run lifecycle:
    *   onStepFinish -> runHooks.onStep(runId, stepCount)
    *   onFinish     -> runHooks.onSettled(runId, 'completed')   (dominant path)
    *   onAbort      -> runHooks.onSettled(runId, 'aborted')
    *   onError      -> runHooks.onSettled(runId, 'error', cause)
    * makeStreamResult() ignores the streamText options, so these callbacks never
-   * fire on their own — a regression in this wiring (esp. the success path) would
-   * strand the run with NO test catching it. Here we CAPTURE the options streamText
-   * was handed and invoke each callback with the real wiring, asserting the run
-   * hooks fire with the right args.
+   * fire on their own. Capture the options streamText was handed and invoke each
+   * callback, asserting the run hooks fire with the right args.
    */
   // Drive stream() to the point streamText is called, capturing the options object
   // (which carries onStepFinish/onFinish/onError/onAbort) and the run hooks.
@@ -408,7 +398,7 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
     expect(patch.status).toBe('error');
     // First overflow on a fresh chat -> k = prior(0) + 1 = 1.
     expect(patch.metadata.replayOverflowCount).toBe(1);
-    // The legacy boolean is no longer written (the counter supersedes it).
+    // The boolean `replayOverflow` stamp is not written (the counter replaces it).
     expect('replayOverflow' in patch.metadata).toBe(false);
     expect(patch.metadata.error).toContain('контекстное окно');
   });
@@ -430,20 +420,12 @@ describe('AiChatService.stream — abortSignal wiring (#184 F3)', () => {
 });
 
 /**
- * F14 — the begin-failure branch (the `else` of the run-race guard).
- *
- * stream() wraps runHooks.begin in try/catch with TWO branches:
+ * The begin-failure branch. stream() wraps runHooks.begin in try/catch with two
+ * branches:
  *   - RunAlreadyActiveError  -> 409 ConflictException (pinned above).
- *   - ANY OTHER begin failure -> throw ServiceUnavailableException(A_RUN_BEGIN_FAILED)
- *     BEFORE the first byte (#486, commit 4).
- *
- * POLICY CHANGE (#486): the OLD contract here was "SWALLOW + stream the turn
- * UNTRACKED on the socket signal". That was reversed: an untracked run is
- * invisible to /stop, is not aborted on disconnect, and slips past the one-run
- * gate — an unstoppable ghost run in autonomous mode. Now a plain begin failure
- * FAILS the turn fast with a 503 A_RUN_BEGIN_FAILED, before any user row is
- * persisted and before streamText runs. This case is INVERTED (not deleted) so
- * the "plain begin failure" path stays explicitly pinned under the new policy.
+ *   - any other begin failure -> ServiceUnavailableException(A_RUN_BEGIN_FAILED)
+ *     before the first byte, before any user row is persisted and before
+ *     streamText runs (an untracked run could not be stopped).
  */
 describe('AiChatService.stream — begin-failure fails the turn (#184 F14 / #486)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -584,23 +566,16 @@ describe('AiChatService.stream — begin-failure fails the turn (#184 F14 / #486
 });
 
 /**
- * #555 item 2 — SERVICE-level wiring of the aggressive-threshold ×0.5^k recovery
- * (#490/#520). The pure helpers (`resolveEffectiveReplayThreshold`,
- * `lastAssistantReplayOverflowCount`, `trimHistoryForReplay`) are unit-tested in
- * isolation, but those tests CANNOT catch a regression in how stream() THREADS
- * them together:
- *   1. read the prior consecutive-overflow count `k` from the persisted history;
- *   2. feed it to `resolveEffectiveReplayThreshold(base, k)` and pass THAT
- *      escalated threshold (NOT the base budget) to `trimHistoryForReplay`;
- *   3. the `priorOverflowed` PROVENANCE — when `k > 0` the prior turn's provider
- *      `contextTokens` is stale/absent, so the service DROPS it (passes
- *      `undefined`) to force the char-estimate path; when `k === 0` it passes the
- *      real prior count through.
- * A swap of `effectiveThreshold` back to the base budget, or dropping the
- * `k > 0 ? undefined : prior` guard, passes every helper unit test yet silently
- * breaks reactive recovery. These tests spy on the budgeter at the module seam
- * and assert the exact arguments stream() hands it, driven from REAL persisted
- * history rows.
+ * Service-level wiring of the escalating ×0.5^k replay-threshold recovery. The
+ * pure helpers (`resolveEffectiveReplayThreshold`,
+ * `lastAssistantReplayOverflowCount`, `trimHistoryForReplay`) are unit-tested
+ * alone; this pins how stream() threads them:
+ *   1. read the consecutive-overflow count `k` from the persisted history;
+ *   2. pass `resolveEffectiveReplayThreshold(base, k)` (not the base budget) to
+ *      `trimHistoryForReplay`;
+ *   3. when `k > 0` the prior turn's `contextTokens` is stale, so pass
+ *      `undefined` to force the char-estimate path; when `k === 0` pass it on.
+ * Spies on the budgeter at the module seam, driven from real history rows.
  */
 describe('AiChatService.stream — aggressive-threshold ×0.5 wiring provenance (#555 item 2 / #490/#520)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;
@@ -746,10 +721,8 @@ describe('AiChatService.stream — aggressive-threshold ×0.5 wiring provenance 
 
     // (1) k is read from the persisted row and (2) fed to the escalation helper.
     expect(effSpy).toHaveBeenCalledWith(base, k);
-    // (2)+(3): the ESCALATED threshold is applied to the trim, and the stale prior
-    // contextTokens is DROPPED (undefined) because k>0 — the provenance regression
-    // this locks. A revert to `replayBudget.thresholdTokens` (base) or to passing
-    // `priorContextTokens` here turns this red.
+    // (2)+(3): the escalated threshold is applied to the trim, and the stale prior
+    // contextTokens is dropped (undefined) because k>0.
     expect(trimSpy).toHaveBeenCalledWith(
       expect.any(Array),
       expected,

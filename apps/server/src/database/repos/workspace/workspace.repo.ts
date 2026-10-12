@@ -70,7 +70,7 @@ export class WorkspaceRepo {
   ) {}
 
   /**
-   * #348 — bust the DomainMiddleware workspace caches after any workspace write.
+   * Bust the DomainMiddleware workspace caches after any workspace write.
    * Deletes BOTH the self-hosted (constant) key and the cloud per-hostname key so
    * a single implementation covers either deployment mode (the irrelevant key is a
    * harmless no-op). Best-effort: a cache error must never fail the write, and a
@@ -296,8 +296,8 @@ export class WorkspaceRepo {
    * a real jsonb object and never a double-encoded string (postgres.js would
    * otherwise re-serialize a `JSON.stringify`'d string, yielding a jsonb string
    * that `||` turns into an array). A `jsonb_typeof = 'object'` CASE self-heals
-   * workspaces whose `settings.ai.provider` was previously corrupted into an
-   * array/string. Sibling `settings.ai.*` keys (search / chat / mcp
+   * a `settings.ai.provider` corrupted into an array/string. Sibling
+   * `settings.ai.*` keys (search / chat / mcp
    * / systemPrompt) and provider fields absent from the partial are preserved via
    * jsonb `||` merge.
    */
@@ -313,8 +313,7 @@ export class WorkspaceRepo {
     // value args are polymorphic ("any"), so without the explicit ::text cast
     // Postgres throws "could not determine data type of parameter $1". The result
     // is a real jsonb object, never a double-encoded string. The CASE self-heals
-    // workspaces whose settings.ai.provider was previously corrupted into an
-    // array/string.
+    // a settings.ai.provider corrupted into an array/string.
     const entries = Object.entries(provider).filter(
       ([k, v]) => v !== undefined && AI_PROVIDER_SETTINGS_ALLOWED.includes(k),
     );
@@ -343,21 +342,21 @@ export class WorkspaceRepo {
   }
 
   /**
-   * #599 — read the workspace's EMBEDDING GENERATION pointer
+   * Read the workspace's EMBEDDING GENERATION pointer
    * (`settings.ai.embedding`).
    *
    *  - `activeFingerprint`: the generation search/RAG currently SERVE from. It is
    *    the workspace's persisted pointer, deliberately NOT derived from the live
    *    provider config: changing the model/revision/prefix changes the config
    *    (TARGET) fingerprint instantly, but the pointer only moves after a full
-   *    target reindex completes (the atomic flip). null = never flipped (a fresh
-   *    or legacy instance), and callers then fall back to the config fingerprint.
+   *    target reindex completes (the atomic flip). null = never flipped, and
+   *    callers then fall back to the config fingerprint.
    *  - `activeModel`: the bare model NAME of that generation (`page_embeddings.
    *    model_name` of its rows). Recorded at the flip so a reader can tell a
    *    same-model fingerprint change (revision/prefix — same embedding space, the
    *    old rows stay comparable) from a MODEL change (a different space, where a
    *    cosine of the new model's query against the old model's rows is noise). null
-   *    = never flipped, or flipped by a build that predates this key.
+   *    = never flipped, or flipped before this key was recorded.
    *  - `coverageTotal`: the number of pages that actually produced >= 1 chunk in
    *    the completed run that established `activeFingerprint`. It is the coverage
    *    DENOMINATOR (see EmbeddingGenerationService.computeCoverage) — the raw
@@ -437,7 +436,7 @@ export class WorkspaceRepo {
   }
 
   /**
-   * #599 — the ATOMIC POINTER FLIP: move `settings.ai.embedding.activeFingerprint`
+   * The ATOMIC POINTER FLIP: move `settings.ai.embedding.activeFingerprint`
    * to the generation a completed reindex just built, and record that run's
    * coverage denominator, in ONE settings write.
    *
@@ -446,20 +445,18 @@ export class WorkspaceRepo {
    * (or vice-versa) — the flip is all-or-nothing. Sibling `settings.ai.*` keys
    * (provider / search / chat / mcp) are preserved by the merge.
    *
-   * `coverageAt` (#599 review F2) is the instant the run that produced these
+   * `coverageAt` is the instant the run that produced these
    * numbers STARTED: it partitions the corpus into the pages the run measured and
    * the pages it did not (created/edited since), which is what keeps the frozen
    * chunk-less gap from excusing brand-new un-embedded pages. It rides in the same
    * write for the same reason as the counts — a coverage timestamp that did not
    * match the coverage numbers would be worse than none.
    *
-   * #599 (D6) — BOTH `settings->'ai'` and `settings->'ai'->'embedding'` are wrapped
-   * in a `jsonb_typeof = 'object'` CASE. `COALESCE` only guards a NULL value; if
-   * either key somehow holds a scalar or an array (a hand-edited row, a bad
-   * migration), `'"x"'::jsonb || '{...}'::jsonb` raises
-   * `cannot concatenate a non-object jsonb` and every flip of that workspace fails
-   * forever. The CASE self-heals it to `{}` instead (the same weakness exists in
-   * `updateAiProviderSettings` for `ai`; fixed here for this writer).
+   * BOTH `settings->'ai'` and `settings->'ai'->'embedding'` are wrapped in a
+   * `jsonb_typeof = 'object'` CASE. `COALESCE` only guards a NULL value; if
+   * either key holds a scalar or an array, `'"x"'::jsonb || '{...}'::jsonb`
+   * raises `cannot concatenate a non-object jsonb` and every flip of that
+   * workspace fails. The CASE self-heals it to `{}` instead.
    *
    * The "is the config still on this target?" guard lives at the call site
    * (EmbeddingGenerationService.completeRun) — it re-resolves the provider right

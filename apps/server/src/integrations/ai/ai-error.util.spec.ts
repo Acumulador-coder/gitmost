@@ -2,12 +2,11 @@ import { describeProviderError, isFatalProviderError } from './ai-error.util';
 
 /**
  * Unit tests for describeProviderError: the shared formatter used both for the
- * server log line and for the error text streamed back to the client. This
- * pins the behaviour, including the one behaviour change introduced when the
- * two inline formatters were unified: a truncated, single-line snippet of the
- * provider `responseBody`/`text` is appended (so a misconfigured endpoint's
- * HTML error page is diagnosable). The util guarantees the API key is never in
- * the response body, so this is safe to surface.
+ * server log line and for the error text streamed back to the client,
+ * including the truncated, single-line snippet of the provider
+ * `responseBody`/`text` (so a misconfigured endpoint's HTML error page is
+ * diagnosable). The API key is never in the response body, so this is safe to
+ * surface.
  */
 describe('describeProviderError', () => {
   it('uses the fallback for a null/empty/undefined error', () => {

@@ -1,15 +1,11 @@
-// Regression coverage for the custom-event request/reply protocol in the
-// RedisSyncExtension. git-sync routes its body write through a custom event
-// (`gitSyncWriteBody`) which, when the target doc is owned by a DIFFERENT collab
-// instance, runs REMOTELY inside `handleRedisMessage` on the owning instance. The
-// remote handler can THROW (markdown->ProseMirror transform on a malformed body).
-//
-// Before the fix the throw was uncaught: (1) no `customEventComplete` reply was
-// published, so the origin's awaiting promise only rejected after `customEventTTL`
-// (~30s) as a generic 'TIMEOUT', and (2) an unhandledRejection escaped the async
-// `messageBuffer` listener on the owning instance. These tests assert the throw is
-// turned into an error-carrying reply that rejects the origin PROMPTLY with the
-// real message, with the no-throw and local paths unchanged.
+// Custom-event request/reply protocol in RedisSyncExtension. git-sync routes
+// its body write through a custom event (`gitSyncWriteBody`) which, when the doc
+// is owned by another collab instance, runs remotely inside
+// `handleRedisMessage`. The remote handler can THROW (markdown->ProseMirror
+// transform on a malformed body); the throw must become an error-carrying
+// `customEventComplete` reply that rejects the origin promptly with the real
+// message (not a 'TIMEOUT' after customEventTTL, and no unhandledRejection on
+// the owning instance). The no-throw and local paths stay unchanged.
 
 import { RedisSyncExtension } from './redis-sync.extension';
 

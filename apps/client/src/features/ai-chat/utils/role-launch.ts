@@ -1,8 +1,8 @@
 import type { IAiRole } from "@/features/ai-chat/types/ai-chat.types.ts";
 
 /**
- * Decide what (if anything) to auto-send when an agent role card is picked
- * (issue #149). Extracted as a pure function so the three-way behavior is
+ * Decide what (if anything) to auto-send when an agent role card is picked.
+ * Extracted as a pure function so the three-way behavior is
  * unit-testable without mounting the chat-thread component:
  *   - autoStart=false              -> null  (bind the role only, send nothing)
  *   - autoStart=true + message     -> the trimmed custom launchMessage
@@ -23,7 +23,7 @@ export function roleLaunchMessage(
  * parent clears the bound role (roleId -> null) but chatId stays null, so the
  * thread never remounts and the flag would otherwise stay set — hiding the role
  * cards forever. Reset exactly in that state; a still-bound role (roleId set)
- * keeps the cards hidden. (Regression guard for #149.)
+ * keeps the cards hidden.
  */
 export function shouldResetRolePicked(
   chatId: string | null,

@@ -3,11 +3,10 @@ import type { KyselyDB } from '../../types/kysely.types';
 
 /**
  * Unit coverage for AiChatRunRepo.sweepRunning over a chainable builder mock (no
- * live DB). The F1 invariant under test (DECISION C): the BOOT sweep is
- * UNCONDITIONAL — it adds NO `updatedAt <` predicate, so a fresh 'running' run
- * (updatedAt = now) IS settled rather than skipped by a staleness window. The
- * window is added ONLY when an explicit `staleMs` is supplied (the future phase-2
- * multi-instance timer sweep). We assert the EXACT predicates the spec mandates.
+ * live DB). The invariant under test: the BOOT sweep is UNCONDITIONAL — it adds
+ * NO `updatedAt <` predicate, so a fresh 'running' run (updatedAt = now) IS
+ * settled rather than skipped by a staleness window. The window is added ONLY
+ * when an explicit `staleMs` is supplied. We assert the EXACT predicates.
  */
 describe('AiChatRunRepo.sweepRunning', () => {
   type Recorded = {

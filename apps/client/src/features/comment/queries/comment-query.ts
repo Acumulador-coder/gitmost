@@ -273,18 +273,16 @@ export function useApplySuggestionMutation() {
     },
     onError: (err: any, variables) => {
       const status = err?.response?.status;
-      // Idempotent race (double-click, or apply↔dismiss): after #329 an applied
-      // reply-less suggestion is hard-deleted, so a second/racing apply hits 404
-      // (already gone). ONLY 404 is a real success-noop — drop it from the cache
-      // and report success, the user's intent is already satisfied (restores the
-      // #315 apply idempotency the ephemeral delete would otherwise break).
+      // Idempotent race (double-click, or apply↔dismiss): an applied reply-less
+      // suggestion is hard-deleted, so a second/racing apply hits 404 (already
+      // gone). ONLY 404 is a real success-noop — drop it from the cache and report
+      // success, the user's intent is already satisfied.
       //
-      // 400 is NOT success (#338 F2): apply's only 400 is "Cannot apply … on a
-      // resolved comment thread" — the thread was resolved (often WITH a live
-      // discussion) but the edit was NOT applied. Treating it as "Suggestion
-      // applied" is a false success that also drops a live thread from the cache.
-      // The #315 idempotent repeat does NOT produce 400 (childless → 404;
-      // with-replies → 200), so we never lose idempotency by excluding it here.
+      // 400 is NOT success: apply's only 400 is "Cannot apply … on a resolved comment
+      // thread" — the thread was resolved (often WITH a live discussion) but the edit
+      // was NOT applied, and treating it as applied would also drop a live thread from
+      // the cache. An idempotent repeat never produces 400 (childless → 404;
+      // with-replies → 200).
       if (status === 404) {
         const cache = queryClient.getQueryData(RQ_KEY(variables.pageId)) as
           | InfiniteData<IPagination<IComment>>

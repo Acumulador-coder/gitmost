@@ -43,10 +43,9 @@ describe('resolveEffectiveReplayThreshold (#520 iterative escalation)', () => {
     }
   });
 
-  // Residual-brick regression (#520): flat-default base 100k, real window ~40k. The
-  // OLD fixed single 0.5× stuck at 50k > 40k forever (re-overflows every turn — the
-  // brick). The iterative cut drops BELOW 40k after a couple more consecutive
-  // overflows, so the history finally fits and the chat un-bricks.
+  // Flat-default base 100k, real window ~40k: a single fixed 0.5× cut stays at
+  // 50k > 40k and re-overflows every turn. The iterative cut drops BELOW 40k after
+  // a couple more consecutive overflows, so the history finally fits.
   it('un-bricks: escalation drops below a small real window the fixed 0.5× never could', () => {
     const base = 100_000;
     const realWindow = 40_000;

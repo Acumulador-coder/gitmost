@@ -229,17 +229,12 @@ describe('yjs-body-merge', () => {
     });
   });
 
-  // Regression: start-of-document content duplicating on every two-way sync.
-  //
-  // The LIVE Docmost doc stamps a per-block UniqueID on every heading/paragraph;
-  // a body arriving FROM git is parsed from clean markdown and carries NO block
-  // ids. If the merge comparison key includes that `id`, an unchanged live block
-  // never matches the SAME block coming from git, so the three-way merge cannot
-  // anchor on it — and an incoming block with no anchor (content inserted at the
-  // TOP of the page) is RE-ADDED on every cycle, an unbounded duplication loop.
-  // These tests model that exact id-asymmetry and assert the reconciliation is
-  // IDEMPOTENT (no block growth). They are RED before excluding `id` from the
-  // key in `serializeXmlNode`.
+  // Start-of-document content must not duplicate on every two-way sync. The
+  // LIVE doc stamps a UniqueID on every heading/paragraph; a body from git
+  // carries no block ids. With `id` in the comparison key an unchanged live block
+  // would never match its git twin, and an unanchored incoming block (content at
+  // the TOP of the page) would be re-added every cycle. These tests model that
+  // id-asymmetry and assert the reconciliation is idempotent.
   describe('idempotent reconciliation with live block ids (start-of-doc dup)', () => {
     // Build a fragment from block specs. `id` is set only when provided, mirroring
     // the live doc (ids present) vs a git-parsed body (ids absent).
@@ -348,14 +343,12 @@ describe('yjs-body-merge', () => {
     });
   });
 
-  // Regression: a line appended at the END of a page in git landed in the MIDDLE
-  // of the live page, replacing one of the empty paragraphs there (wb, page with
-  // images). The live images store numeric attrs (`width: 652`) while the git
-  // body carries them as strings ("652"), and the editor leaves an empty XmlText
-  // in a paragraph the user typed into and erased — so neither the images nor the
-  // trailing empty paragraph matched their git twins, and the merge anchored the
-  // git-side trailing paragraph (which became the new line) on an empty
-  // paragraph in the middle of the page.
+  // A line appended at the END of a page in git must not land in the middle of
+  // the live page. Live images store numeric attrs (`width: 652`) while the git
+  // body carries strings ("652"), and the editor leaves an empty XmlText in a
+  // paragraph the user typed into and erased; unless both are normalized,
+  // neither the images nor the trailing empty paragraph match their git twins
+  // and the merge anchors the new trailing line on an empty paragraph mid-page.
   describe('anchoring a live page edited in the browser', () => {
     type B =
       | { p: string }

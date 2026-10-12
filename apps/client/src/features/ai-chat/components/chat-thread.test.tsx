@@ -383,9 +383,9 @@ describe("ChatThread — send now", () => {
   });
 
   it("Stop then a REAL network-drop finish exits to idle (honor-in-stopping), NOT a false disconnect recovery", async () => {
-    // Regression for the disconnect-first reorder: on the STOP path, even a drop-
-    // form finish { isError:true, isDisconnect:true } arriving in `stopping` must be
-    // HONORED (reducer) and exit to idle — it must NOT enter disconnect recovery.
+    // On the STOP path, even a drop-form finish { isError:true, isDisconnect:true }
+    // arriving in `stopping` must be HONORED (reducer) and exit to idle — it must
+    // NOT enter disconnect recovery.
     startLocalStreamWithRun(); // live local stream
     fireEvent.click(screen.getByLabelText("Stop")); // STOP_REQUESTED -> stopping
     h.state.error = { message: "Failed to fetch" };
@@ -1420,9 +1420,9 @@ describe("ChatThread — live disconnect + stalled", () => {
   });
 
   it("a message queued during polling(disconnect) is sent once the negative fact settles the poll", async () => {
-    // Enter queues while following the run after a drop; only a local clean finish
-    // used to flush the queue. MUTATION-VERIFY: drop the flushNext() after the settle
-    // and the queued text is never sent -> red.
+    // Enter queues while following the run after a drop; the settle must flush the
+    // queue. MUTATION-VERIFY: drop the flushNext() after the settle and the queued
+    // text is never sent -> red.
     const view = renderLive();
     await disconnect();
     fireEvent.click(screen.getByTestId("queue-btn")); // composer queues (streaming mode)
@@ -1438,7 +1438,7 @@ describe("ChatThread — live disconnect + stalled", () => {
 });
 
 // -----------------------------------------------------------------------------
-// #665 unbind gate (acceptance criterion 10): "New chat" -> instant first send.
+// "New chat" unbind gate: "New chat" -> instant first send.
 //
 // "New chat" fires a DELETE /bind-page (the unbind) and stores its promise in the
 // window-owned `pendingUnbindRef`. A first send that follows immediately must

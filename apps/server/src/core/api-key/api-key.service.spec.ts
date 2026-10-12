@@ -178,7 +178,7 @@ describe('ApiKeyService.validate', () => {
 
   // --- Kill-switch removed: keys work with no env variable ------------------
   it('validates with no API_KEYS_ENABLED env (kill-switch fully removed)', async () => {
-    // The service no longer takes EnvironmentService — there is no env gate left.
+    // The service takes no EnvironmentService — there is no env gate.
     const { service, apiKeyRepo, userRepo } = makeDeps();
     apiKeyRepo.findById.mockResolvedValue(activeRow());
     userRepo.findById.mockResolvedValue(activeUser());
@@ -242,14 +242,13 @@ describe('ApiKeyService.validate', () => {
     });
   });
 
-  // --- #558 deny-observability: replaces the deleted /mcp Basic limiter's
-  // visibility. A revoked/dead key hammering validate() must not be SILENT: each
-  // deny emits a rate-limited operator WARN keyed on (apiKeyId, reason) AND
-  // increments api_key_auth_denied_total{reason}. The apiKeyId is only ever
-  // logged AFTER the JWT signature was verified (validate is reached post-verify),
-  // so it is a bounded, issued id — never an unverified attacker value. We assert
-  // the LOG (the counter is a no-op unless METRICS_PORT is set), NOT the 401 body
-  // (the response stays a uniform bare 401 — anti-enumeration).
+  // --- deny-observability: a revoked/dead key hammering validate() must not be
+  // SILENT. Each deny emits a rate-limited operator WARN keyed on (apiKeyId,
+  // reason) AND increments api_key_auth_denied_total{reason}. The apiKeyId is only
+  // ever logged AFTER the JWT signature was verified (validate is reached
+  // post-verify), so it is a bounded, issued id — never an unverified attacker
+  // value. We assert the LOG (the counter is a no-op unless METRICS_PORT is set),
+  // NOT the 401 body (the response stays a uniform bare 401 — anti-enumeration).
   describe('deny-observability WARN (rate-limited, per apiKeyId+reason)', () => {
     // Reset the counter mock so each test asserts only ITS OWN deny increments,
     // not calls leaked from a sibling test (the mock is module-level).

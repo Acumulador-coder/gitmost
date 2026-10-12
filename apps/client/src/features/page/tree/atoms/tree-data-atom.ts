@@ -100,7 +100,7 @@ export function flushPendingTreeDataWrites(): void {
 // are DISCARDED first (not flushed): a queued write firing after the sweep
 // would silently resurrect a removed key.
 //
-// The page-meta boot cache (#563) stores titles/icons too and shares this exact
+// The page-meta boot cache stores titles/icons too and shares this exact
 // lifecycle, so it is swept by the SAME function (covering all call sites — the
 // logout button and the SIGN-IN in use-auth.ts, and the 401 forced logout in
 // api-client.ts).
@@ -165,9 +165,9 @@ if (
 // lazy loads; websockets already keep every open tab live. Each tab keeps its
 // own in-memory tree — localStorage only seeds the next boot.
 const treeDataStorage = {
-  // KNOWN LATENT BUG (not fixed here — behavior predates #563 and a tree write is
-  // idempotently repaired by the next tree event / root refetch, so the blast
-  // radius is a stale sidebar rather than lost data): this `getItem` reads only
+  // KNOWN LATENT BUG (a tree write is idempotently repaired by the next tree
+  // event / root refetch, so the blast radius is a stale sidebar rather than lost
+  // data): this `getItem` reads only
   // what was FLUSHED to localStorage, ignoring `pendingWrites`. jotai re-reads
   // storage in the atom's onMount — i.e. every time the first subscriber mounts,
   // not just at init — so a sidebar remount INSIDE the 500 ms debounce window
@@ -177,7 +177,7 @@ const treeDataStorage = {
   // re-read serves the older on-disk blob back over the newer in-memory tree —
   // contradicting the "in-memory atom is the source of truth" claim above.
   // The page-meta boot cache (page-meta-cache-atom.ts) fixes BOTH in its own
-  // storage adapter; porting the fix here needs its own tests (follow-up issue).
+  // storage adapter; porting the fix here needs its own tests.
   getItem: (key: string, initialValue: SpaceTreeNode[]): SpaceTreeNode[] => {
     // Defensive: jsdom test shims may lack methods, stored JSON may be
     // corrupted or of a wrong shape. Any failure falls back to the empty tree.

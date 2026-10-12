@@ -202,9 +202,9 @@ describe('isHtmlEmbedFeatureEnabled', () => {
   });
 });
 
-// The htmlEmbed node renders inside a sandboxed iframe, so the per-write role
-// gate has been removed. `stripHtmlEmbedNodes` + `isHtmlEmbedFeatureEnabled`
-// remain ONLY to honor the workspace master toggle on the anonymous public-share
+// The htmlEmbed node renders inside a sandboxed iframe, so there is no per-write
+// role gate. `stripHtmlEmbedNodes` + `isHtmlEmbedFeatureEnabled` exist only to
+// honor the workspace master toggle on the anonymous public-share
 // read path — tested against the real share code in:
 //   - core/share/share-html-embed.spec.ts
 //

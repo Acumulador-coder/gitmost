@@ -9,8 +9,8 @@ import { tiptapExtensions } from '../collaboration.util';
 import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
 
 /**
- * Regression for the QA #119 callout findings (body-duplication re-verify +
- * "callout strips the whole body"). These reproduce the ACTUAL live merge path:
+ * Callout pages through the ACTUAL live merge path (no body duplication on
+ * resync, no stripping of the body):
  *
  *   live  = TiptapTransformer.toYdoc(editor JSON, tiptapExtensions)   (the
  *           collaboration server's materialization — schema defaults stamped)
@@ -18,8 +18,8 @@ import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
  *           (the engine round-trip the push side feeds into writePageBody)
  *
  * A page containing a callout (with a neighbouring heading + paragraphs) must:
- *   - merge with ZERO ops on an unchanged resync (no duplication — bug #1), and
- *   - NEVER lose blocks / collapse to empty (no strip — bug #2),
+ *   - merge with ZERO ops on an unchanged resync (no duplication), and
+ *   - NEVER lose blocks / collapse to empty,
  * across repeated cycles, for every editor-canonical callout type.
  */
 

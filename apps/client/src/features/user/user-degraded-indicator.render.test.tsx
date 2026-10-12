@@ -5,8 +5,8 @@ import { MemoryRouter } from "react-router-dom";
 import { Provider, createStore } from "jotai";
 
 /**
- * #641, part 3 — rule #8 render test of the OBSERVABLE property "degraded gate ⇒
- * the UserDegradedIndicator badge is in the document".
+ * Render test of the observable property "degraded gate ⇒ the
+ * UserDegradedIndicator badge is in the document".
  *
  * `resolveUserGate` (the pure decision) is unit-tested in user-provider-gate.test;
  * this mounts the REAL `UserProvider` and asserts the wiring `gate === "degraded"

@@ -17,14 +17,13 @@ import { canonicalizeFootnotes } from '@docmost/editor-ext';
  * FIRST REFERENCE (not markdown definition order), reused references deduped to a
  * single definition, and orphan definitions dropped.
  *
- * Since #345 the markdown parse runs through the canonical package
+ * The markdown parse runs through the canonical package
  * (`normalizeForeignMarkdown` -> `markdownToProseMirror`), which owns this
  * canonicalization: the input's GFM `[^id]` reference footnotes are normalized to
  * inline `^[…]`, and the parser assigns fresh sequential ids (`fn-*`) in
  * reference order while merging identical bodies — so we assert by definition
  * BODY order, not by the source labels. `canonicalizeFootnotes` remains wired as
- * an idempotent safety net (issue #228) and is a no-op on this already-canonical
- * output.
+ * an idempotent safety net and is a no-op on this already-canonical output.
  *
  * The DB/ydoc side-effects are stubbed: `getNewPagePosition` (DB query) and
  * `createYdoc` (Yjs encode) are spied, and `pageRepo.insertPage` captures the

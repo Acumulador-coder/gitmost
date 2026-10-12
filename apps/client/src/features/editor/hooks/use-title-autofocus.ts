@@ -47,8 +47,7 @@ export function useTitleAutofocus(
       if (!titleEditor?.isInitialized) return;
       titleEditor?.commands?.focus("end", { scrollIntoView: false });
     }, TITLE_AUTOFOCUS_DELAY_MS);
-    // Clear the pending focus if the editor changes or the component unmounts
-    // (also fixes the previously-uncancelled timer).
+    // Clear the pending focus if the editor changes or the component unmounts.
     return () => clearTimeout(timer);
   }, [titleEditor, resolved]);
 }

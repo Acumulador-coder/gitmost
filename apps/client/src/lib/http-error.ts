@@ -1,13 +1,9 @@
 import { reportSafetyMetric } from "@/lib/telemetry/safety-metrics";
 
 /**
- * Unified HTTP-error taxonomy (#641, Ф5 of the offline epic #638).
- *
- * BEFORE this module, every call-site read `error?.["status"]` directly
- * (page.tsx:132) or `error?.status ?? error?.response?.status`
- * (the eviction subscribers). That conflates three DISTINCT situations that the
- * offline-first work must treat differently, so they are classified here ONCE
- * and consumed by page.tsx, user-provider.tsx and both eviction subscribers:
+ * Unified HTTP-error taxonomy. Three DISTINCT situations the offline-first code
+ * must treat differently are classified here ONCE and consumed by page.tsx,
+ * user-provider.tsx and both eviction subscribers:
  *
  *  - AUTH (401/403/404) — the server ANSWERED with an access verdict. The page
  *    is gone / revoked; render not-found and let the global evictors drop the
@@ -30,7 +26,7 @@ import { reportSafetyMetric } from "@/lib/telemetry/safety-metrics";
  * A FOURTH, non-error situation the predicates deliberately do NOT misclassify:
  * "success-with-undefined". The 401 interceptor `return;`s (resolving the
  * promise with `undefined` data) on the exempt paths `/auth/collab-token` and
- * `/share/*` (api-client.ts:29-30). That is neither an error NOR real data: the
+ * `/share/*` (api-client.ts). That is neither an error NOR real data: the
  * query settles with `data === undefined` and NO error, so there is no error
  * object to hand these predicates. Passing `undefined`/`null` here therefore
  * returns `false` from every predicate — it is classified as nothing, and must
@@ -92,11 +88,10 @@ export function isAuthError(e: unknown): boolean {
  * or a `request` that left but got no `response`).
  *
  * A response WITH a status (auth or 5xx) is never transport, so this can never
- * swallow a 5xx into the local render (part 4). An arbitrary NON-axios throw (a
+ * swallow a 5xx into the local render. An arbitrary NON-axios throw (a
  * TypeError, a bug in a response transform) is ALSO not transport: it has no
  * `code` and is not axios-shaped, so it falls through to the error screen rather
- * than being masked as "offline" with zero operator signal (which would be the
- * part-4 failure mode arriving through a non-5xx door).
+ * than being masked as "offline" with zero operator signal.
  */
 export function isTransportError(e: unknown): boolean {
   const err = asHttpErrorLike(e);
@@ -126,7 +121,7 @@ export function isServerError(e: unknown): boolean {
  * Count + report a 5xx on an OFFLINE-CRITICAL request (/me, /pages/info,
  * /spaces/*). No-op for a transport error or any non-5xx — those are handled by
  * their own branches (transport → local render; auth → not-found). Uses the
- * ALWAYS-ON safety-metric channel (#640): counted, greppable, and best-effort
+ * ALWAYS-ON safety-metric channel: counted, greppable, and best-effort
  * delivered even though perf telemetry is default-off — because a partial outage
  * (one endpoint, one workspace) may never raise the server-side 5xx rate enough
  * to notice, and "never show an error" must not mean "never notice one".

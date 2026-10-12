@@ -355,15 +355,14 @@ export default function PageEditor({
   const editor = useEditor(
     {
       extensions,
-      // Ф7 (#643) — a CONSTANT `false`, NOT the live `editable`, and `editable`
-      // is out of the deps below. `editable` (= derivePageChromeCanEdit(livePage))
-      // flips false→true when `/pages/info` lands; if it were an option dep the
-      // editor would be destroyed+recreated at the exact measured moment (a visual
-      // jump in the Ф3 window). The `editor.setEditable(isBodyEditable(...))`
-      // effect below is the SOLE owner of editability — it already forces `false`
-      // on mount (static / not-yet-remote-confirmed), so seeding `false` here is
-      // behavior-identical while removing the recreation. `editable` participates
-      // in no other editor-option closure (it is only read in the render body).
+      // A CONSTANT `false`, NOT the live `editable`, and `editable` is out of the
+      // deps below. `editable` (= derivePageChromeCanEdit(livePage)) flips
+      // false→true when `/pages/info` lands; as an option dep it would destroy and
+      // recreate the editor at that moment (a visual jump). The
+      // `editor.setEditable(isBodyEditable(...))` effect below is the SOLE owner of
+      // editability — it already forces `false` on mount (static /
+      // not-yet-remote-confirmed). `editable` participates in no other
+      // editor-option closure (it is only read in the render body).
       editable: false,
       immediatelyRender: true,
       shouldRerenderOnTransaction: false,
@@ -430,16 +429,15 @@ export default function PageEditor({
           handleScrollTo(editor);
           editorRef.current = editor;
 
-          // #355 — perf instrumentation. Skip ALL of it when telemetry is
-          // disabled (F1 flag off) or this session isn't sampled: crucially NO
+          // Perf instrumentation. Skip ALL of it when telemetry is
+          // disabled or this session isn't sampled: crucially NO
           // dispatch wrapping, so a non-collecting session pays zero
           // per-transaction cost.
           //
-          // #639 — page_open_body_ms is NO LONGER measured here. onCreate fires
-          // on TipTap object CONSTRUCTION (2-3x per open, on a still-skeleton
-          // screen), not on paint, so it would report a false win once the
-          // local-first gates are lifted. It moved to the body-paint latch below
-          // (notePageBodyPaint), fed from the REAL paint points.
+          // page_open_body_ms is NOT measured here: onCreate fires on
+          // TipTap object CONSTRUCTION (2-3x per open, on a still-skeleton
+          // screen), not on paint. It is measured by the body-paint latch
+          // below (notePageBodyPaint), fed from the REAL paint points.
           if (isVitalsActive()) {
             // editor_tx_ms: time the SYNCHRONOUS part of applying each
             // transaction (state.apply + updateState) by wrapping the view's
@@ -470,13 +468,13 @@ export default function PageEditor({
       onUpdate() {
         // Only schedule the debounce here — the whole-doc getJSON() serialization
         // happens INSIDE the debounced callback (see usePageContentCache), so it
-        // no longer runs synchronously on every (local or remote) keystroke.
+        // does not run synchronously on every (local or remote) keystroke.
         debouncedUpdateContent();
       },
     },
-    // Ф7 (#643) — `editable` intentionally removed (see the constant above): the
-    // setEditable effect owns editability, so an `editable` flip no longer
-    // recreates the editor.
+    // `editable` is intentionally not a dep (see the constant above): the
+    // setEditable effect owns editability, so an `editable` flip does not
+    // recreate the editor.
     [pageId, extensions],
   );
 
@@ -609,13 +607,13 @@ export default function PageEditor({
     };
   }, []);
 
-  // #564 — a page switch that does NOT remount this component (page.tsx keys
+  // A page switch that does NOT remount this component (page.tsx keys
   // FullEditor by page.id today, but nothing here may rely on that) must not
   // carry the previous page's sync state over: with local-first that would swap
   // the new page straight to a live editor on the strength of the OLD page's
   // flags, i.e. paint the previous page's ydoc state. Reset during render, so it
   // lands BEFORE any effect of the new pageId runs (React's sanctioned
-  // "adjust state when a prop changes" pattern). #709 — also keyed by the
+  // "adjust state when a prop changes" pattern). Also keyed by the
   // session identity (the cache may hand out another session than the one bound
   // in render); the flags come from the new session, the defaults without one.
   const [syncStateKey, setSyncStateKey] = useState({
@@ -645,7 +643,7 @@ export default function PageEditor({
     // because the state reset above recomputes their inputs.
   }
 
-  // #709 — follow the bound session. Runs after the render that carried the
+  // Follow the bound session. Runs after the render that carried the
   // reset block. Subscribe FIRST, then re-read everything at once, so an event
   // landing between that render and the subscription is not lost; every
   // notification re-reads everything again. The listener is called
@@ -769,8 +767,8 @@ export default function PageEditor({
     const collabSynced = isCollabSynced(yjsConnectionStatus, isSynced);
     if (collabSynced && !isRemoteConfirmedRef.current) {
       // Sticky: the remote room has reconciled this page's doc at least once, so
-      // local writes can no longer clobber unseen server content. A later drop
-      // does not revoke it (today's post-sync offline editing is unchanged).
+      // local writes cannot clobber unseen server content. A later drop does not
+      // revoke it (post-sync offline editing stays allowed).
       isRemoteConfirmedRef.current = true;
       setIsRemoteConfirmed(true);
     }
@@ -801,7 +799,7 @@ export default function PageEditor({
     showStatic,
   ]);
 
-  // #564 — re-run the plugin appendTransaction pass once writes are allowed, for
+  // Re-run the plugin appendTransaction pass once writes are allowed, for
   // the plugins whose pass the guard rejected during the read-only window.
   //
   // Scope, precisely: an EMPTY transaction only revives plugins whose
@@ -890,7 +888,7 @@ export default function PageEditor({
     </div>
   );
 
-  // Ф7 (#643), parts 3 + 7 — the BODY has three states, owned here:
+  // The BODY has three states, owned here:
   //   1. local ydoc synced + NON-EMPTY → live read-only editor (`!showStatic`);
   //   2. ydoc empty/not-synced, authoritative content exists → static copy;
   //   3. ydoc empty/not-synced, NO authoritative content yet → SKELETON.
@@ -1045,10 +1043,9 @@ function StaticBodyEditor({
   );
 }
 
-// Ф7 (#643) — the body-only loading placeholder (the title + byline chrome
-// already paints from the #563 meta cache above this editor). Approximates the
-// first content lines so a first visit / unresolved body no longer flashes an
-// empty editor.
+// Body-only loading placeholder (the title + byline chrome already paints from
+// the meta cache above this editor). Approximates the first content lines so a
+// first visit / unresolved body does not flash an empty editor.
 function BodySkeleton() {
   return (
     <div data-testid="body-skeleton" aria-hidden>

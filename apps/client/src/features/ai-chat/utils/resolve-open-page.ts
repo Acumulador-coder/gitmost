@@ -1,7 +1,7 @@
 /**
  * Resolve the AUTHORITATIVE "open page" context to send with the chat stream (and
  * to bind on the server) from the page-metadata query result and the current route
- * page id (#665 live-bug fix).
+ * page id.
  *
  * `usePageMetaQuery` is declared with `placeholderData: keepPreviousData`, so when
  * it is disabled (off a page — e.g. on /home) its `data` does NOT become null: it

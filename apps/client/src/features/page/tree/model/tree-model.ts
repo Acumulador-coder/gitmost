@@ -44,17 +44,14 @@ export const treeModel = {
   },
 
   // A branch is "unloaded" when the server says it HAS children (`hasChildren`)
-  // but none are present locally. The canonical unloaded form in this codebase
-  // is `children: []` (produced by `pageToTreeNode` and by `pruneCollapsedChildren`
-  // resetting collapsed branches), NOT `children: undefined` — so a predicate that
-  // only checks `=== undefined` misses the real case and materializes a misleading
-  // partial list (#525). This is the SINGLE source of truth for "should a
-  // fetch/materialize be deferred?", shared by the lazy-load gate (`handleToggle`)
-  // and the realtime insert paths (`insertByPosition` / `placeByPosition`), so they
-  // can never drift apart again. (The local raw `insert` primitive and its DnD/
-  // create-page callers do NOT yet route through this predicate — see #525
-  // follow-up.) A parent WITHOUT `hasChildren` is genuinely empty
-  // (no server children) — inserting its first child is correct, not deferred.
+  // but none are present locally. The canonical unloaded form is `children: []`
+  // (produced by `pageToTreeNode` and by `pruneCollapsedChildren`), NOT
+  // `children: undefined`, so an `=== undefined` check misses the real case.
+  // Single source of truth for "should a fetch/materialize be deferred?",
+  // shared by the lazy-load gate (`handleToggle`) and the realtime insert paths
+  // (`insertByPosition` / `placeByPosition`). The raw `insert` primitive and its
+  // DnD/create-page callers do not route through it. A parent WITHOUT
+  // `hasChildren` is genuinely empty — inserting its first child is correct.
   isUnloadedBranch<T extends object>(
     node: TreeNode<T> | null | undefined,
   ): boolean {
@@ -152,7 +149,7 @@ export const treeModel = {
     // here would MATERIALIZE a misleading partial child list (`[node]`) that
     // defeats the lazy-load gate — which fetches only when children are
     // absent/empty — so the parent's OTHER real children would never load and the
-    // moved/added node would be the only one shown (a silent data loss, #159 #1).
+    // moved/added node would be the only one shown (a silent data loss).
     // Instead, leave the children unloaded and just flag `hasChildren` so the
     // chevron appears; expanding fetches the FULL set (including this node).
     if (parent && treeModel.isUnloadedBranch(parent)) {
@@ -249,7 +246,7 @@ export const treeModel = {
   // expansion). Unlike `appendChildren` (add-only), this DROPS children that are
   // no longer present and reorders to `fresh` — so a move/delete/rename that
   // happened inside a loaded branch while events were missed (a socket reconnect
-  // gap) is reflected, not left stale (#159 #8). Only used to reconcile an
+  // gap) is reflected, not left stale. Only used to reconcile an
   // already-loaded branch against a fresh fetch; a parent with no loaded children
   // (`children === undefined`) is left untouched (lazy-load handles it).
   reconcileChildren<T extends object>(
@@ -315,7 +312,7 @@ export const treeModel = {
     const source = treeModel.find(tree, sourceId);
     if (!source) return tree;
     if (to.parentId !== null && !treeModel.find(tree, to.parentId)) return tree;
-    // Cycle guard, mirroring `move`'s `isDescendant` check (#206 ui-state-races-1).
+    // Cycle guard, mirroring `move`'s `isDescendant` check.
     // If the destination parent is INSIDE the moved node's own subtree (reachable
     // when server-authoritative move events arrive out of order — e.g. X moved
     // under Y, then Y under X, but on this receiver Y is still inside X), then

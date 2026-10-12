@@ -303,9 +303,9 @@ describe('buildGitBackendCgiEnv', () => {
   };
 
   it('points PATH_INFO at the vault dir (no .git suffix)', () => {
-    // Regression guard: the vault lives at <root>/<spaceId> (no .git suffix), so
-    // PATH_INFO must be /<spaceId>/<subpath>. A `.git` suffix made git
-    // http-backend resolve <root>/<spaceId>.git and 404 every fetch/push.
+    // The vault lives at <root>/<spaceId> (no .git suffix), so PATH_INFO must be
+    // /<spaceId>/<subpath>. A `.git` suffix would make git http-backend resolve
+    // <root>/<spaceId>.git and 404 every fetch/push.
     const env = buildGitBackendCgiEnv(base, '/vaults');
     expect(env.PATH_INFO).toBe('/space-1/info/refs');
     expect(env.PATH_INFO).not.toContain('.git');

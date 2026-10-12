@@ -1,23 +1,16 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * Vector-RAG storage for the AI agent (§5.5 / §6.7 stage D / §14[M6,M7]).
+ * Vector-RAG storage for the AI agent.
  *
  * Creates the pgvector `vector` extension and the `page_embeddings` table that
  * backs semantic search. Columns mirror the hand-written `PageEmbeddings`
  * Kysely type (apps/server/src/database/types/embeddings.types.ts) one-to-one.
  *
- * The indexer + `semanticSearch` tool are a later unit; this migration only
- * provisions the extension, the table and its indexes.
- *
- * The `embedding` column is `vector(EMBEDDING_DIMENSIONS)`. The dimension is
- * FIXED at table-creation time and must match the embedding model in use.
- * 1536 is the default for OpenAI `text-embedding-3-small` / `-ada-002`.
- * Switching to a model with a DIFFERENT dimension (e.g. Gemini
- * `text-embedding-004` = 768, Ollama `nomic-embed-text` = 768) requires
- * re-creating the column and rebuilding the HNSW index. The actual model and
- * its dimension are recorded PER ROW in `model_name` / `model_dimensions` so a
- * future migration can detect and re-index mismatched rows.
+ * The `embedding` column is created as `vector(EMBEDDING_DIMENSIONS)` (1536,
+ * OpenAI `text-embedding-3-small`); 20260617T140000 relaxes it to a
+ * dimension-agnostic `vector`. The model and dimension are recorded per row in
+ * `model_name` / `model_dimensions`.
  */
 const EMBEDDING_DIMENSIONS = 1536;
 

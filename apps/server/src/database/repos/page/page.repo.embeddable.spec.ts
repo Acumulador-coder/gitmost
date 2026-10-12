@@ -8,7 +8,7 @@ import {
 } from 'kysely';
 
 /**
- * F6 regression guard for the embeddable-page predicate.
+ * Guard for the embeddable-page predicate.
  *
  * The predicate is shared by `countEmbeddablePages` (the "Indexed N of M" coverage
  * denominator) and `getEmbeddablePageIds` (the exact set a full reindex iterates).
@@ -23,8 +23,8 @@ import {
  * whose LaTeX lives in `attrs.text` and has no `generateText` serializer. A
  * math-ONLY page therefore yields empty `text_content` and zero embeddings; if the
  * predicate matched its `attrs.text` it would land in the denominator but
- * `reindexPage` would no-op on it, pinning "Indexed N of M" below 100% forever —
- * the exact bug this feature fixes. The `"type":"text"` marker matches only real
+ * `reindexPage` would no-op on it, pinning "Indexed N of M" below 100% forever.
+ * The `"type":"text"` marker matches only real
  * text nodes (what `jsonToText` extracts), keeping the predicate consistent with
  * what gets indexed.
  *

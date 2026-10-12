@@ -1,28 +1,22 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * `ai_chat_runs` — the agent RUN as a first-class, server-side lifecycle object
- * (#184 phase 1: autonomous agent runs detached from the browser window).
+ * `ai_chat_runs` — the agent RUN as a server-side lifecycle object, detached
+ * from the browser window.
  *
- * Until now an agent turn lived ONLY as long as the HTTP request was open
- * (`res.hijack()` in ai-chat.controller.ts); a browser disconnect aborted it.
- * This table makes a turn a persistent object the server owns: it is created
- * when a run starts (inserted directly as 'running' in phase 1 — 'pending' is
- * only this column's default + a reserved value, never written by code yet) and
- * advances to succeeded|failed|aborted, surviving the subscriber (browser) going
- * away when it settles. The DB is the source of
- * truth — a later client reconnects/sees the result by reading this row plus the
+ * A run is inserted as 'running' when it starts ('pending' is only the column
+ * default + a reserved value, not written by code) and advances to
+ * succeeded|failed|aborted whether or not the browser is still subscribed. The
+ * DB is the source of truth: a reconnecting client reads this row plus the
  * assistant message it projects (`assistant_message_id`).
  *
- * The assistant message row (#183 step-granular durability) is the PROJECTION of
- * a run's output; this row is the run's LIFECYCLE. They are linked by
- * `assistant_message_id` (SET NULL if the message is later pruned).
+ * The assistant message row is the PROJECTION of a run's output; this row is
+ * the run's LIFECYCLE. They are linked by `assistant_message_id` (SET NULL if
+ * the message is later pruned).
  *
  * `status`  : 'pending' | 'running' | 'succeeded' | 'failed' | 'aborted'.
  * `trigger` : 'user' | 'autostart' | 'schedule' | 'api' | 'continue' — only
- *             'user' is produced in phase 1; the others are reserved for the
- *             autonomy triggers deferred to phase 2 so they need no later
- *             migration.
+ *             'user' is produced; the others are reserved values.
  *
  * ONE ACTIVE RUN PER CHAT is enforced by a partial unique index on `chat_id`
  * WHERE status IN ('pending','running'): an autonomous run and a user run can

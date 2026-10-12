@@ -30,8 +30,8 @@ const SPECIAL_NODE_TYPES = new Set([
   "callout",
 ]);
 
-// Pure core of the history diff (extracted from history-editor.tsx, behaviour
-// preserving): given the editor schema and two ProseMirror document JSONs, return
+// Pure core of the history diff: given the editor schema and two ProseMirror
+// document JSONs, return
 // the decoration set plus added/deleted/total counts. The widget decorations carry
 // lazy DOM-building callbacks (only run by ProseMirror at render time), so this
 // function itself does no DOM work and needs no live editor instance.

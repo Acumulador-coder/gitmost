@@ -8,7 +8,7 @@ import { viewerTimezone } from "@/features/page-history/work-time/work-time-serv
 const DAY_COUNTS_STALE_TIME = 5 * 60 * 1000;
 
 /**
- * #568 — revisions-per-day aggregate for the mini-calendar heatmap. The whole
+ * Revisions-per-day aggregate for the mini-calendar heatmap. The whole
  * history is fetched in one request (no `month` param) so month navigation is
  * purely client-side. `tz` is the SAME viewer zone the dense list groups days
  * in, so a heatmap cell and its list rows can never drift onto different days.

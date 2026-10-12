@@ -3,7 +3,7 @@ import { IconCloudOff } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
 
 /**
- * The single user-visible signal that the session is DEGRADED (#641, part 3):
+ * The single user-visible signal that the session is DEGRADED:
  * `/me` failed but a persisted/known user let the app stay mounted. Silent on a
  * healthy connection (rendered only on the degraded gate branch), unobtrusive,
  * and fixed to a corner so it never displaces app content. It is the only thing

@@ -5,8 +5,8 @@ import type { IAiChatMessageRow } from "@/features/ai-chat/types/ai-chat.types.t
  *
  * - `contextTokens` (numerator): how much the conversation now occupies in the
  *   model's context window. Read from the most recent row carrying a context
- *   figure — `contextTokens` (final-step input+output) on rows recorded after
- *   this shipped, else that turn's legacy `usage` total for older rows.
+ *   figure — `contextTokens` (final-step input+output), else that turn's
+ *   `usage` total on rows without it.
  * - `maxContextTokens` (denominator): the model's configured max window, stamped
  *   alongside `contextTokens` on a completed turn.
  *

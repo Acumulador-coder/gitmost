@@ -1,9 +1,8 @@
 import { type Kysely } from 'kysely';
 
 export async function up(db: Kysely<any>): Promise<void> {
-  // Per-role control over the new-chat auto-start behavior. Previously picking a
-  // role card ALWAYS sent a hardcoded launch message and started the dialog.
-  // These two columns make that configurable per role.
+  // Per-role control over the new-chat auto-start behavior: whether picking a
+  // role card sends a launch message and starts the dialog, and with what text.
   await db.schema
     .alterTable('ai_agent_roles')
     // When true (default), picking the role auto-sends a launch message and

@@ -3,34 +3,23 @@ import * as Y from 'yjs';
 import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
 
 /**
- * Regression for the HIGH-severity runaway whole-body duplication: a page body
- * was RE-APPENDED in full on every git-sync reconcile cycle, unbounded, with NO
- * client connected.
+ * A page body must not be re-appended on every git-sync reconcile cycle.
  *
- * ROOT CAUSE (confirmed in-process against the real failing page): the LIVE Yjs
- * document materializes the editor-schema default `indent: 0` on every
- * paragraph/heading (and on the paragraph inside every list item, callout, and
- * table cell), but a body re-imported from git — parsed from clean markdown —
- * carries NO indent attribute. So every live block's comparison key differed from
- * the same block coming back from git; the three-way merge could anchor on
- * NOTHING, and the trailing unit that git's export already contained (but the
- * merge could not match against the byte-identical live tail) was re-appended
- * each cycle. Each grown export then diverged from the last-export base by one
- * more unit — a self-sustaining loop.
+ * The LIVE Yjs document materializes the editor-schema default `indent: 0` on
+ * every paragraph/heading (and on the paragraph inside every list item, callout
+ * and table cell), while a body re-imported from git carries no indent attribute.
+ * If that default were part of the block key, the three-way merge could anchor on
+ * nothing and would re-append the trailing unit every cycle, each grown export
+ * diverging from the base by one more unit — a self-sustaining loop.
+ * `serializeXmlNode` drops every attr equal to its schema default, so a live
+ * block compares equal to its git-round-tripped twin and the resync is a no-op.
+ * `yjs-body-merge.schema-defaults.spec.ts` covers the rest of the class
+ * (image.align, link mark internal, …).
  *
- * The fix normalizes the materialized default (`indent: 0`) out of the block key
- * (the schema-derived `serializeXmlNode` normalization in yjs-body-merge.ts drops
- * every attr equal to its ProseMirror-schema default; `indent: 0` is one such),
- * so a live block compares equal to its git-round-tripped twin and the resync is
- * a true no-op. The sibling `yjs-body-merge.schema-defaults.spec.ts` covers the
- * rest of the bug class (image.align, link mark internal, …).
- *
- * These tests model that EXACTLY at the Yjs level: a LIVE fragment whose blocks
- * carry `indent: 0` + block ids, versus a git-derived fragment of the SAME
- * content with neither — for a body built from BYTE-IDENTICAL units that each
- * contain a heading, a paragraph, a callout, and a table with empty cells (the
- * trigger). RED before the fix (the merge applies > 0 ops and the body grows),
- * GREEN after (0 ops, no growth).
+ * Modelled at the Yjs level: a LIVE fragment whose blocks carry `indent: 0` +
+ * block ids, versus a git-derived fragment of the same content with neither, for
+ * a body of byte-identical units each containing a heading, a paragraph, a
+ * callout, and a table with empty cells. Expect 0 ops and no growth.
  */
 
 type Attrs = Record<string, string | number>;

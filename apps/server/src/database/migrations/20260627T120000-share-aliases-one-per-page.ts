@@ -1,14 +1,13 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * Enforce "a page has EXACTLY ONE custom address" at the DB level. The original
- * `share_aliases` table only had a unique index on `(workspace_id, alias)`, so a
- * page could accumulate several alias rows (every slug edit used to INSERT a new
- * one), leaving orphan `/l/<old>` links live forever and making the share
- * modal's `findByPageId` lookup nondeterministic.
+ * Enforce "a page has EXACTLY ONE custom address" at the DB level. With only a
+ * unique index on `(workspace_id, alias)`, a page could accumulate several
+ * alias rows, leaving orphan `/l/<old>` links live and making the share modal's
+ * `findByPageId` lookup nondeterministic.
  *
- * We first dedup any pre-existing rows (keeping the NEWEST per page — the same
- * "current" choice the read path now makes), then add a PARTIAL unique index on
+ * We first dedup existing rows (keeping the NEWEST per page — the same
+ * "current" choice the read path makes), then add a PARTIAL unique index on
  * `(workspace_id, page_id)`. It is partial (`WHERE page_id IS NOT NULL`) so that
  * multiple DANGLING aliases (target page deleted -> `page_id` SET NULL) can
  * still coexist without colliding.
@@ -17,8 +16,8 @@ import { type Kysely, sql } from 'kysely';
  * every alias row but the newest per page. Those duplicates were live `/l/<old>`
  * pointers (resolved by name via `findByAliasAndWorkspace`, not by page), so
  * after this upgrade any such OLD vanity link starts returning the SPA 404. This
- * is the point — it kills the orphan rows the pre-invariant bug accumulated —
- * but `down()` only drops the unique index; it CANNOT restore the deleted rows.
+ * is intended, but `down()` only drops the unique index; it CANNOT restore the
+ * deleted rows.
  */
 export async function up(db: Kysely<any>): Promise<void> {
   // Reap legacy duplicates: for each (workspace_id, page_id) keep only the row

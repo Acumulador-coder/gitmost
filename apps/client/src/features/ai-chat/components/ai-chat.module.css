@@ -57,9 +57,8 @@
 
 /* The canonical converter renders list items through the editor schema, which
    wraps each item's content in a <p> (listItem content is `paragraph+`). Drop
-   that paragraph's block margin so list items render TIGHT (no extra vertical
-   gap), matching the previous marked output — same rule already applied to
-   table cells above (issue #347). */
+   that paragraph's block margin so list items render TIGHT, like the table-cell
+   rule above. */
 .markdown li p {
     margin: 0;
 }

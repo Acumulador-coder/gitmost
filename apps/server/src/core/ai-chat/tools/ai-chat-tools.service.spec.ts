@@ -2,13 +2,12 @@ import { AiChatToolsService } from './ai-chat-tools.service';
 import * as loader from './docmost-client.loader';
 import type { DocmostClientLike } from './docmost-client.loader';
 
-// Test-double type for the loopback client. `DocmostClientLike` is now DERIVED
-// from the real `DocmostClient` (issue #446), so its method RETURN types are the
-// concrete client shapes. These stubs deliberately return minimal recording
-// shapes (e.g. `{ ok: true }`), which no longer satisfy those concrete returns —
-// so the doubles are typed with the same method NAMES but loose async returns.
-// Each is still cast to `DocmostClientLike` at the (return-erased) mock site, so
-// the positional-call type-safety on the PRODUCTION client is unaffected.
+// Test-double type for the loopback client. `DocmostClientLike` is DERIVED from
+// the real `DocmostClient`, so its method RETURN types are the concrete client
+// shapes. These stubs return minimal recording shapes (e.g. `{ ok: true }`), so
+// the doubles are typed with the same method NAMES but loose async returns. Each
+// is still cast to `DocmostClientLike` at the (return-erased) mock site, so the
+// positional-call type-safety on the PRODUCTION client is unaffected.
 type FakeDocmostClient = Partial<
   Record<keyof DocmostClientLike, (...args: any[]) => Promise<any>>
 >;
@@ -521,14 +520,14 @@ describe('AiChatToolsService node-arg JSON-string coercion', () => {
 });
 
 /**
- * Model-friendly tool-call validation (#190): when the model drops a required
+ * Model-friendly tool-call validation: when the model drops a required
  * `pageId` in a parallel/batch tool call, the built-in input schema must return
  * a CLEAR, actionable message (naming the parameter, reminding it not to drop
  * ids in batches) instead of zod's raw "expected string, received undefined" —
  * while a valid call still validates. This is wired centrally via
- * modelFriendlyInput, so it applies to every in-app tool; createComment (the
- * tool from the bug report) and a sharedTool-built tool (getPage's sibling
- * getOutline) are exercised here end-to-end through forUser().
+ * modelFriendlyInput, so it applies to every in-app tool; createComment and a
+ * sharedTool-built tool (getOutline) are exercised here end-to-end through
+ * forUser().
  */
 describe('AiChatToolsService model-friendly input validation (#190)', () => {
   const fakeClient: FakeDocmostClient = {};
@@ -593,7 +592,7 @@ describe('AiChatToolsService model-friendly input validation (#190)', () => {
     expect(result.success).toBe(false);
     expect(result.error?.message).toContain('parameter "pageId": missing (required)');
     expect(result.error?.message).toContain('parallel/batch tool calls');
-    // Not the raw zod text the model previously received.
+    // Not zod's raw text.
     expect(result.error?.message).not.toContain('received undefined');
   });
 
@@ -634,12 +633,12 @@ describe('AiChatToolsService model-friendly input validation (#190)', () => {
 });
 
 /**
- * #294 F1 — the contract-parity test introspects only the ADVERTISED schema keys
- * (buildShape), not the execute bodies. Most execs are unchanged pass-throughs,
- * but two wirings actually CHANGED in the migration and are otherwise untested:
- *   - movePage now forwards the newly-added optional `position` field to the
- *     client (client.movePage(pageId, parentPageId, position));
- *   - the table trio unified its `tableRef` param to `table` and must forward it
+ * The contract-parity test introspects only the ADVERTISED schema keys
+ * (buildShape), not the execute bodies. Most execs are plain pass-throughs; two
+ * wirings are not and are otherwise untested:
+ *   - movePage forwards the optional `position` field to the client
+ *     (client.movePage(pageId, parentPageId, position));
+ *   - the table trio takes its param as `table` and must forward it
  *     positionally. A field destructured under the wrong name would silently pass
  *     `undefined` to the client (execute is `any`-cast, so tsc won't catch it).
  */
@@ -747,8 +746,8 @@ describe('AiChatToolsService #294 changed execute wirings', () => {
 });
 
 /**
- * #410 — the footnote + image tools were promoted from MCP-only into the shared
- * registry and are now wired in-app. Assert they are REGISTERED in the in-app
+ * The footnote + image tools come from the shared registry and are wired in-app.
+ * Assert they are REGISTERED in the in-app
  * toolset and forward their args to the client with the correct arg->method
  * mapping (the schema fields `imageUrl`/`attachmentId` map onto the client's
  * positional `url`/`oldAttachmentId`). A field destructured under the wrong name

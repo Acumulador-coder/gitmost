@@ -49,7 +49,7 @@ describe("computeSpaceSlug", () => {
 });
 
 // ---------------------------------------------------------------------------
-// decodeBase64ToSvgString — the draw.io editor LOAD path (#584).
+// decodeBase64ToSvgString — the draw.io editor LOAD path.
 //
 // When opening an existing diagram, drawio-menu's handleOpen reads the fetched
 // `.drawio.svg` attachment as a base64 `data:` URL and must hand the editor a

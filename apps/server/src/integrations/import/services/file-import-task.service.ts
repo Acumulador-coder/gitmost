@@ -473,10 +473,10 @@ export class FileImportTaskService {
                 // reference footnotes, then serialize to HTML so the shared HTML
                 // pipeline below (processAttachments + formatImportHtml +
                 // processHTML) keeps handling `.md` and `.html` imports
-                // uniformly. The markdown PARSE no longer goes through the
-                // editor-ext markdown layer (issue #345) — the drift source is
-                // gone. The PM -> HTML -> PM hop that follows is lossless
-                // plumbing for attachment/link resolution, NOT a second parse.
+                // uniformly. The markdown PARSE does not go through the
+                // editor-ext markdown layer. The PM -> HTML -> PM hop that
+                // follows is lossless plumbing for attachment/link resolution,
+                // NOT a second parse.
                 content = jsonToHtml(
                   await markdownToProseMirror(normalizeForeignMarkdown(content)),
                 );

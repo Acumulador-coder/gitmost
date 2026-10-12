@@ -37,9 +37,8 @@ describe('computeHistoryJob (#370 — shared trailing idle pipeline)', () => {
     expect(jobId).toBe(PAGE_ID);
   });
 
-  // #370 review round-1 WARNING: the max-wait ceiling prevents autosnapshot
-  // starvation during a continuous editing session (the trailing timer would
-  // otherwise re-arm forever and never fire).
+  // The max-wait ceiling prevents autosnapshot starvation during a continuous
+  // editing session (the trailing timer would otherwise re-arm forever).
   describe('max-wait ceiling', () => {
     const T0 = 1_000_000; // arbitrary fixed epoch for deterministic tests
 

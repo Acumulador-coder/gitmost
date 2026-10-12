@@ -47,8 +47,8 @@ export function sameRunFact(a: DeltaRunFact, b: DeltaRunFact): boolean {
 }
 
 /**
- * The degraded-poll DELTA transport (#491), extracted from `AiChatWindow` so it is
- * unit-testable in isolation (#555 W1). While `armed` (the thread's FSM entered a
+ * The degraded-poll DELTA transport, kept out of `AiChatWindow` so it is
+ * unit-testable in isolation. While `armed` (the thread's FSM entered a
  * poll-bearing recovery) AND `enabled` (the window is open) on a chat, it polls
  * `POST /ai-chat/messages/delta` every {@link DELTA_POLL_INTERVAL_MS}: the endpoint
  * returns only the rows CHANGED since the previous cursor (+ the run fact) in ONE
@@ -58,11 +58,11 @@ export function sameRunFact(a: DeltaRunFact, b: DeltaRunFact): boolean {
  * row from a fraction of the wire cost.
  *
  * It RETURNS the latest run fact so the WINDOW can forward it to the thread
- * (`polledRunFact` prop), where the FSM consumes it (#555 S3): a fresh NEGATIVE
- * fact quenches a stale `polling` after merging the persisted reply (I3), instead
- * of waiting for the terminal row. The cursor and
- * the surfaced fact RESET when the chat changes or the poll (dis)arms — the delta
- * chain is scoped to ONE resume attempt of ONE chat (invariant 8).
+ * (`polledRunFact` prop), where the FSM consumes it: a fresh NEGATIVE fact
+ * quenches a stale `polling` after merging the persisted reply (I3), instead of
+ * waiting for the terminal row. The cursor and the surfaced fact RESET when the
+ * chat changes or the poll (dis)arms — the delta chain is scoped to ONE resume
+ * attempt of ONE chat (invariant 8).
  */
 export function useAiChatDeltaPoll(params: {
   chatId: string | null | undefined;

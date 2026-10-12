@@ -13,18 +13,16 @@ import {
 // checked here for friendly 409s before the insert races the constraint).
 export const ACTIVE_RUN_STATUSES = ['pending', 'running'] as const;
 
-// Crash-recovery sweep recency threshold (mirrors AiChatMessageRepo.sweepStreaming,
-// #183): when a staleness window is supplied, a 'running'/'pending' run is only
-// swept to 'aborted' once it has been UNTOUCHED for this long, so a sibling
-// replica's boot-sweep can never abort a run another replica is actively
-// executing. The runner bumps `updatedAt` on every step, so a live run never
-// matches. PHASE 1 is single-process and the boot sweep passes NO window (every
-// dangling run is settled unconditionally — see sweepRunning / F1). This constant
-// is the window to reintroduce for the phase-2 multi-instance timer sweep.
+// Crash-recovery sweep recency threshold (mirrors AiChatMessageRepo.sweepStreaming):
+// when a staleness window is supplied, a 'running'/'pending' run is only swept
+// to 'aborted' once it has been UNTOUCHED for this long, so a sibling replica
+// cannot abort a run another replica is actively executing. The runner bumps
+// `updatedAt` on every step, so a live run never matches. The boot sweep passes
+// NO window (see sweepRunning).
 export const SWEEP_RUN_STALE_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
- * Repository for `ai_chat_runs` (#184 phase 1): the agent run as a first-class,
+ * Repository for `ai_chat_runs`: the agent run as a first-class,
  * server-side lifecycle object detached from the HTTP request. The run row is the
  * point a client subscribes/reconnects to (by `id` or by chat); the assistant
  * message it links to (`assistantMessageId`) is the #183 projection of its output.
@@ -148,12 +146,12 @@ export class AiChatRunRepo {
   }
 
   /**
-   * #487: CONDITIONAL terminal finalize — flip a run to a terminal status and
+   * CONDITIONAL terminal finalize — flip a run to a terminal status and
    * stamp `finished_at` ONLY while it is still active (pending|running), mirroring
    * the assistant message's `onlyIfStreaming` guard. A double-settle (a late or
    * second writer, a supersede applying a zombie's intended, a reconcile stamp)
    * matches NOTHING once the row is terminal and is a benign no-op — so a terminal
-   * status can never be clobbered by a later writer (last-writer-wins is gone).
+   * status can never be clobbered by a later writer.
    *
    * Returns the updated row when it WAS active (this call wrote it), else
    * undefined (the row was already terminal — another writer won). The caller
@@ -212,21 +210,18 @@ export class AiChatRunRepo {
    * terminal status — to 'aborted', stamping `finished_at`. Returns the number
    * swept. Workspace-wide on purpose (a crash can dangle runs in any workspace).
    *
-   * F1 (DECISION C): the BOOT sweep is UNCONDITIONAL — it passes no `staleMs`, so
-   * EVERY dangling run is settled regardless of how recently it was touched. On a
-   * fresh single-process boot any pending|running run is definitionally hung (no
-   * runner is alive to own it), so a fast restart (deploy/OOM within minutes of
-   * the last step) no longer leaves a run stuck 'running' forever — which would
-   * make the one-active-run gate 409 every future turn in that chat.
+   * The BOOT sweep is UNCONDITIONAL — it passes no `staleMs`, so every dangling
+   * run is settled regardless of how recently it was touched: on a fresh
+   * single-process boot no runner is alive to own a pending|running run, and a
+   * run left 'running' would make the one-active-run gate 409 every future turn
+   * in that chat.
    *
-   * The optional `staleMs` window is reintroduced ONLY for the future phase-2
-   * multi-instance timer sweep (see {@link SWEEP_RUN_STALE_MS}): there a booting
-   * replica must NOT abort a run another replica is actively executing, so it
-   * sweeps only runs UNTOUCHED past the window. Phase 1 is single-process, so the
-   * boot path supplies no window.
+   * The optional `staleMs` window (see {@link SWEEP_RUN_STALE_MS}) is for a
+   * multi-instance sweep, where a replica must not abort a run another replica
+   * is actively executing.
    */
   /**
-   * #487 reconcile clause (c): active (pending|running) runs UNTOUCHED past
+   * Reconcile clause (c): active (pending|running) runs UNTOUCHED past
    * `staleMs` — candidates for "no live runner" abort. Staleness is measured from
    * `updated_at` (the LAST-PROGRESS timestamp — recordStep bumps it), NOT
    * `started_at`, so a legitimate long-running marathon (11–25 min of steady

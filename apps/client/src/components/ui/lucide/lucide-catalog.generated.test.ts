@@ -6,11 +6,10 @@ import { CATEGORY_TITLES } from "./lucide-categories";
 import { CURATED_ICON_NAMES } from "./curated-icons";
 import degradedAllowlist from "./lucide-catalog.degraded-allowlist.json";
 
-// Guard test for the committed catalog artifact (issue #696). It FAILS the build
-// on any drift between the artifact and the INSTALLED lucide-react — a bump
-// without regeneration, a hand-edited version, a removed icon — and on a
-// non-empty `degraded` that is not a deliberate, allow-listed offline release.
-// Replaces the former curated-icons.test.ts (its check lives on as #5 below).
+// Guard test for the committed catalog artifact. It FAILS the build on any drift
+// between the artifact and the INSTALLED lucide-react — a bump without
+// regeneration, a hand-edited version, a removed icon — and on a non-empty
+// `degraded` that is not a deliberate, allow-listed offline release.
 describe("lucide-catalog.generated", () => {
   const require = createRequire(import.meta.url);
   const installedVersion: string = require("lucide-react/package.json").version;

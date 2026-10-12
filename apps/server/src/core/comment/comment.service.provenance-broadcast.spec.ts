@@ -1,10 +1,10 @@
 import { CommentService } from './comment.service';
 
 /**
- * Caller-contract coverage for the three live comment broadcasts (#300/#304):
- *   - commentCreated   (create @153)
- *   - commentUpdated   (update @214)  ← the fragile path this suite spotlights
- *   - commentResolved  (resolveComment @283)
+ * Caller-contract coverage for the three live comment broadcasts:
+ *   - commentCreated   (create)
+ *   - commentUpdated   (update)  ← the fragile path this suite spotlights
+ *   - commentResolved  (resolveComment)
  *
  * All three must emit a payload carrying the {agent,launcher} avatar stack for an
  * AGENT comment, and NEITHER field for a non-agent comment. The enrichment lives
@@ -13,11 +13,11 @@ import { CommentService } from './comment.service';
  * single-row load rather than from an un-enriched object.
  *
  * NON-VACUITY for the update path: the service is handed an UN-enriched input
- * comment (no agent/launcher), while findById returns the ENRICHED shape. The
- * pre-#304 update() re-emitted the caller's object in place, so it would emit the
- * un-enriched input and the `agent`/`launcher` assertions would FAIL. The fix
- * re-fetches via findById, so the broadcast carries the stack regardless of how
- * the caller pre-loaded the comment.
+ * comment (no agent/launcher), while findById returns the ENRICHED shape. An
+ * update() that re-emitted the caller's object would emit the un-enriched input
+ * and the `agent`/`launcher` assertions would FAIL; update() re-fetches via
+ * findById, so the broadcast carries the stack regardless of how the caller
+ * pre-loaded the comment.
  */
 describe('CommentService — broadcast carries the agent avatar stack', () => {
   // An enriched agent comment as CommentRepo.findById(..., includeCreator:true)

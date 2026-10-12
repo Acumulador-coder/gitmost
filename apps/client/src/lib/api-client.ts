@@ -90,17 +90,14 @@ async function redirectToLogin() {
     // only cleanup that runs on that path. It also disables further cache
     // persistence until the full page load below.
     clearPersistedTreeCaches();
-    // #640, invariant 8 — ALSO purge the local page-body ydoc databases on a
-    // forced 401 logout, AWAITED before the navigation below so `deleteDatabase`
-    // actually finishes (a synchronous redirect would cut it short).
+    // Also purge the local page-body ydoc databases on a forced 401 logout,
+    // AWAITED before the navigation below so `deleteDatabase` finishes.
     //
-    // FORWARD-COMPAT (reverses #626 review option-B, deliberately): this is safe
-    // ONLY while the #564 write-guard forbids local edits, so a purged ydoc can
-    // hold no unsent work. The moment offline-editing lands, this purge MUST
-    // become "quarantine, not delete, if the ydoc has unsent updates" (see the
-    // reconciledAt reservation in page-ydoc-reconciled), otherwise a returning
-    // network → 401 → redirectToLogin() would delete the user's unsynced edits
-    // with the very handler meant to protect a shared machine.
+    // Safe only while the write-guard forbids local edits, so a purged ydoc
+    // holds no unsent work. Once offline editing exists this must become
+    // "quarantine, not delete, if the ydoc has unsent updates" (see the
+    // reconciledAt reservation in page-ydoc-reconciled), or a 401 on reconnect
+    // would delete the user's unsynced edits.
     await purgePageYdocDatabases();
     const redirectTo = window.location.pathname;
     if (redirectTo === APP_ROUTE.HOME) {

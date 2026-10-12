@@ -8,17 +8,13 @@ import { isSessionExpired } from "@/features/user/session-verified";
 import { reportClientMetric } from "@/lib/telemetry/vitals";
 import { httpStatusOf } from "@/lib/http-error";
 
-// Local-first phase 1 (#563): a localStorage BOOT CACHE of page METADATA, so a
-// reload / repeat visit paints the page CHROME (title, breadcrumbs, header)
-// WITHOUT waiting for that page's `/pages/info` round-trip, then reconciles with
-// the server in the background. The BODY (editor/collab) is untouched and keeps
-// its current network swap — that is phase 2.
+// A localStorage BOOT CACHE of page METADATA, so a reload / repeat visit paints
+// the page CHROME (title, breadcrumbs, header) WITHOUT waiting for that page's
+// `/pages/info` round-trip, then reconciles with the server in the background.
 //
-// Scope of the win, precisely: the chrome no longer waits on `/pages/info`. It
-// does still wait on `/me` — UserProvider renders nothing until the current user
-// resolves and it wraps all authenticated routing — so this removes the SECOND
-// of two sequential round-trips, not the first. Lifting the `/me` gate (a
-// persisted current-user) is a separate change, out of scope for #563.
+// The chrome does still wait on `/me` (UserProvider renders nothing until the
+// current user resolves and it wraps all authenticated routing), so this removes
+// the SECOND of two sequential round-trips, not the first.
 //
 // This is a deliberate CLONE of the sidebar tree boot-cache
 // (features/page/tree/atoms/tree-data-atom.ts): same `atomWithStorage` +
@@ -28,8 +24,8 @@ import { httpStatusOf } from "@/lib/http-error";
 // `clearPersistedTreeCaches()` also sweeps this prefix). The in-memory atom is
 // the source of truth while the app runs; localStorage only seeds the NEXT boot.
 //
-// TWO deliberate DIVERGENCES from that clone source (both fixes; the tree cache
-// still carries the old behavior — see the note in tree-data-atom.ts):
+// TWO deliberate DIVERGENCES from that clone source (the tree cache still
+// lacks both — see the note in tree-data-atom.ts):
 //  1. `getItem` serves a still-pending debounced write instead of the last
 //     FLUSHED blob, so a remount inside the debounce window cannot resurrect
 //     stale storage and drop the newest entry (tree-data-atom.ts has this bug).

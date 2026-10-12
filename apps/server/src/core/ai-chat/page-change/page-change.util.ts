@@ -1,7 +1,7 @@
 import { createTwoFilesPatch } from 'diff';
 
 /**
- * Per-turn page-change detection (#274).
+ * Per-turn page-change detection.
  *
  * The agent rebuilds its context from the DB each turn and does not otherwise
  * know that the user hand-edited the open page since its last response. This

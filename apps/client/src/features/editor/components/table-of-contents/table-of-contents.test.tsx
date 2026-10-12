@@ -8,12 +8,10 @@ vi.mock("react-i18next", () => ({
 
 import { TableOfContents } from "./table-of-contents";
 
-// #662 gotcha 2: a persisted `toc` tab can be restored open on reload BEFORE the
-// editor mounts, so TableOfContents renders with editor={null}. Previously that
-// path hit `Array.from(undefined)` (recalculateLinks over `$nodes(...)` on a null
-// editor) and threw into the root ChunkLoadErrorBoundary — an inescapable reload
-// loop. It must now render nothing (no crash, no misleading "Add headings" state)
-// until the editor arrives.
+// A persisted `toc` tab can be restored open on reload BEFORE the editor
+// mounts, so TableOfContents renders with editor={null}. It must render nothing
+// (no throw into the root ChunkLoadErrorBoundary reload loop, no misleading
+// "Add headings" state) until the editor arrives.
 
 function renderToc(editor: unknown, isShare?: boolean) {
   // Wrap ONLY the component so the emptiness assertion excludes the global

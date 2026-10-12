@@ -10,13 +10,13 @@ import { EnvironmentService } from '../../integrations/environment/environment.s
  * subdomain on cloud). `isSelfHosted()` is `!isCloud()`, so exactly one branch is
  * always taken.
  *
- * Extracted so the self-hosted/cloud branch is not hand-duplicated. Shared by
+ * Shared by
  * `DomainMiddleware` (the normal /api request path) and `GitHttpService` (the raw
  * root-mounted /git smart-HTTP host, which Nest middleware does NOT run for) so
  * the two cannot drift.
  *
  * This helper does NOT catch DB errors — callers decide: DomainMiddleware lets a
- * throw bubble (as before); GitHttpService wraps it to log + treat as
+ * throw bubble; GitHttpService wraps it to log + treat as
  * unresolvable (-> 404). A blank/missing host on cloud resolves to null rather
  * than throwing.
  */

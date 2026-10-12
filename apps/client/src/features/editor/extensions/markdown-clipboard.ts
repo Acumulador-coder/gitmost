@@ -8,8 +8,8 @@ import {
   FOOTNOTES_LIST_NAME,
   FOOTNOTE_REFERENCE_NAME,
 } from "@docmost/editor-ext";
-// Markdown <-> ProseMirror conversion now lives ONLY in the canonical
-// `@docmost/prosemirror-markdown` package (issue #347). The BROWSER entry uses
+// Markdown <-> ProseMirror conversion lives ONLY in the canonical
+// `@docmost/prosemirror-markdown` package. The BROWSER entry uses
 // the native `DOMParser` for its HTML->DOM stage (jsdom stays out of the client
 // bundle) while producing the SAME nodes the server import does — so a paste of
 // canonical markdown (`^[…]`, `<!--img …-->`, `> [!type]`, `$…$`, `==…==`,
@@ -53,7 +53,7 @@ export const MarkdownClipboard = Extension.create({
             if (!asMarkdown) return null;
 
             // Convert the copied selection to Markdown through the canonical
-            // package (issue #347), the SAME serializer the server export uses,
+            // package, the SAME serializer the server export uses,
             // so a copied table/list matches the on-disk markdown form. The
             // converter takes a ProseMirror `doc` JSON, so wrap the slice's
             // top-level content in a synthetic doc.
@@ -62,8 +62,7 @@ export const MarkdownClipboard = Extension.create({
               // A partial table cell-selection serializes to bare `tableRow`
               // nodes (prosemirror-tables yields the whole `table` node only for
               // a full-table selection). The converter's table case expects a
-              // `table` wrapper, so wrap the bare rows in one — mirroring the old
-              // <table><tbody> wrap that the HTML->markdown step needed. A partial
+              // `table` wrapper, so wrap the bare rows in one. A partial
               // selection has no header row, so drop the GFM header separator the
               // converter always emits (it is table syntax, not data — see
               // stripHeaderSeparator).
@@ -129,12 +128,10 @@ export const MarkdownClipboard = Extension.create({
               .then((doc) => {
                 if (view.isDestroyed) return;
                 // Canonical PM-JSON -> HTML via the LIVE editor schema, then
-                // reuse the UNCHANGED downstream seam (normalizeTableColumnWidths
-                // + parseSlice + canonicalizePastedFootnotes). The JSON->HTML->
-                // JSON hop is lossless (same schema both directions); it lets the
-                // existing paste-insertion logic stay byte-identical — only the
-                // SOURCE of the markdown conversion changed (issue #347 guardrail:
-                // no converter logic in the client, only a call into the package).
+                // reuse the downstream seam (normalizeTableColumnWidths + parseSlice +
+                // canonicalizePastedFootnotes). The JSON->HTML->JSON hop is lossless
+                // (same schema both directions). No converter logic lives in the
+                // client, only a call into the package.
                 const node = PMNode.fromJSON(schema, doc);
                 const div = document.createElement("div");
                 DOMSerializer.fromSchema(schema).serializeFragment(
@@ -157,7 +154,7 @@ export const MarkdownClipboard = Extension.create({
                 // footnote definitions are out of order (or contains orphan defs)
                 // would be stored out of order. Canonicalize the self-contained
                 // pasted block so its footnotes come out reference-ordered, deduped
-                // and orphan-free (issue #228). See canonicalizePastedFootnotes for
+                // and orphan-free. See canonicalizePastedFootnotes for
                 // why this is scoped to whole-block pastes that carry their own
                 // footnotesList.
                 const contentNodes = canonicalizePastedFootnotes(
@@ -317,8 +314,8 @@ export function stripHeaderSeparator(md: string): string {
  *  - a partial table cell-selection, which prosemirror-tables copies as bare
  *    `tableRow` nodes (only a full-table selection yields a `table` node).
  *
- * `wrapBareRows` flags the bare-rows case so the caller wraps the serialized
- * <tr> nodes in <table><tbody> before the HTML->Markdown step. Plain paragraphs
+ * `wrapBareRows` flags the bare-rows case so the caller wraps the bare rows in
+ * a `table` node before conversion. Plain paragraphs
  * return asMarkdown=false so a simple text copy stays literal, and internal
  * copy/paste keeps using the richer text/html clipboard payload.
  *

@@ -8,9 +8,9 @@ import { AiMcpServer } from '@docmost/db/types/entity.types';
 const logger = new Logger('AiMcpServerRepo');
 
 /**
- * Repository for external MCP servers the agent may use (§5.4).
+ * Repository for external MCP servers the agent may use.
  *
- * Two ownership scopes share this one table (#686), distinguished by `user_id`:
+ * Two ownership scopes share this one table, distinguished by `user_id`:
  *   - `user_id IS NULL`  => an ADMIN / workspace-managed server.
  *   - `user_id = <uuid>` => a PERSONAL server owned by that member.
  *
@@ -21,7 +21,7 @@ const logger = new Logger('AiMcpServerRepo');
  * agent-union read (`listEnabledForAgent`) and the scope-agnostic recovery
  * re-read (`findByIdRaw`) intentionally cross the boundary.
  *
- * SECURITY (§8.10): rows hold the encrypted auth-header blob (`headersEnc`).
+ * SECURITY: rows hold the encrypted auth-header blob (`headersEnc`).
  * That column must NEVER be returned to a non-admin path nor logged; the
  * controllers project an explicit allowlist of columns and the connect path
  * decrypts only server-side. All lookups are workspace-scoped.
@@ -77,7 +77,7 @@ export class AiMcpServerRepo {
   }
 
   /**
-   * The agent-union read (#686): every ENABLED server the run's user may use —
+   * The agent-union read: every ENABLED server the run's user may use —
    * the workspace's admin servers PLUS the calling user's own personal servers.
    *
    * Ordering is ADMIN-FIRST and deterministic: `(user_id IS NOT NULL) ASC`
@@ -275,7 +275,7 @@ export class AiMcpServerRepo {
   }
 
   /**
-   * Serialize concurrent personal-create transactions for a user (#686). Takes
+   * Serialize concurrent personal-create transactions for a user. Takes
    * `FOR NO KEY UPDATE` on the user's OWN row in `users` — a single, always-
    * present parent row — so two concurrent creates cannot both read a count
    * below the cap and both insert (locking the ai_mcp_servers rows themselves
@@ -344,14 +344,13 @@ export function blankToNull(value: string | null | undefined): string | null {
 
 /**
  * Parse the `toolAllowlist` value read from the DB into the `string[] | null`
- * the entity type promises. The jsonb column historically round-trips as a JSON
- * STRING (rows written by the old double-encoding bind before the `::text::jsonb`
- * fix), so the driver hands back a string like `'["a","b"]'` rather than an
- * array. Be tolerant: normalize a JSON string to its value, then accept it only
- * if it is an array of strings; null / a non-array / unparseable value / an
- * array with a non-string element all become null. NOTE: null here only means
- * "could not parse" — the null-vs-deny-all policy decision lives in
- * normalizeRow (#476: present-but-corrupt fails CLOSED to `[]`).
+ * the entity type promises. Double-encoded rows (written with `::jsonb`
+ * instead of `::text::jsonb`) round-trip as a JSON STRING like `'["a","b"]'`.
+ * A JSON string is normalized to its value, then accepted only if it is an
+ * array of strings; null / a non-array / unparseable value / an array with a
+ * non-string element all become null. NOTE: null here only means "could not
+ * parse" — the null-vs-deny-all policy decision lives in normalizeRow
+ * (present-but-corrupt fails CLOSED to `[]`).
  */
 export function parseToolAllowlist(value: unknown): string[] | null {
   // Shape guard only; the legacy double-encoding self-heal lives in
@@ -366,10 +365,10 @@ export function parseToolAllowlist(value: unknown): string[] | null {
 /**
  * Normalize a DB row so `toolAllowlist` is always `string[] | null`.
  *
- * FAIL-CLOSED (#476): a stored value that is PRESENT but cannot be parsed into
+ * FAIL-CLOSED: a stored value that is PRESENT but cannot be parsed into
  * a string[] (corrupt JSON, a non-array, non-string elements) degrades to `[]`
  * = deny-all, so a corrupted allowlist can never silently widen to "the agent
- * gets ALL of the server's tools" (the old fail-open null). An error line is
+ * gets ALL of the server's tools". An error line is
  * logged (server id only, never the contents) so the admin can repair the row.
  * A column that is truly NULL/absent stays `null` = "no restriction".
  */

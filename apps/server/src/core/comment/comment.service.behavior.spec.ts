@@ -4,9 +4,9 @@ import { QueueJob } from '../../integrations/queue/constants';
 
 /**
  * Behavioral coverage for CommentService (comment.service.ts):
- *   - create()                @53
- *   - resolveComment()        @223
- *   - queueCommentNotification() @292 (exercised through create/update)
+ *   - create()
+ *   - resolveComment()
+ *   - queueCommentNotification() (exercised through create/update)
  *
  * The service is constructed directly with jest-mocked repos / gateway / queues
  * (the @InjectQueue tokens cannot be resolved by Test.createTestingModule — see

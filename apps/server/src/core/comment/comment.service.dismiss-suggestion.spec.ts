@@ -12,7 +12,7 @@ const markJob = (generalQueue: any, action: string) =>
   );
 
 /**
- * Coverage for CommentService.dismissSuggestion (#329). Dismiss ("Не применять")
+ * Coverage for CommentService.dismissSuggestion. Dismiss ("Не применять")
  * removes a suggested edit WITHOUT changing the page text: the comment
  * disappears (hard-delete + strip the inline anchor mark) unless the thread has
  * replies, in which case it is resolved to preserve the discussion.

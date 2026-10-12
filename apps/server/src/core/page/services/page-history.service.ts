@@ -44,7 +44,7 @@ export class PageHistoryService {
   }
 
   /**
-   * #395 — estimate time worked on a page (§5) and bucket it into the viewer's
+   * Estimate time worked on a page (§5) and bucket it into the viewer's
    * calendar days for the punch-card (§6.3). Reads only the cheap history
    * projection (no `content`); the estimate itself is a pure, deterministic
    * function so it is unit-tested exhaustively without a DB.
@@ -73,7 +73,7 @@ export class PageHistoryService {
   }
 
   /**
-   * #568/#605 — "all revisions per day" aggregate for the page-history
+   * "All revisions per day" aggregate for the page-history
    * mini-calendar heatmap. Reads only the cheap timeline projection (no
    * `content`) — the same source as computeWorkTime — and tallies ALL revisions
    * (any kind) into the viewer's calendar days, reusing the shared tz core, so

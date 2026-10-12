@@ -7,10 +7,9 @@ import type { AiChatMessage } from '@docmost/db/types/entity.types';
 import { SHARED_TOOL_SPECS } from '../../../../../packages/mcp/src/tool-specs';
 
 /**
- * normalizeLang: the client sends `i18n.language` — a FULL locale tag like
- * 'en-US' / 'ru-RU', NOT a bare 'en'/'ru'. A `@IsIn(['en','ru'])` DTO rejected
- * that with a 400 (caught in real-browser testing); the export now accepts any
- * string and normalizes here. Guards that regression.
+ * normalizeLang: the client sends `i18n.language` — a full locale tag like
+ * 'en-US' / 'ru-RU', not a bare 'en'/'ru'. The export accepts any string and
+ * normalizes it here.
  */
 describe('normalizeLang', () => {
   it("maps any 'ru…' locale tag to ru", () => {
@@ -462,10 +461,10 @@ describe('buildChatMarkdown (server) — structure', () => {
 });
 
 /**
- * #494 — REVERSE drift-guard for the export's friendly tool labels. A label keyed
- * by a tool name that no longer exists silently degrades to the generic
- * "Ran tool <name>" line; nothing reddened before. This asserts every labelled
- * name is a real in-app tool and that both languages label the same set.
+ * Reverse drift guard for the export's tool labels: a label keyed by a tool name
+ * that does not exist silently degrades to the generic "Ran tool <name>" line.
+ * Asserts every labelled name is a real in-app tool and that both languages
+ * label the same set.
  */
 describe('tool-label parity (#494)', () => {
   // In-app tool names come from the shared registry (inAppKey, excluding

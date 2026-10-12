@@ -1,5 +1,5 @@
 /**
- * Unit tests for the in-process SVG -> PNG rasterizer (Phase A of #585).
+ * Unit tests for the in-process SVG -> PNG rasterizer.
  *
  * These exercise the REAL worker path (resvg wasm in a worker thread) plus, for
  * the ink hard-gate, a direct resvg render so we can inspect raw RGBA pixels

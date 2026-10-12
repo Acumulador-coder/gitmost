@@ -214,7 +214,7 @@ export class PublicShareChatToolsService {
 
   /**
    * Wrap every tool's `execute` so a THROWN error is sanitized in ONE place —
-   * closing the byte leak, the render, and the model context at once (#394).
+   * closing the byte leak, the render, and the model context at once.
    *
    * The AI SDK surfaces a tool-execution throw as an atomic `tool-output-error`
    * frame on the v6 UI stream whose `errorText` is the thrown message; on the

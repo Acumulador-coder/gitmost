@@ -118,12 +118,11 @@ function clip(text: string): string {
  * then Docmost is exported to the vault.
  *
  * Enumeration of enabled spaces: STRICT opt-in. Only spaces whose
- * per-space flag `space.settings.gitSync.enabled === true` (written by the Phase-C
- * UI) are reconciled. There is intentionally NO all-spaces fallback: when no space
- * carries the flag, git-sync does NOTHING (an empty list) — flagging every space
- * the moment GIT_SYNC_ENABLED flips on is a safety hazard (it could mass-sync large
- * spaces). The whole loop is still gated on the GIT_SYNC_ENABLED master switch
- * first; per-space opt-in is now REQUIRED on top of it.
+ * per-space flag `space.settings.gitSync.enabled === true` (written by the space
+ * settings UI) are reconciled. There is intentionally NO all-spaces fallback:
+ * syncing every space the moment GIT_SYNC_ENABLED flips on could mass-sync large
+ * spaces. The whole loop is gated on the GIT_SYNC_ENABLED master switch first;
+ * per-space opt-in is required on top of it.
  */
 @Injectable()
 export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
@@ -156,8 +155,8 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Enumerate the spaces the poll loop should reconcile. STRICT opt-in: ONLY
-   * spaces carrying the Phase-C per-space flag (`settings->'gitSync'->>'enabled'
-   * = 'true'`, written by the Phase-C UI) are returned. There is intentionally NO
+   * spaces carrying the per-space flag (`settings->'gitSync'->>'enabled'
+   * = 'true'`) are returned. There is intentionally NO
    * fallback to "all live spaces" — when no space is flagged this returns an empty
    * list and git-sync does nothing (correct opt-in behavior). The GIT_SYNC_ENABLED
    * master switch gates whether the loop runs at all; this flag gates which spaces.
@@ -646,17 +645,13 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * GitSyncModule imports the plain ScheduleModule so SchedulerRegistry is
    * injectable without a duplicate forRoot.
    *
-   * KNOWN MULTI-REPLICA LIMITATION (deferred — do not silently lose this):
-   * This is an IN-PROCESS `setInterval` running on EVERY replica. Cross-replica
-   * single-writer safety currently rests on the per-space Redis lock
-   * (SpaceLockService) plus best-effort abort-on-failed-heartbeat — NOT on true
-   * fencing. Under an adversarial schedule (lock TTL lapse during a GC/IO pause)
-   * two replicas could still briefly believe they hold a space's lock. The
-   * intended future direction is to move this orchestration to a BullMQ queue
-   * (one durable, deduplicated job per space instead of N independent interval
-   * timers) and add FENCING TOKENS so a stale writer's writes are rejected by the
-   * store. The author deferred fencing tokens; this comment is the breadcrumb so
-   * the gap is tracked rather than forgotten. See SpaceLockService.liveLocks.
+   * KNOWN MULTI-REPLICA LIMITATION: this is an IN-PROCESS `setInterval` running
+   * on EVERY replica. Cross-replica single-writer safety rests on the per-space
+   * Redis lock (SpaceLockService) plus best-effort abort-on-failed-heartbeat —
+   * NOT on fencing. Under an adversarial schedule (lock TTL lapse during a GC/IO
+   * pause) two replicas could briefly both believe they hold a space's lock.
+   * Closing it needs fencing tokens (and a BullMQ job per space instead of N
+   * interval timers). See SpaceLockService.liveLocks.
    */
   onModuleInit(): void {
     if (!this.environmentService.isGitSyncEnabled()) return;

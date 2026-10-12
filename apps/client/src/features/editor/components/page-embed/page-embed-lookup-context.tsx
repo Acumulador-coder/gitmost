@@ -29,11 +29,8 @@ const PageEmbedLookupContext = createContext<ContextValue | null>(null);
  * NOTE (intentional near-duplicate of `transclusion-lookup-context.tsx`): this
  * provider duplicates that file's batching / de-dup / cache machinery; only the
  * lookup key (sourcePageId here vs sourcePageId+transclusionId there) and the
- * API call differ. Unifying them now would mean a generic, parameterised lookup
- * provider — a larger client refactor that isn't worth it for just two
- * consumers. Per Gitea #94, extract a shared generic provider when a THIRD
- * lookup consumer appears; until then keep the two in sync by hand. (Tracked,
- * deliberately deferred — not forgotten.)
+ * API call differ. Extract a shared generic provider when a THIRD lookup
+ * consumer appears; until then keep the two in sync by hand.
  */
 export function PageEmbedLookupProvider({
   children,

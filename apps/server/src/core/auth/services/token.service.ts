@@ -161,7 +161,7 @@ export class TokenService {
     // workspaceId, type } in a stable order, so the HS256 signature is a pure
     // deterministic function of (sub, apiKeyId, workspaceId, APP_SECRET): minting
     // the SAME key twice yields a BYTE-IDENTICAL token. This is what makes the key
-    // "copyable" — the reveal endpoint (#557) re-mints the same value under a
+    // "copyable" — the reveal endpoint re-mints the same value under a
     // step-up without ever persisting the token material.
     return this.apiKeyJwtService().sign(payload);
   }
@@ -228,8 +228,8 @@ export class TokenService {
    *
    * This is the type-routing primitive for surfaces that pin the Bearer slot to
    * an explicit token-type allowlist. The /mcp Bearer path pins that allowlist to
-   * `[API_KEY]` only (#558 — /mcp no longer accepts a human-session ACCESS token
-   * or any other type). It is deliberately NOT a
+   * `[API_KEY]` only (/mcp accepts no human-session ACCESS token or any other
+   * type). It is deliberately NOT a
    * "verify-and-return-whatever-type" helper — that would be a reusable
    * confused-deputy footgun (any caller could then feed an attachment/collab
    * token where an access token is expected). An explicit allowlist preserves

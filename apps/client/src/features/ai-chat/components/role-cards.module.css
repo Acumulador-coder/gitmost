@@ -60,6 +60,6 @@
   line-height: 1.3;
   /* Break long unbreakable tokens (URLs, long foreign words) in the
      admin-configured description so they wrap instead of overflowing the card
-     width now that the line clamp no longer caps the text. */
+     width (the text is not line-clamped). */
   overflow-wrap: anywhere;
 }

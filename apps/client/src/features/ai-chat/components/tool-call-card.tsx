@@ -37,7 +37,7 @@ interface ToolCallCardProps {
    * a stack fragment, a provider message). This is the RENDER gate only — the
    * authoritative fix also sanitizes the bytes server-side (see
    * PublicShareChatToolsService.forShare), so a share reader never receives raw
-   * error text over the wire, not just never sees it painted (#394).
+   * error text over the wire, not just never sees it painted.
    */
   showErrors?: boolean;
 }

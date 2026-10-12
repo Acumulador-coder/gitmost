@@ -427,21 +427,18 @@ describe('GitmostDataSourceService', () => {
       expect(mocks.collabGateway.writePageBody).toHaveBeenCalledTimes(1);
     });
 
-    // F5 acceptance, criterion (b): guard #2 (docsCanonicallyEqual) must SKIP the
+    // Guard #2 (docsCanonicallyEqual) must SKIP the
     // re-ingest when the freshly-parsed doc is canonically equal to the page's
     // current DB content even though the two are NOT byte-identical — the DB copy
     // carries the real per-block uuids (comments anchor to them) while a fresh
     // parse has none. Skipping is what protects a concurrent, not-yet-flushed
     // human edit from being clobbered by an idempotent poll re-ingest.
     //
-    // NON-VACUITY: `currentContent` here differs from `doc` in raw JSON (it has an
-    // `attrs.id` uuid `doc` lacks). The default mock `docsCanonicallyEqual` is a
-    // plain `JSON.stringify` compare — it would return FALSE for these inputs, so
-    // if guard #2 were removed (or reverted to a canonicalJsonEqual that does not
-    // strip ids) writePageBody WOULD be called and this test would fail. We model
-    // the package's authoritative id-stripping equality (returns TRUE here) by
-    // swapping in a `docsCanonicallyEqual` that normalizes away block ids, proving
-    // it is the SEMANTIC equality — not a byte compare — that suppresses the write.
+    // `currentContent` here differs from `doc` in raw JSON (it has an `attrs.id`
+    // uuid `doc` lacks), so the default mock (a plain `JSON.stringify` compare)
+    // would return FALSE. We model the package's id-stripping equality by
+    // swapping in a `docsCanonicallyEqual` that normalizes away block ids, so it
+    // is the SEMANTIC equality — not a byte compare — that suppresses the write.
     it('does NOT call writePageBody (guard #2) when content is canonically equal despite differing block ids (F5 criterion b)', async () => {
       const { service, mocks } = build();
       const realUuid = '11111111-1111-4111-8111-111111111111';
@@ -695,19 +692,12 @@ describe('GitmostDataSourceService', () => {
       expect(res).toEqual({ data: { id: 'new-id' }, updatedAt: undefined });
     });
 
-    // F1 (bug C9-D1, parent-id variant): a parent folder-note carrying a broken
-    // non-UUID `gitmost_id` makes the push planner hand createPage a malformed
-    // parentPageId. Left as-is it flows into pageService.create -> findById
-    // (slugId fallback -> no row) -> NotFoundException, a throw that never clears
-    // the push `failures` set, so the WHOLE space wedges forever. The fix COERCES
-    // the malformed parent to root (undefined) so the page is created at the space
-    // root (self-heal) instead of being dropped — and never wedges.
-    //
-    // NON-VACUITY: the mocked pageService.create asserts it received
-    // `parentPageId: undefined`. Against the UNcoerced createPage the malformed
-    // string would flow straight through and this assertion would fail (create
-    // would be called with parentPageId:'[unclosed-broken-id'), so the test
-    // genuinely exercises the coercion.
+    // A parent folder-note carrying a broken non-UUID `gitmost_id` makes the push
+    // planner hand createPage a malformed parentPageId. Passed through, it would
+    // reach pageService.create -> findById (slugId fallback -> no row) ->
+    // NotFoundException, a throw that never clears the push `failures` set and
+    // wedges the WHOLE space. createPage COERCES the malformed parent to root
+    // (undefined), asserted on the mocked pageService.create below.
     it('coerces a malformed (non-UUID) parentPageId to root and does NOT wedge (F1)', async () => {
       const { service, mocks } = build();
       mocks.pageService.create.mockResolvedValue({ id: 'new-id' });
@@ -806,7 +796,7 @@ describe('GitmostDataSourceService', () => {
       const { service, mocks } = build();
       await service.bind(CTX).deletePage('p1');
       // Passes git-sync provenance so the soft-delete stamps
-      // lastUpdatedSource='git-sync' (loop-guard, PR #119 review).
+      // lastUpdatedSource='git-sync' (loop-guard).
       expect(mocks.pageService.removePage).toHaveBeenCalledWith(
         'p1',
         'svc-user',
@@ -938,19 +928,14 @@ describe('GitmostDataSourceService', () => {
       expect(mocks.pageService.movePage).not.toHaveBeenCalled();
     });
 
-    // F1 (parent-id variant), mirror of the createPage case. A malformed
+    // Mirror of the createPage case. A malformed
     // (non-UUID) destination parentPageId would reach computeMovePosition's raw
     // uuid predicate (22P02, swallowed but mis-logged) or — when a position is
     // supplied — pageService.movePage's findById -> NotFoundException (NOT a
-    // 22P02, so NOT swallowed -> the space wedges). The fix coerces it to root
-    // (null) so the reparent targets root instead of wedging. The page here has a
-    // current parent, so coerced-root != current parent and the echo-guard does
-    // not short-circuit — the move proceeds against a null (root) parent.
-    //
-    // NON-VACUITY: the assertion is `dto.parentPageId === null`. Against the
-    // UNcoerced movePage the malformed string would flow through to
-    // pageService.movePage's dto and this would fail (it would be the raw
-    // '[broken-parent' token).
+    // 22P02, so NOT swallowed -> the space wedges). movePage coerces it to root
+    // (null). The page here has a current parent, so coerced-root != current
+    // parent and the echo-guard does not short-circuit — the move proceeds
+    // against a null (root) parent (`dto.parentPageId === null`).
     it('coerces a malformed (non-UUID) parentPageId to root and does NOT wedge (F1)', async () => {
       const { service, mocks } = build([]); // no siblings -> fresh position key
       mocks.pageRepo.findById.mockResolvedValue({
@@ -1087,7 +1072,7 @@ describe('GitmostDataSourceService', () => {
     it('restores via the repo restore path scoped to the workspace', async () => {
       const { service, mocks } = build();
       const res = await service.bind(CTX).restorePage('p1');
-      // Stamps lastUpdatedSource='git-sync' on restore (loop-guard, PR #119).
+      // Stamps lastUpdatedSource='git-sync' on restore (loop-guard).
       expect(mocks.pageRepo.restorePage).toHaveBeenCalledWith(
         'p1',
         'ws-1',
@@ -1097,8 +1082,8 @@ describe('GitmostDataSourceService', () => {
     });
   });
 
-  // Phase-B+ continuous-sync methods: not yet called by the engine but wired into
-  // the GitSyncClient seam (PR #119 review #5). Exercised via the bound client.
+  // Continuous-sync methods: not called by the engine but wired into the
+  // GitSyncClient seam. Exercised via the bound client.
   describe('listRecentSince', () => {
     it('queries non-deleted pages newest-first and ISO-stringifies updatedAt', async () => {
       const rows = [

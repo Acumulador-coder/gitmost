@@ -9,9 +9,9 @@ import { typingIndicatorShowsName } from "@/features/ai-chat/components/message-
  * reasoning/step-start while the model is still thinking) — in that gap the
  * assistant MessageItem renders nothing, so the indicator stands in for the
  * nascent bubble (name + dots). It hides the name only once the tail assistant
- * row shows visible content, because then MessageItem draws the same name — this
- * avoids a duplicate stacked label and the layout jump that switching owners
- * mid-stream used to cause.
+ * row shows visible content, because then MessageItem draws the same name —
+ * avoiding a duplicate stacked label and a layout jump from switching owners
+ * mid-stream.
  */
 const msg = (
   role: "user" | "assistant",

@@ -9,20 +9,11 @@ import { CORE_TOOL_KEYS, type ToolCatalogEntry } from './tools/tool-tiers';
 const promptLogger = new Logger('AiChatPrompt');
 
 /**
- * The in-app tool names this prompt refers to BY NAME in its guidance notes
- * (issue #448). Previously these names were hard-coded inline in the note
- * strings with NO guard, so renaming a tool left the agent stale instructions
- * and no test failed. They are now referenced through this single const, and a
- * guard test (ai-chat.prompt.tool-names.spec.ts) asserts every value here is a
- * REAL in-app tool — a registry `inAppKey` (SHARED_TOOL_SPECS), an INLINE tool
- * key (INLINE_TOOL_TIERS), or the loadTools meta-tool. Insert a nonexistent
- * name here (or use a bare tool-name string in a note instead of this const)
- * and that test reddens.
- *
- * `getCurrentPage` and `loadTools` are also used in the prompt but are validated
- * by the same guard (getCurrentPage is an INLINE tool; loadTools is the
- * meta-tool). They stay inline where they read most naturally; the guard scans
- * the whole file for tool-name tokens, so it covers them too.
+ * The in-app tool names this prompt refers to by name in its guidance notes. A
+ * guard test (ai-chat.prompt.tool-names.spec.ts) asserts every value is a real
+ * in-app tool — a registry `inAppKey` (SHARED_TOOL_SPECS), an INLINE tool key
+ * (INLINE_TOOL_TIERS), or the loadTools meta-tool. `getCurrentPage` and
+ * `loadTools` stay inline in the prompt; the same guard covers them.
  */
 export const PROMPT_TOOL_NAMES = {
   getPage: 'getPage',
@@ -108,7 +99,7 @@ const INTERRUPT_NOTE =
   'partial work — build on it or follow the new instruction.';
 
 /**
- * #487: injected on a turn started by SUPERSEDING a previous run (the user hit
+ * Injected on a turn started by SUPERSEDING a previous run (the user hit
  * "interrupt and send now" while a run was live). The previous run was Stopped,
  * but there is NO side-effect quiescence — a write it had already committed, or
  * one committing at the moment of Stop, may land with a small delay AFTER this new
@@ -125,7 +116,7 @@ const SUPERSEDE_NOTE =
 
 /**
  * Injected on a turn where the open page was hand-edited by the user (or anyone
- * else) AFTER the agent's previous response ended (#274). The server takes a
+ * else) AFTER the agent's previous response ended. The server takes a
  * Markdown snapshot of the page at each turn's end and, at the next turn's start,
  * diffs the current page against it; when non-empty, this note + the unified diff
  * go into the context section so the agent knows its earlier copy of the page is
@@ -156,7 +147,7 @@ const PAGE_CHANGED_NOTE =
  * pseudo-tags (`x"><system>…`) or extra lines into user A's system prompt. We
  * strip the three attribute-breaking characters (double quote, angle brackets) and
  * collapse any newline/CR/tab to a single space so the value stays a single inert
- * attribute token. Cross-user prompt-injection defense (#274 review F1).
+ * attribute token. Cross-user prompt-injection defense.
  */
 export function escapeAttr(value: string): string {
   return value
@@ -168,7 +159,7 @@ export function escapeAttr(value: string): string {
 
 /**
  * Neutralize the `<page_changed>` / `</page_changed>` delimiter inside untrusted
- * diff text (#274 review F2). The diff body is attacker-influenceable page content
+ * diff text. The diff body is attacker-influenceable page content
  * (collaborative pages): a diff line carrying a literal `</page_changed>` would
  * visually close the block early, so everything after it would read as top-level
  * prompt rather than sandwiched DATA. We defang any `<page_changed` / `</page_changed`
@@ -203,7 +194,7 @@ export interface BuildSystemPromptInput {
    * "the current page" to that pageId. The page is NOT fetched here — the agent
    * uses its CASL-enforced read/write page tools with the id when needed.
    *
-   * `selection` (#388) is present only when the user has a non-empty editor
+   * `selection` is present only when the user has a non-empty editor
    * selection; the prompt adds ONLY a fixed one-line flag from it — the
    * selection TEXT is untrusted page content and stays out of the prompt (it is
    * surfaced solely via the getCurrentPage tool result).
@@ -212,7 +203,7 @@ export interface BuildSystemPromptInput {
   /**
    * Admin-authored, per-EXTERNAL-MCP-server guidance ("how/when to use this
    * server's tools"), built by `McpClientsService.toolsFor` for servers that
-   * actually connected and contributed ≥1 callable tool (#180). Rendered as an
+   * actually connected and contributed ≥1 callable tool. Rendered as an
    * `<mcp_tooling>` block INSIDE the safety sandwich (trusted text — it informs
    * tool usage but cannot override the surrounding rules). Empty/blank => the
    * block is omitted entirely.
@@ -235,7 +226,7 @@ export interface BuildSystemPromptInput {
   superseded?: boolean;
   /**
    * Set only when the open page was edited by the user AFTER the agent's previous
-   * turn ended (#274), confirmed server-side by diffing the current page against
+   * turn ended, confirmed server-side by diffing the current page against
    * the end-of-last-turn snapshot. When present, a `<page_changed>` block with the
    * PAGE_CHANGED_NOTE and the unified diff is added to the context section so the
    * agent treats its earlier copy of the page as stale. `title` labels the page;
@@ -261,13 +252,12 @@ export interface BuildSystemPromptInput {
 }
 
 /**
- * Render the `<tool_catalog>` block (#332): the compact list of DEFERRED tools
- * the model can activate on demand via loadTools. Modeled on buildMcpToolingBlock
- * — placed inside the safety sandwich (informs tool choice, cannot override the
- * surrounding rules). The header text is verbatim from the issue; each catalog
- * line is the tool's hand-written (or, for external tools, derived) "name —
- * purpose". Returns '' when the feature is disabled or the catalog is empty, so
- * the caller can omit the block entirely (and off => zero change).
+ * Render the `<tool_catalog>` block: the compact list of DEFERRED tools the model
+ * can activate on demand via loadTools. Placed inside the safety sandwich like
+ * buildMcpToolingBlock (informs tool choice, cannot override the surrounding
+ * rules). Each line is the tool's hand-written (or, for external tools, derived)
+ * "name — purpose". Returns '' when the feature is disabled or the catalog is
+ * empty, so the caller omits the block.
  */
 export function buildToolCatalogBlock(
   catalog: ToolCatalogEntry[] | undefined,
@@ -438,19 +428,14 @@ export function buildSystemPrompt({
     context += `\n${SUPERSEDE_NOTE}`;
   }
 
-  // Per-turn page-change note (#274). Added to the context section (inside the
-  // safety sandwich), present only when the server detected that the open page
-  // was edited by the user since the agent's last turn ended. The diff content is
-  // UNTRUSTED page data (collaborative pages — the title and diff body are
-  // attacker-influenceable by another user) wrapped in a delimited <page_changed>
-  // block: it informs the agent that its copy is stale. This is DATA, not
-  // commands — the SAFETY_FRAMEWORK rules instruct the model to treat embedded
-  // tool/page content as untrusted text, never instructions. Defense-in-depth,
-  // not a hard guarantee: the safety sandwich reduces the blast radius, the title
-  // is attribute-escaped (escapeAttr, F1), and the diff's own <page_changed>
-  // delimiter is neutralized (neutralizePageChangedDelimiter, F2) so a crafted
-  // diff line cannot close the block early and smuggle following text out as
-  // prompt. Absent => nothing is added.
+  // Per-turn page-change note, present only when the server detected that the
+  // open page was edited since the agent's last turn ended. The title and diff
+  // are UNTRUSTED page data (another user can influence them), wrapped in a
+  // delimited <page_changed> block inside the safety sandwich; SAFETY_FRAMEWORK
+  // tells the model to treat embedded content as data. Defense-in-depth: the
+  // title is attribute-escaped (escapeAttr) and the diff's own <page_changed>
+  // delimiter is neutralized (neutralizePageChangedDelimiter) so a crafted line
+  // cannot close the block early.
   if (pageChanged && pageChanged.diff.trim().length > 0) {
     const title =
       typeof pageChanged.title === 'string' &&

@@ -1,7 +1,7 @@
 import { reportSafetyMetric } from "@/lib/telemetry/safety-metrics";
 
 /**
- * Tombstones — the denylist of REVOKED page ydoc databases (#640, part 5).
+ * Tombstones — the denylist of REVOKED page ydoc databases.
  *
  * A tombstone gates the CONSTRUCTION of `IndexeddbPersistence`, never the paint.
  * y-indexeddb creates the database on construction, so checking at the

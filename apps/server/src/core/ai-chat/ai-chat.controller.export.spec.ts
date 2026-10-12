@@ -100,15 +100,13 @@ describe('AiChatController.export', () => {
 });
 
 /**
- * The terminal-finalize dispatch (#183): the assistant row is INSERTed upfront
- * as 'streaming' and finalized once on the terminal callback. When the upfront
- * insert SUCCEEDED (we hold an id) finalize UPDATEs that row; when it FAILED
- * (assistantId is undefined) finalize falls back to INSERTing the terminal row
- * so the turn is not lost — the only safety against losing the turn entirely.
+ * The terminal-finalize dispatch: the assistant row is INSERTed upfront as
+ * 'streaming' and finalized once on the terminal callback. With an id, finalize
+ * UPDATEs that row; without one (the upfront insert failed) it INSERTs the
+ * terminal row so the turn is not lost.
  *
- * `planFinalizeAssistant` is the pure decision; `applyFinalize` is the REAL
- * dispatch the service uses, exercised here over a mock repo (not a copy of the
- * logic) so a production drift would fail the test (#186 review).
+ * `planFinalizeAssistant` is the pure decision; `applyFinalize` is the real
+ * dispatch the service uses, exercised here over a mock repo.
  */
 describe('finalizeAssistant dispatch (planFinalizeAssistant + applyFinalize)', () => {
   const workspaceId = 'ws1';

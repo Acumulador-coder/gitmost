@@ -10,7 +10,7 @@ import {
 import { PaginationOptions } from '@docmost/db/pagination/pagination-options';
 import { executeWithCursorPagination } from '@docmost/db/pagination/cursor-pagination';
 
-// Crash-recovery sweep recency threshold (#183 review): a 'streaming' row is
+// Crash-recovery sweep recency threshold: a 'streaming' row is
 // only swept to 'aborted' once it has been UNTOUCHED for this long. A live turn
 // bumps `updatedAt` on every step (well under this window), so its row never
 // matches; only a turn whose process truly died (no step update for >threshold)
@@ -19,7 +19,7 @@ import { executeWithCursorPagination } from '@docmost/db/pagination/cursor-pagin
 // (multi-instance deploy).
 const SWEEP_STREAMING_STALE_MS = 10 * 60 * 1000; // 10 minutes
 
-// Hard upper bound on the rows materialized by `findAllByChat`, which now feeds
+// Hard upper bound on the rows materialized by `findAllByChat`, which feeds
 // BOTH the Markdown export and the per-turn model history.
 // A generous cap so a pathologically huge chat cannot load an unbounded result
 // into memory; far above any realistic transcript length.
@@ -97,7 +97,7 @@ export class AiChatMessageRepo {
   // (oldest -> newest), unpaginated. Two callers, both treating the DB as the
   // single source of truth and needing the whole transcript in one pass
   // (findByChat is cursor-paginated and would only return the first page):
-  //   - the server-side Markdown export (#183);
+  //   - the server-side Markdown export;
   //   - the per-turn model history, rebuilt fresh on every turn so the model
   //     sees the full authoritative transcript.
   //
@@ -154,11 +154,10 @@ export class AiChatMessageRepo {
   }
 
   /**
-   * Delta read (#491) for the degraded poll: the chat's messages whose row
-   * changed AFTER the client's `cursor`, plus a FRESH cursor taken from the DB
-   * clock. Replaces the old "refetch ALL infinite-query pages every 2.5s with
-   * full parts" poll — the client seeds once (findByChat) and thereafter pulls
-   * only the deltas and merges them by id (mergeById).
+   * Delta read for the degraded poll: the chat's messages whose row changed
+   * AFTER the client's `cursor`, plus a FRESH cursor taken from the DB clock.
+   * The client seeds once (findByChat), then pulls only the deltas and merges
+   * them by id (mergeById).
    *
    * Cursor: a DB-clock timestamp (now()) the client echoes back each poll. All
    * delta-relevant writes stamp `updatedAt` with now() (see `update` /
@@ -261,7 +260,7 @@ export class AiChatMessageRepo {
       .set({ ...(patch as Record<string, unknown>), updatedAt: sql`now()` })
       .where('id', '=', id)
       .where('workspaceId', '=', workspaceId);
-    // Concurrency guard (#183 review): a per-step 'streaming' update must NEVER
+    // Concurrency guard: a per-step 'streaming' update must NEVER
     // overwrite a row the terminal callback already finalized. onStepFinish
     // fires the streaming update fire-and-forget, so its UPDATE can land AFTER
     // finalize on a DIFFERENT pool connection (commit order is not guaranteed).
@@ -276,12 +275,12 @@ export class AiChatMessageRepo {
   }
 
   /**
-   * #487 OWNER terminal write — the streamText terminal callback's finalize. Like
+   * OWNER terminal write — the streamText terminal callback's finalize. Like
    * `update` but CONDITIONAL on `status='streaming' OR metadata.finalizeFailed`:
    * the owner writes its real content EITHER when the row is still streaming (the
    * normal case) OR when a reconcile stamp already flipped it to a terminal status
    * but marked `finalizeFailed:true` — the owner's real content OVERWRITES that
-   * placeholder stamp (owner-write priority, #487). A row that is properly terminal
+   * placeholder stamp (owner-write priority). A row that is properly terminal
    * (no finalizeFailed) is left untouched (undefined) — idempotent. The `patch`
    * carries the real metadata WITHOUT finalizeFailed, so a successful write CLEARS
    * the flag. Returns the updated row, or undefined when nothing matched.
@@ -316,7 +315,7 @@ export class AiChatMessageRepo {
   }
 
   /**
-   * #487 RECONCILE status-only stamp — settle a stuck 'streaming' row to a
+   * RECONCILE status-only stamp — settle a stuck 'streaming' row to a
    * terminal status WITHOUT the owner's real content (which lived only in the
    * dead process's memory — a documented loss). CONDITIONAL on `status='streaming'`
    * (never touches an already-terminal row) AND it MERGES `finalizeFailed:true`
@@ -420,19 +419,19 @@ export class AiChatMessageRepo {
   }
 
   /**
-   * Crash-recovery sweep (#183): flip every assistant row still left in the
+   * Crash-recovery sweep: flip every assistant row still left in the
    * 'streaming' state (a turn that died mid-write before reaching a terminal
    * status) to 'aborted'. Run once on server start. Returns the number of rows
    * swept so the caller can log it. Workspace-wide on purpose — a crash can have
    * dangling streaming rows across any workspace.
    *
-   * Bounded by recency (#183 review): only rows UNTOUCHED for
+   * Bounded by recency: only rows UNTOUCHED for
    * SWEEP_STREAMING_STALE_MS are swept. A live turn bumps `updatedAt` on every
    * step, so an actively-streaming row never matches; this prevents a fresh
    * replica's boot-sweep from aborting a turn another replica is still streaming
    * in a multi-instance deploy.
    *
-   * #487: the sweep now ALSO marks `finalizeFailed:true` so a late owner-write can
+   * The sweep also marks `finalizeFailed:true` so a late owner-write can
    * overwrite this placeholder with real content (owner-write priority).
    */
   async sweepStreaming(trx?: KyselyTransaction): Promise<number> {

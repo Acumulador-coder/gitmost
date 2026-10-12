@@ -1,5 +1,5 @@
 /**
- * #395 — "time worked on an article" domain types.
+ * "Time worked on an article" domain types.
  *
  * The estimate is built by sessionizing a page's `page_history` timeline on
  * inactivity gaps (WakaTime-style), NOT by taking the span between the first and

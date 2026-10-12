@@ -1,7 +1,7 @@
 import { isClientTelemetryEnabled } from "@/lib/config";
 
 /**
- * ALWAYS-ON safety-control counters (#640).
+ * ALWAYS-ON safety-control counters.
  *
  * These are deliberately SEPARATE from the perf pipe in `vitals.ts`. The perf
  * metrics are default-OFF and 25%-sampled; a safety control whose failure is

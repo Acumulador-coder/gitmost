@@ -1,4 +1,4 @@
-// Canonical client-side types for external MCP servers (#686).
+// Canonical client-side types for external MCP servers.
 //
 // SINGLE SOURCE OF TRUTH (AGENTS invariant #7): both the admin path
 // (`features/workspace/services/ai-mcp-server-service.ts`, POSTs to

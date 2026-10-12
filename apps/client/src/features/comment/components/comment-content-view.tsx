@@ -5,7 +5,7 @@ import CommentEditor from "@/features/comment/components/comment-editor";
 
 // Static, editor-free renderer of a comment body (ProseMirror JSON). It walks the
 // document and emits plain DOM, avoiding the cost of a full TipTap/ProseMirror
-// instance per comment (the panel used to spin up 400+ editors on mount).
+// instance per comment (a panel can hold hundreds of comments).
 //
 // The supported node/mark set MUST mirror what CommentEditor enables
 // (StarterKit + Mention + LinkExtension). Anything outside that set makes the

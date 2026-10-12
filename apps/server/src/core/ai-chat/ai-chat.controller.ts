@@ -72,12 +72,10 @@ import {
 import { startSseHeartbeat } from './sse-resilience';
 
 /**
- * Write the attach TAIL to the hijacked socket in chunks that RESPECT drain
- * (#491): each `write()` that returns false (the kernel buffer is full) is awaited
- * on the next 'drain' before continuing. The old code wrote the whole buffer
- * synchronously, which — with the pre-#491 32MB ring — spiked memory (half the
- * OOM). Bails immediately if the socket ended/errored mid-write. Frames that the
- * paused registry subscriber buffers while this awaits are delivered by start().
+ * Write the attach tail to the hijacked socket respecting drain: each `write()`
+ * that returns false is followed by awaiting 'drain'. Bails immediately if the
+ * socket ended/errored mid-write. Frames the paused registry subscriber buffers
+ * meanwhile are delivered by start().
  */
 async function writeTailRespectingDrain(
   raw: {
@@ -145,14 +143,12 @@ export class AiChatController {
   ) {}
 
   /**
-   * Reconstruct parts for any assistant rows that don't carry them INLINE — a
-   * #492 mid-run record whose per-step parts live in `ai_chat_run_steps` (the
-   * append-persist backend). Every FINISHED row (old-era + #492) and every old-era
-   * streaming snapshot already has inline `metadata.parts`, so the common path
-   * fetches NOTHING and returns the rows untouched; only an actively-streaming
-   * new-style row triggers the batch step fetch. Consumers (seed/poll/export) read
-   * `metadata.parts` off the returned rows exactly as before — the era switch is
-   * invisible to them (reconstructRunParts contract).
+   * Reconstruct parts for assistant rows that don't carry them inline — a mid-run
+   * row whose per-step parts live in `ai_chat_run_steps`. Finished rows already
+   * have inline `metadata.parts`, so the common path fetches nothing; only an
+   * actively-streaming row triggers the batch step fetch. Consumers
+   * (seed/poll/export) read `metadata.parts` off the returned rows either way
+   * (reconstructRunParts contract).
    */
   private async withReconstructedParts(
     rows: AiChatMessage[],
@@ -182,19 +178,17 @@ export class AiChatController {
   }
 
   /**
-   * Resolve the chat bound to a document for the requesting user (#665): the chat
-   * the `ai_chat_page_bindings` pointer holds for (user, page). Returns
-   * { chatId: null } when nothing is bound (-> a fresh empty chat). There is NO
-   * fallback to the retired #191 findLatestByPage heuristic — after "New chat" the
-   * binding row is gone, and a fallback would resurrect the unbound chat.
+   * Resolve the chat bound to a document for the requesting user: the chat the
+   * `ai_chat_page_bindings` pointer holds for (user, page), or { chatId: null }
+   * when nothing is bound. There is no fallback to "latest chat on the page":
+   * after "New chat" the binding row is gone, and a fallback would resurrect the
+   * unbound chat.
    *
-   * `dto.pageId` carries EITHER a page slugId (10-char nanoid, sent by the client
-   * off a slug URL) OR a page uuid, so it must be resolved to a real page uuid
-   * before it touches the uuid page_id column — passing a slugId straight through
-   * triggered a Postgres 22P02 "invalid input syntax for type uuid" 500 (#312).
-   * PageRepo.findById accepts both forms. The workspace guard rejects an unknown or
-   * cross-workspace page (-> { chatId: null }) so a foreign id cannot probe another
-   * workspace's chats. The binding resolver then re-checks chat ownership itself.
+   * `dto.pageId` is a page slugId (10-char nanoid) OR uuid; PageRepo.findById
+   * resolves both before anything touches the uuid page_id column (a raw slugId
+   * there is a Postgres 22P02). The workspace guard turns an unknown or
+   * cross-workspace page into { chatId: null }; the binding resolver re-checks
+   * chat ownership itself.
    */
   @HttpCode(HttpStatus.OK)
   @Post('bound-chat')
@@ -216,19 +210,17 @@ export class AiChatController {
   }
 
   /**
-   * Move (or clear) the page->chat binding for the requesting user (#665). Called
-   * on a CONSCIOUS open: the client's history select re-binds the page to the
-   * chosen chat; "New chat" clears it (`chatId: null`). The header button and the
-   * agent-badge deeplink deliberately do NOT call this.
+   * Move (or clear) the page->chat binding for the requesting user. Called on a
+   * conscious open: the client's history select re-binds the page to the chosen
+   * chat; "New chat" clears it (`chatId: null`). The header button and the
+   * agent-badge deeplink do NOT call this.
    *
-   * Binding is a convenience, not access control, so every "not applied" outcome is
-   * a fail-SOFT `200 { chatId: null }` with NO write — but each one emits a WARN +
-   * a bounded skip-counter, because otherwise a no-op is indistinguishable from a
-   * success in the HTTP histogram. `dto.pageId` accepts a slugId OR uuid (resolved
-   * before touching the uuid column, #312). A `chatId` that does not exist / is not
-   * the caller's / left the workspace / is soft-deleted is fail-CLOSED: never write
-   * a pointer to a chat the user does not own. The response body is a debug aid, NOT
-   * a postcondition — the client ignores it and never blocks the UI on this call.
+   * Binding is a convenience, not access control, so every "not applied" outcome
+   * is a fail-soft `200 { chatId: null }` with no write, each with a WARN + a
+   * bounded skip counter (otherwise a no-op looks like success in the HTTP
+   * histogram). `dto.pageId` accepts a slugId OR uuid. A `chatId` that does not
+   * exist / is not the caller's / left the workspace / is soft-deleted is
+   * fail-closed. The response body is a debug aid; the client ignores it.
    */
   @HttpCode(HttpStatus.OK)
   @Post('bind-page')
@@ -306,15 +298,12 @@ export class AiChatController {
   }
 
   /**
-   * Delta poll (#491) — the degraded-poll fallback's payload. Returns the chat's
-   * message rows changed since `cursor` (a DB-clock timestamp from the previous
-   * poll), a FRESH cursor, AND the current run fact `{ id, status } | null`. This
-   * replaces the old degraded poll that refetched ALL infinite-query pages (full
-   * parts) every 2.5s: the client seeds once and thereafter merges only the
-   * deltas by id (the overlap window guarantees repeats — the merge is idempotent,
-   * see mergeById). The run fact rides IN the delta (a separate /run poll would
-   * double the poll QPS), so the client FSM gets the run's status on the same tick.
-   * Owner-gated via assertOwnedChat (same gate as the other read endpoints).
+   * Delta poll — the degraded-poll payload. Returns the chat's message rows
+   * changed since `cursor` (a DB-clock timestamp from the previous poll), a fresh
+   * cursor, and the current run fact `{ id, status } | null`. The client seeds
+   * once and then merges deltas by id (the overlap window guarantees repeats; the
+   * merge is idempotent, see mergeById). The run fact rides in the delta so a
+   * separate /run poll is not needed. Owner-gated via assertOwnedChat.
    */
   @HttpCode(HttpStatus.OK)
   @Post('messages/delta')
@@ -349,12 +338,11 @@ export class AiChatController {
   }
 
   /**
-   * Export a chat to Markdown (#183). The DB is the single source of truth: the
-   * whole transcript is loaded (oldest -> newest) and rendered server-side. Now
-   * that the assistant row is persisted upfront and per step, an interrupted
-   * turn is included up to its last finished step. Workspace-scoped and owner-
-   * gated via assertOwnedChat (same as the other read endpoints). Returns
-   * `{ markdown }`. `lang` localizes the few fixed labels (default English).
+   * Export a chat to Markdown. The whole transcript is loaded from the DB (oldest
+   * -> newest) and rendered server-side; an interrupted turn is included up to
+   * its last finished step. Workspace-scoped and owner-gated via
+   * assertOwnedChat. Returns `{ markdown }`. `lang` localizes the few fixed
+   * labels (default English).
    */
   @HttpCode(HttpStatus.OK)
   @Post('export')
@@ -381,7 +369,7 @@ export class AiChatController {
   }
 
   /**
-   * Reconnect to the latest run of a chat (#184 phase 1). Returns the run's
+   * Reconnect to the latest run of a chat. Returns the run's
    * persisted lifecycle state ({ status, error, stepCount, timings, ... }) plus
    * the assistant message it projects (the partial/final output) — the DB is the
    * source of truth, so this works for an in-flight run (the browser dropped, the
@@ -417,9 +405,9 @@ export class AiChatController {
   }
 
   /**
-   * Explicitly STOP an agent run (#184 phase 1) — the user pressed Stop. This is
-   * the ONLY thing that ends a detached run; a browser disconnect deliberately
-   * does not (except #714, see stream(): a new chat's client that left before
+   * Explicitly STOP an agent run — the user pressed Stop. This is the only
+   * thing that ends a detached run; a browser disconnect does not (except, see
+   * stream(): a new chat's client that left before
    * the first frame). Target by `runId` (from the streamed start metadata) or
    * by `chatId` (stop whatever run is active on it). Owner-gated. Returns
    * `{ stopped }` — false when there was nothing active to stop.
@@ -457,23 +445,19 @@ export class AiChatController {
   }
 
   /**
-   * Attach to a chat's live run stream from the client's step frontier (#184 phase
-   * 1.5, tail-only #491). A late/reloaded tab hands the server the step count it
-   * has PERSISTED (`n` = the seeded row's `metadata.stepsPersisted`) and its
-   * assistant row id (`anchor`); the registry answers with the TAIL past step `n`
-   * (a synthetic `start` frame + the buffered frames stamped >= n) and then the
-   * live tail. Owner-gated via assertOwnedChat (same gate as getRun). When there
-   * is nothing to resume — no entry, a ring that does not cover the client's
-   * frontier (overflow gap, or the client's seed lagged a rotation), or an anchor
-   * that pins a DIFFERENT run (invariant 6) — the endpoint answers 204, the ONLY
-   * "nothing to resume" signal the AI SDK's reconnect accepts (it maps 204 to a
-   * silent no-op); the client then refetches (a larger n) and re-attaches.
+   * Attach to a chat's live run stream from the client's step frontier. A
+   * late/reloaded tab sends the step count it has persisted (`n` = the seeded
+   * row's `metadata.stepsPersisted`) and its assistant row id (`anchor`); the
+   * registry answers with the tail past step `n` (a synthetic `start` frame + the
+   * buffered frames stamped >= n) and then the live stream. Owner-gated via
+   * assertOwnedChat. When there is nothing to resume — no entry, a ring that does
+   * not cover the frontier, or an anchor that pins a different run — the
+   * endpoint answers 204, the only "nothing to resume" signal the AI SDK's
+   * reconnect accepts; the client then refetches (a larger n) and re-attaches.
    *
-   * The step marker `n` comes ONLY from the client — the server never reads the
-   * row to derive it, because a server-side n from a stale seed would open a
-   * silent one-step hole. The tail is written to the socket in CHUNKS respecting
-   * drain (writeTailRespectingDrain): the old code synchronously blasted the whole
-   * buffer, which — with the old 32MB cap — was half the OOM.
+   * `n` comes only from the client: a server-side n from a stale seed would open
+   * a silent one-step hole. The tail is written in chunks respecting drain
+   * (writeTailRespectingDrain).
    */
   @SkipTransform()
   @UseGuards(JwtAuthGuard, UserThrottlerGuard)
@@ -489,13 +473,11 @@ export class AiChatController {
     @AuthWorkspace() workspace: Workspace,
   ): Promise<void> {
     await this.assertOwnedChat(chatId, user, workspace); // same gate as getRun
-    // The client's persisted step frontier. #491: distinguish a MISSING/invalid `n`
-    // (null — a NOT-tail-aware, legacy/parameterless tab expecting the old
-    // "finished -> 204 -> poll" contract) from `n=0` (a tail-aware client with
-    // nothing persisted yet). Passing 0 for a missing `n` would serve a finished,
-    // non-rotated run's WHOLE tail and a parameterless client would append it onto
-    // the steps it already shows -> #137/#161 duplicate. null makes the registry
-    // 204 such a finished run (see attach); a tail-aware n=0 still resumes.
+    // The client's persisted step frontier. A missing/invalid `n` (null: a client
+    // that is not tail-aware) differs from `n=0` (tail-aware, nothing persisted).
+    // Passing 0 for a missing `n` would serve a finished, non-rotated run's whole
+    // tail, which such a client appends onto the steps it already shows; null
+    // makes the registry answer 204 for a finished run (see attach).
     const frontier: number | null =
       n === undefined || n === '' || !Number.isFinite(Number(n))
         ? null
@@ -636,15 +618,11 @@ export class AiChatController {
 
     const body = (req.body ?? {}) as AiChatStreamBody;
 
-    // #487 [security]: gate cross-user access to an EXISTING chat BEFORE anything
-    // reads its runs. Every sibling endpoint (getRun/stop/history/rename/delete/
-    // attachRunStream) owner-checks the chat via assertOwnedChat; stream() must too.
-    // Without this a same-workspace member who is NOT the chat owner could POST a
-    // supersede against another user's chat and (a) harvest that user's active runId
-    // out of the 409 SUPERSEDE_TARGET_MISMATCH body, then (b) requestStop the foreign
-    // run. Gate on the chatId the client sent, when present — a brand-new chat (no
-    // chatId) has no prior owner to check. Mirrors /stop's owner check (403 as the
-    // neighbors do), and runs pre-hijack so it returns clean JSON.
+    // Owner-check an EXISTING chat before anything reads its runs, like every
+    // sibling endpoint. Otherwise a same-workspace member could POST a supersede
+    // against another user's chat, harvest its active runId from the 409
+    // SUPERSEDE_TARGET_MISMATCH body and requestStop it. A brand-new chat (no
+    // chatId) has no owner to check. Runs pre-hijack so it returns clean JSON.
     if (body.chatId) {
       await this.assertOwnedChat(body.chatId, user, workspace);
     }
@@ -736,14 +714,12 @@ export class AiChatController {
       }
     }
 
-    // #487: the turn is ALWAYS a first-class, detached RUN: a browser disconnect
-    // does not stop it (onClose below); only an explicit stop (/ai-chat/stop or
-    // a supersede) aborts it.
+    // The turn is a detached RUN: a browser disconnect does not stop it (onClose
+    // below); only an explicit stop (/ai-chat/stop or a supersede) aborts it.
     //
-    // #714 exception: a NEW chat learns its id only from the first stream frame
-    // (the `start` part, written right after the headers). If the client goes
-    // away before that, it can never address this run — not to stop it, not to
-    // reattach — so the server stops it itself.
+    // Exception: a NEW chat learns its id only from the first stream frame (the
+    // `start` part, written right after the headers). If the client goes away
+    // before that, it can never address this run, so the server stops it.
     const isNewChat = !body.chatId;
     let newChatRun: { runId: string; chatId: string } | undefined;
     const stopUnaddressableRun = (run: { runId: string; chatId: string }) => {
@@ -939,12 +915,10 @@ export class AiChatController {
   }
 
   /**
-   * Generate a page title from supplied note content (#199). One-shot,
-   * non-streaming. Gated by the AI chat flag (settings.ai.chat, the same toggle
-   * that enables the chat agent); returns { title }.
-   * The endpoint NEVER writes the page — the client applies the title via the
-   * existing /pages/update route (which enforces edit permission), so access
-   * checks are not duplicated here. Throttled per user via AI_CHAT_THROTTLER.
+   * Generate a page title from supplied note content. One-shot, non-streaming.
+   * Gated by the AI chat flag (settings.ai.chat); returns { title }. The endpoint
+   * never writes the page — the client applies the title via /pages/update
+   * (which enforces edit permission). Throttled per user via AI_CHAT_THROTTLER.
    */
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, UserThrottlerGuard)

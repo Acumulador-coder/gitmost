@@ -28,8 +28,8 @@ export type CollabEventHandlers = ReturnType<
 >;
 
 /**
- * #647 refinement B — result of the `readLiveContent` probe (the owner-side half
- * of the `readLiveIfLoaded` primitive #654 depends on).
+ * Result of the `readLiveContent` probe (the owner-side half of
+ * `readLiveIfLoaded`).
  *  - `loaded:true`  → the document IS in this instance's memory and `content`/
  *    `hash` are the FULLY HYDRATED live doc (property 5). `hash` is coherent with
  *    `content` (both derived from the same `fromYdoc`).
@@ -43,13 +43,13 @@ export type ReadLiveContentResult =
   | { loaded: false };
 
 /**
- * #647 §C — verdict of the server-side write-CAS (`replaceIfMatch`).
+ * Verdict of the server-side write-CAS (`replaceIfMatch`).
  *  - `applied:true`  → `baseHash` matched the authoritative live doc and the
  *    structural overwrite was applied; `newHash` is the post-write content hash.
  *  - `applied:false` (no `reason`) → `baseHash` did NOT match: a concurrent edit
  *    landed between the agent's read and this write. `currentHash` is the live
  *    hash to re-read against. No mutation happened → REST maps this to HTTP 409.
- *  - `applied:false` + `reason:'empty-replace-refused'` → §C/B4: the replacement
+ *  - `applied:false` + `reason:'empty-replace-refused'` → the replacement
  *    would empty a non-empty page. Refused (fail-closed) rather than risking the
  *    store-side empty-guard rolling the write back into a hash/content desync with
  *    a poisoned `newHash`. REST maps this to 422.
@@ -126,7 +126,7 @@ export class CollaborationHandler {
         },
       ) => {
         const { commentId, user } = payload;
-        // Ephemeral suggestions (#329): when a suggestion-edit is dismissed or an
+        // Ephemeral suggestions: when a suggestion-edit is dismissed or an
         // applied one has no replies, the comment is hard-deleted and its inline
         // anchor must vanish too. Mirror resolveCommentMark exactly, but instead
         // of flipping the mark's `resolved` attribute we STRIP the `comment` mark
@@ -221,29 +221,26 @@ export class CollaborationHandler {
         );
       },
       /**
-       * #647 §C — server-side write-CAS (`replaceIfMatch`), the authoritative
-       * compare-and-swap that closes the "agent reads H, human/another agent
-       * edits, agent's full overwrite silently clobbers it" race.
+       * Server-side write-CAS (`replaceIfMatch`): closes the "agent reads H,
+       * someone edits, agent's full overwrite clobbers it" race.
        *
        * Routed to the document OWNER as a WRITE event (`handleYjsEvent` →
-       * `redisSync.handleEvent`, 30s TTL): if the owner is unreachable the bridge
-       * TIMES OUT and throws, so the caller fails CLOSED (retryable) — it never
-       * falls back to comparing against a stale DB snapshot (which is exactly why
-       * the compare here reads the LIVE `fromYdoc(doc)` inside the transaction and
-       * NOT `getLiveContentPair`, whose `unreachable`→DB-reconstruct collapse
-       * would let a write clobber an unreachable owner's newer state).
+       * `redisSync.handleEvent`, 30s TTL): an unreachable owner makes the bridge
+       * time out and throw, so the caller fails closed (retryable). It never
+       * compares against a DB snapshot — the compare reads the live
+       * `fromYdoc(doc)` inside the transaction, not `getLiveContentPair`, whose
+       * unreachable→DB-reconstruct fallback would let a write clobber newer state.
        *
        * Inside `connection.transact` (synchronous, atomic):
-       *  1. hash the AUTHORITATIVE live doc (`fromYdoc`);
-       *  2. `!== baseHash` → return `{applied:false, currentHash}`, NO mutation;
-       *  3. B4 empty-guard → refuse an empty-over-non-empty replace;
+       *  1. hash the authoritative live doc (`fromYdoc`);
+       *  2. `!== baseHash` → return `{applied:false, currentHash}`, no mutation;
+       *  3. empty-guard → refuse an empty-over-non-empty replace;
        *  4. else apply via the STRUCTURAL diff (`applyPmJsonToFragment` /
-       *     `updateYFragment`, NOT delete+recreate) so an idle human editor's
-       *     cursor is preserved (#152), and return `{applied:true, newHash}`.
+       *     `updateYFragment`, not delete+recreate) so an idle human editor's
+       *     cursor is preserved, and return `{applied:true, newHash}`.
        *
-       * B3 attribution: the connection context carries `{user, actor, aiChatId,
-       * apiKeyId}` (not just `{user}` like the legacy `updatePageContent`), so the
-       * debounced store stamps `lastUpdatedSource='agent'` and preserves the
+       * The connection context carries `{user, actor, aiChatId, apiKeyId}`, so
+       * the debounced store stamps `lastUpdatedSource='agent'` and keeps the
        * `apiKeyId`/`aiChatId` of the write.
        */
       replaceIfMatch: async (
@@ -272,7 +269,7 @@ export class CollaborationHandler {
               return { applied: false, currentHash };
             }
 
-            // (3) B4 empty-guard: an empty replacement over non-empty content
+            // (3) Empty-guard: an empty replacement over non-empty content
             // would be silently rolled back by the store-side empty-guard
             // (persistence.extension), leaving the broadcast/newHash out of sync
             // with the persisted row. Refuse it here (fail-closed) instead. An
@@ -299,9 +296,8 @@ export class CollaborationHandler {
         );
       },
       /**
-       * #647 refinement B — NON-CLAIMING, NON-FORCE-LOADING read of the live doc.
-       *
-       * The owner-side half of `readLiveIfLoaded` (#654's gating primitive). It
+       * Non-claiming, non-force-loading read of the live doc — the owner-side
+       * half of `readLiveIfLoaded`. It
        * reads ONLY what is already hydrated in this instance's memory:
        *  - property 2 (no force-load): we consult `hocuspocus.documents` directly
        *    and NEVER call `openDirectConnection` (which would load from the DB);
@@ -322,13 +318,11 @@ export class CollaborationHandler {
         return { loaded: true, content, hash: pageContentHash(content) };
       },
       /**
-       * Git-sync body write, applied as a block-level MERGE into the LIVE doc on
-       * the instance that OWNS it (routed here via the custom-event channel —
-       * see CollaborationGateway.writePageBody). Running on the owning instance
-       * is what makes a connected editor CONVERGE: the merge mutates the shared
-       * Document, whose update is broadcast to every connection, so the editor's
-       * CRDT applies the git change instead of silently reverting it on its next
-       * autosave (the data-loss bug this fixes).
+       * Git-sync body write, applied as a block-level MERGE into the live doc on
+       * the instance that OWNS it (routed via the custom-event channel, see
+       * CollaborationGateway.writePageBody). The merge mutates the shared
+       * Document, whose update is broadcast to every connection, so a connected
+       * editor converges on the git change instead of reverting it on autosave.
        *
        * With a `baseProsemirrorJson` (the last-synced common ancestor) it does a
        * THREE-WAY merge — a block only the human changed is kept, a block only
@@ -376,22 +370,14 @@ export class CollaborationHandler {
               )
             : null;
 
-        // CONCURRENT-EDIT FLUSH (QA #119, finding #2). The 3-way merge below runs
-        // against the LIVE Y.Doc, so a concurrent UI edit is only preserved if it
-        // is already part of that doc. A user's edit is debounced before it lands
-        // (the editor batches; the collab store is debounced up to 10s), so the
-        // merge could otherwise run against a PRE-EDIT doc: git would then
-        // clean-apply (no same-block conflict detected) and the in-flight UI edit
-        // — even on a DIFFERENT block — would be silently dropped.
-        //
-        // Flushing the pending debounced store here (a) drains the event loop so a
-        // just-arrived client Yjs update is applied to the live doc BEFORE we
-        // merge, and (b) persists the live doc so the merge baseline is current
-        // even on the doc-reload-from-DB path. After the flush the merge sees the
-        // latest state, so an edit on a different block is MERGED (not overwritten)
-        // and a genuine same-block edit is detected as a conflict -> the
-        // boundary-snapshot in PersistenceExtension pins it to page history
-        // (recoverable) instead of vanishing silently.
+        // Flush the pending store first. The 3-way merge runs against the LIVE
+        // Y.Doc, and a user's edit is debounced before it lands (the collab store
+        // up to 10s), so the merge could run against a pre-edit doc and silently
+        // drop an in-flight UI edit, even on a different block. The flush (a)
+        // drains the event loop so a just-arrived client update is applied, and
+        // (b) persists the live doc so the baseline is current on the
+        // reload-from-DB path. A same-block edit is then detected as a conflict
+        // and the PersistenceExtension boundary snapshot pins it to history.
         await this.flushPendingStore(hocuspocus, documentName);
 
         // actor:'git-sync' + the service user flow into PersistenceExtension
@@ -452,8 +438,8 @@ export class CollaborationHandler {
 
   /**
    * Flush any pending DEBOUNCED store for `documentName` so the live Y.Doc and the
-   * DB are current BEFORE a git-sync merge reads them (QA #119, finding #2 —
-   * concurrent UI edit silently lost). Mirrors the PersistenceExtension.onDisconnect
+   * DB are current BEFORE a git-sync merge reads them. Mirrors the
+   * PersistenceExtension.onDisconnect
    * flush: only acts when a store is actually pending (`isDebounced`), runs the
    * SAME scheduled payload (`executeNow`, preserving the edit's context/actor), and
    * never throws — a flush failure must not abort the git-sync write. Awaiting it

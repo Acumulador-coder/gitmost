@@ -2,15 +2,14 @@ import * as fs from 'node:fs';
 import { ShareSeoController } from './share-seo.controller';
 
 /**
- * Routing guard for ShareSeoController.getShare (red-team finding #3).
+ * Routing guard for ShareSeoController.getShare.
  *
  * The SEO route must NOT leak a shared page's <title>/og:title to anonymous
- * visitors / crawlers when the page is not publicly readable. It previously
- * called the raw `getShareForPage`, which skips the restricted-ancestor gate, so
- * a permission-restricted descendant of an includeSubPages share leaked its
- * title. The fix funnels through `resolveReadableSharePage` (the canonical gate)
- * AND honours `isSharingAllowed`. These tests pin that routing: a non-readable
- * page or sharing-disabled space serves the plain SPA index (no title); only a
+ * visitors / crawlers when the page is not publicly readable. The raw
+ * `getShareForPage` skips the restricted-ancestor gate, so the route funnels
+ * through `resolveReadableSharePage` (the canonical gate) AND honours
+ * `isSharingAllowed`. These tests pin that routing: a non-readable page or
+ * sharing-disabled space serves the plain SPA index (no title); only a
  * readable, still-shared page gets meta tags.
  */
 

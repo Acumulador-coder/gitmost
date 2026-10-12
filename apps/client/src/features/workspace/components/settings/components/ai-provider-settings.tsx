@@ -183,10 +183,9 @@ type ReindexStatus = Pick<
  * new run mints a fresh runId and so a different key.
  *
  * This is the single place the client turns the server's run identity into the
- * value it keys on — it removes the "is this the same run I've been watching or
- * a brand-new one?" ambiguity that made a class of reindex-status bugs (a stale
- * pre-reindex snapshot vs a fresh run) get fixed twice (#262). `startedAt` is
- * folded in so a run that somehow reuses a runId but restarted is still new.
+ * value it keys on, so "same run I've been watching, or a new one?" (a stale
+ * pre-reindex snapshot vs a fresh run) has one answer. `startedAt` is folded in
+ * so a run that reuses a runId but restarted is still new.
  */
 export function reindexRunKey(status: ReindexStatus | undefined): string | null {
   const runId = status?.runId;

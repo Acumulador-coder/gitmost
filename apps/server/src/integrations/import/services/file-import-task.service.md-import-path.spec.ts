@@ -40,19 +40,17 @@ import { FileImportTaskService } from './file-import-task.service';
 import { ImportService } from './import.service';
 
 /**
- * Zip `.md` import path (#555).
+ * Zip `.md` import path.
  *
  * The zip importer parses a `.md` entry with the canonical converter
- * (`markdownToProseMirror`, since #345) and then serializes the result to HTML
+ * (`markdownToProseMirror`) and then serializes the result to HTML
  * (`jsonToHtml`) so the entry joins the SHARED HTML pipeline that `.html`
  * entries use: `processAttachments` -> `formatImportHtml` -> `processHTML`.
- * That PM -> HTML -> PM hop was suspected of degrading `.md` content relative to
- * the single-file `.md` path (`ImportService.processMarkdown`, which parses
- * straight to ProseMirror with no HTML intermediate).
+ * The single-file `.md` path (`ImportService.processMarkdown`) parses straight
+ * to ProseMirror with no HTML intermediate.
  *
- * This spec pins BOTH halves of the answer, because they pull in opposite
- * directions and a future "just call markdownToProseMirror directly" cleanup
- * would silently break the second half:
+ * This spec pins two properties of that PM -> HTML -> PM hop (calling
+ * markdownToProseMirror directly would break the second):
  *
  *  1. FIDELITY — for prose, the hop is faithful: a zip `.md` page ends up with
  *     the SAME ProseMirror as the single-file `.md` path (modulo the `id` /

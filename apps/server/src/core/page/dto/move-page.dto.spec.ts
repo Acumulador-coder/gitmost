@@ -6,21 +6,12 @@ import { validate } from 'class-validator';
 import { generateJitteredKeyBetween } from 'fractional-indexing-jittered';
 import { MovePageDto } from './move-page.dto';
 
-// PARITY BUG (Gitea #139, item 6): MovePageDto.position is bounded with
-// @MinLength(5) @MaxLength(12), but the actual positions are fractional-indexing
-// keys produced by `generateJitteredKeyBetween` (the same generator page.service
-// uses). Those bounds do NOT match the generator's real output range:
-//   - a freshly generated key (null,null) is short (~5 chars) and currently
-//     squeaks past MinLength(5);
-//   - but DENSE between-inserts (repeatedly inserting between two adjacent keys)
-//     grow the key well past 12 chars, which MaxLength(12) would WRONGLY reject —
-//     a valid ordering key the server itself generated would be refused on move.
-//
-// The tests below assert the CORRECT contract: any key the generator can produce
-// must satisfy the DTO. FIXED (#495 item 9): the DTO now validates `position` by
-// CHARSET ([0-9A-Za-z], the generator's base-62 alphabet) instead of the wrong
-// @MaxLength(12) length bound, so dense between-inserts are accepted; the former
-// `test.failing` bug-lock is now a passing assertion.
+// MovePageDto.position must accept every key `generateJitteredKeyBetween` (the
+// same generator page.service uses) can produce. A fresh key (null,null) is short
+// (~5 chars), but DENSE between-inserts (repeatedly inserting between two
+// adjacent keys) grow the key well past 12 chars. The DTO validates `position` by
+// CHARSET ([0-9A-Za-z], the generator's base-62 alphabet) rather than a length
+// bound; the tests below assert any key the generator can produce satisfies it.
 
 function constraintErrors(position: unknown) {
   const dto = plainToInstance(MovePageDto, {

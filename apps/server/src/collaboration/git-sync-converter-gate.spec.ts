@@ -1,40 +1,38 @@
 /**
- * JEST CONFIG NOTE (#119 ESM refactor): this is the one spec that needs the REAL
- * `@docmost/git-sync` converter (not a mock). The package is now ESM, which jest
- * cannot `require()` nor `import()` without --experimental-vm-modules, so the
- * server jest config `moduleNameMapper`s `@docmost/git-sync` to its TS SOURCE and
- * strips the ESM `.js` import suffixes. ts-jest then type-checks that source under
- * the server's (looser) tsconfig and trips a benign narrowing; the global
+ * JEST CONFIG NOTE: this spec needs the REAL `@docmost/git-sync` converter (not
+ * a mock). The package is ESM, which jest cannot `require()` nor `import()`
+ * without --experimental-vm-modules, so the server jest config
+ * `moduleNameMapper`s `@docmost/git-sync` to its TS SOURCE and strips the ESM
+ * `.js` import suffixes. ts-jest then type-checks that source under the
+ * server's looser tsconfig and trips a benign narrowing; the global
  * `isolatedModules: true` on the ts-jest transform (apps/server/package.json)
- * makes it transpile-only so this spec loads. Full type-checking of the package
- * is still enforced by its own `tsc`/vitest gates and the server `tsc --noEmit`.
+ * makes it transpile-only. The package is still type-checked by its own
+ * `tsc`/vitest gates and the server `tsc --noEmit`.
  *
- * §13.1 IDEMPOTENCY GATE — the blocking gate for git-sync Phase B.
+ * §13.1 IDEMPOTENCY GATE for git-sync.
  *
  * Proves the `@docmost/git-sync` pure converter is schema-compatible
  * with the server's REAL editor-ext document schema: a representative corpus of
  * editor-ext ProseMirror documents must survive a full round trip through the
  * actual server write path without losing any node / mark / attribute.
  *
- * Pipeline per document (issue #194 §13.1):
+ * Pipeline per document:
  *   1. md   = convertProseMirrorToMarkdown(content)          // git-sync export
  *   2. doc  = await markdownToProseMirror(md)                // git-sync import
  *   3. push `doc` through the REAL editor-ext Yjs write path the server uses:
  *        ydoc       = TiptapTransformer.toYdoc(doc, 'default', tiptapExtensions)
  *        normalized = TiptapTransformer.fromYdoc(ydoc, 'default')
- *      This is exactly what PersistenceExtension does on store
- *      (apps/server/src/collaboration/extensions/persistence.extension.ts:96/115)
- *      with the same `tiptapExtensions` (collaboration.util.ts) and the same
+ *      This is what PersistenceExtension does on store with the same
+ *      `tiptapExtensions` (collaboration.util.ts) and the same
  *      `@hocuspocus/transformer`, so the gate exercises the real schema
- *      validation that runs on a git-sync write (issue #194 §3.3).
+ *      validation that runs on a git-sync write.
  *   4. assert docsCanonicallyEqual(canon(original), canon(normalized)) === true
  *
  * Any node / mark / attr that the editor-ext write path drops or changes (the
  * converter schema is editor-ext's `documentExtensions` plus the `OVERRIDES` in
  * docmost-schema.ts, which change some parse rules and defaults) makes
- * the gate FAIL for that document — exactly the schema-divergence issue #194 §3.3 /
- * §13.1 warn about. Genuine, irreducible divergences are isolated into the
- * clearly-named `KNOWN DIVERGENCE` block at the bottom (never silently hidden).
+ * the gate FAIL for that document. Genuine, irreducible divergences are
+ * isolated into the clearly-named `KNOWN DIVERGENCE` block at the bottom.
  *
  * Requires the workspace packages built first:
  *   pnpm --filter @docmost/editor-ext build
@@ -435,13 +433,10 @@ const CORPUS: Record<string, any> = {
     },
   ),
 
-  // Atom embeds that carry no inline text: they must round-trip via their
-  // schema-matching HTML (data-type div), NOT a literal that re-imports as plain
-  // text. `subpages` used to export as the literal "{{SUBPAGES}}" and came back
-  // as visible text on the page (red-team round-trip data loss) — this locks it.
-  // editor-ext materializes the `recursive: false` default on import, so the
-  // fixture pre-authors it to sit at the round-trip fixpoint (matches the other
-  // default-materializing fixtures above).
+  // Atom embeds that carry no inline text must round-trip via their
+  // schema-matching HTML (data-type div), not a literal that re-imports as plain
+  // text. editor-ext materializes the `recursive: false` default on import, so
+  // the fixture pre-authors it to sit at the round-trip fixpoint.
   'subpages embed': doc({ type: 'subpages', attrs: { recursive: false } }),
 };
 
@@ -466,27 +461,17 @@ describe('git-sync converter §13.1 idempotency gate (editor-ext schema)', () =>
 });
 
 // ---------------------------------------------------------------------------
-// Image layout attrs preserved by canon #4 (width/height/align all round-trip).
+// Image layout attrs (width/height/align) round-trip.
 //
-// The `image` NODE round-trips through editor-ext fine. Plain markdown `![](src)`
-// has no way to express layout attrs, so the canonical converter (#293/#326
-// canon decision #4) appends a machine comment `<!--img {...}-->` carrying the
-// NON-DEFAULT attrs, and re-parses it on import — the same trailing-comment
-// pattern used for media/textAlign.
+// Plain markdown `![](src)` cannot express layout attrs, so the canonical
+// converter appends a machine comment `<!--img {...}-->` carrying the
+// NON-DEFAULT attrs and re-parses it on import (the same trailing-comment
+// pattern as media/textAlign).
 //
-// About `align` — DO NOT repeat an earlier false diagnosis: align is NOT lost.
-// `center` is the schema default, so the emitter omits it (only left/right go
-// into the comment) and the importer restores it via the image `align` default
-// ("center"). `canonNormalized.align` reads `undefined` here ONLY because
-// `canonicalizeContent` normalizes the "center" default away SYMMETRICALLY (from
-// both the original and the round trip), so docsCanonicallyEqual is unaffected —
-// this is canonical-form normalization, not a divergence. Verified empirically:
-// left/right survive the raw round trip; center is restored on import then
-// canon-stripped on both sides. The real round-trip instability in this family
-// was the empty-string-vs-absent class (image.alt `absent -> ""`), fixed
-// parse-side in the converter PACKAGE on develop (PR #350). This branch absorbs
-// that fix via the next develop merge; nothing to flip here for align.
-// ---------------------------------------------------------------------------
+// `align` is not lost: `center` is the schema default, so the emitter omits it
+// (only left/right go into the comment) and the importer restores it from the
+// default. `canonNormalized.align` reads `undefined` only because
+// `canonicalizeContent` strips the "center" default on both sides.
 describe('git-sync converter §13.1 image layout attrs round-trip (align via schema default)', () => {
   const imageDoc = doc({
     type: 'image',
@@ -523,11 +508,9 @@ describe('git-sync converter §13.1 image layout attrs round-trip (align via sch
 });
 
 // ---------------------------------------------------------------------------
-// HEADING text alignment — now round-trips (item A1; formerly a KNOWN DIVERGENCE).
-// Symmetric with the paragraph fix: a heading's non-default `textAlign` is
-// exported as a styled `<hN style="text-align:…">` (was a bare ATX `## text`
-// that dropped it) and re-parsed by the heading + textAlign parseHTML on import,
-// so a non-default heading alignment SURVIVES a full round trip.
+// HEADING text alignment round-trips. A heading's non-default `textAlign` is
+// exported as a styled `<hN style="text-align:…">` and re-parsed by the heading
+// + textAlign parseHTML on import.
 // ---------------------------------------------------------------------------
 describe('git-sync converter §13.1 heading text alignment round-trips', () => {
   it('preserves a heading textAlign across the markdown round trip', async () => {
@@ -549,14 +532,9 @@ describe('git-sync converter §13.1 heading text alignment round-trips', () => {
 });
 
 // ---------------------------------------------------------------------------
-// textStyle color is now PRESERVED LOSSLESSLY (item #7 — divergence resolved).
-//
-// The former "KNOWN DIVERGENCE" was that a `#hex` color got value-normalized to
-// the equivalent `rgb(...)` string by the HTML re-parser on import. The unified
-// `@docmost/prosemirror-markdown` converter this branch rebased onto no longer
-// re-normalizes the color format — a `#hex` original round-trips STRING-identical
-// (verified against the current converter). Locked here so the boundary stays
-// explicit: any `#hex` color fixture is in the green corpus as-is.
+// textStyle color round-trips losslessly: a `#hex` color comes back
+// STRING-identical (not normalized to `rgb(...)`), so `#hex` fixtures are in the
+// green corpus as-is.
 // ---------------------------------------------------------------------------
 describe('git-sync converter §13.1 (textStyle color #hex preserved losslessly)', () => {
   it('preserves a #hex text color as-is (string-identical round-trip)', async () => {

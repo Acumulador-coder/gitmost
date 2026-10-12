@@ -5,16 +5,13 @@ import { queryClient } from "@/main.tsx";
 import { IPage } from "@/features/page/types/page.types.ts";
 
 /**
- * Off-keystroke local page-cache updater (issue #343, PART 3).
+ * Off-keystroke local page-cache updater.
  *
  * The editor's `onUpdate` fires on every keystroke — and, under collaboration,
  * on every REMOTE keystroke too. Serializing the WHOLE document with
- * `editor.getJSON()` on that hot path is expensive, and the previous 3s debounce
- * only guarded the cache WRITE, not the serialization: `getJSON()` still ran per
- * keystroke.
- *
- * This hook moves the serialization INSIDE the debounced callback, so the
- * full-doc traversal happens at most once per `delay`, not per keystroke. Call
+ * `editor.getJSON()` on that hot path is expensive, so this hook runs the
+ * serialization INSIDE the debounced callback: the full-doc traversal happens
+ * at most once per `delay`, not per keystroke. Call
  * the returned function from `onUpdate` (it only schedules the debounce); the
  * `getJSON()` snapshot is taken when the debounce fires.
  *

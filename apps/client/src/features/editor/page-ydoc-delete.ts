@@ -1,7 +1,7 @@
 import { reportSafetyMetric } from "@/lib/telemetry/safety-metrics";
 
 /**
- * Low-level, AWAITABLE delete of a single ydoc IndexedDB database (#640).
+ * Low-level, AWAITABLE delete of a single ydoc IndexedDB database.
  *
  * Extracted into its own module so both the eviction/purge path
  * (`page-ydoc-eviction.ts`) and the tombstone LRU pruning

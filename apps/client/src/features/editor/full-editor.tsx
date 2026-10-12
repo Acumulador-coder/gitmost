@@ -68,7 +68,7 @@ const ASIDE_GAP = 16;
 // `calc(26.25rem * var(--mantine-scale))`, and getComputedStyle does NOT
 // evaluate calc() for an unregistered custom property — it returns the literal
 // string "calc(26.25rem * 1)", whose parseFloat is NaN → a silent 0 that makes
-// the whole left-edge fix a no-op on desktop-open (#570). Instead we append a
+// the left-edge compensation a no-op on desktop-open. Instead we append a
 // hidden probe whose width IS the variable and read its laid-out box, forcing
 // the browser to evaluate calc/rem/scale for us. This yields ~420 on
 // desktop-open and 0 when the aside reserves no space (closed, or the below-`md`

@@ -53,10 +53,10 @@ export class PageInfoDto extends PageIdDto {
   @IsBoolean()
   includeContentHash?: boolean;
 
-  // #654 §Server — opt-in read-your-own-writes hint for the structural read
+  // Opt-in read-your-own-writes hint for the structural read
   // tools (getOutline/getNode/searchInPage/getTable). Set ONLY by the MCP client
   // for a page it just wrote to. When true the handler resolves the LIVE content
-  // via the non-claiming `readLiveIfLoaded` primitive (#647) so the returned
+  // via the non-claiming `readLiveIfLoaded` primitive so the returned
   // `content` reflects an acked-but-not-yet-flushed edit instead of the
   // debounce-stale DB row; it always fails open to the DB row (never an error).
   // The response then carries sibling `contentSource`/`fallbackReason` fields.

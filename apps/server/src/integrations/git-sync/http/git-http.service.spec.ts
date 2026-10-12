@@ -1,13 +1,12 @@
 // Unit tests for GitHttpService — the /git smart-HTTP handler. Everything it
 // depends on (backend, auth, repos, ability factory, env, orchestrator) is
 // mocked so we exercise ONLY the handler wiring: workspace resolution (which is
-// done HERE, not by DomainMiddleware — see FIX 1), the auth/gating precedence,
+// done HERE, not by DomainMiddleware), the auth/gating precedence,
 // the read-vs-write dispatch, and that a fetch does NOT take the lock.
 //
 // These tests deliberately NEVER set `req.raw.workspaceId`: the workspace must
-// come from WorkspaceRepo. If the handler regressed to reading
-// `req.raw.workspaceId`, the happy-path fetch test below would fail (the repo
-// would not be consulted and the request would 401).
+// come from WorkspaceRepo; a handler reading `req.raw.workspaceId` would 401 in
+// the happy-path fetch test below.
 import {
   Logger,
   NotFoundException,
@@ -187,7 +186,7 @@ function fakeRequest(opts: {
     headers,
     query,
     // raw is intentionally WITHOUT workspaceId — the handler must resolve it
-    // itself via WorkspaceRepo (a regression to req.raw.workspaceId would 401).
+    // itself via WorkspaceRepo (reading req.raw.workspaceId would 401).
     raw: {},
   } as any;
 }
@@ -310,7 +309,7 @@ describe('GitHttpService.handle', () => {
     // createForUser throws NotFound when the user holds no role in the space (a
     // non-member). The gate must return 404 — the SAME response a missing /
     // sync-disabled space gives — so a 403↔404 difference cannot be used to
-    // brute-force which spaces exist / have git-sync enabled (the security fix).
+    // brute-force which spaces exist / have git-sync enabled.
     const built = build({ abilityCan: false });
     built.abilityFactory.createForUser.mockRejectedValue(
       new NotFoundException('Space permissions not found'),

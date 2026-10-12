@@ -19,7 +19,7 @@ export function CreateGroupForm() {
   const [userIds, setUserIds] = useState<string[]>([]);
   const navigate = useNavigate();
 
-  // Build the schema with friendly, translated validation messages (issue #130)
+  // Build the schema with friendly, translated validation messages
   const formSchema = z.object({
     name: z
       .string()

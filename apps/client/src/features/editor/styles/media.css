@@ -47,17 +47,13 @@
     line-height: var(--mantine-line-height-md);
   }
 
-  /* The placeholder shimmer used to animate `background-position` on a
-     `background-size: 400% 400%` gradient. That is not a compositable
-     property: every frame re-rasterizes the whole gradient over the element's
-     box on the main thread, for as long as the media is loading (and, before
-     the error path existed, forever on a broken attachment).
-
-     `opacity` is compositable, so the animation now runs off the main thread.
-     The class sits on the replaced element itself (`<img>` / `<video>`), which
-     cannot carry a `::before`, so a translated pseudo-element is not an option
-     here — we keep the same gradient, frozen at its light-band position, and
-     breathe it instead. Same duration and easing. */
+  /* The placeholder shimmer animates `opacity`, which is compositable, so it
+     runs off the main thread; animating `background-position` on a
+     `background-size: 400% 400%` gradient would re-rasterize the whole gradient
+     on the main thread every frame while the media loads. The class sits on the
+     replaced element itself (`<img>` / `<video>`), which cannot carry a
+     `::before`, so a translated pseudo-element is not an option here — the
+     gradient is frozen at its light-band position and breathes instead. */
   .media-pulse {
     animation: media-pulse 1.2s ease-in-out infinite;
     will-change: opacity;
@@ -88,7 +84,7 @@
   }
 }
 
-/* Inline image rows (#284): center the anonymous line boxes formed by
+/* Inline image rows: center the anonymous line boxes formed by
    consecutive [data-image-align="inline"] node-view containers. A row has no
    DOM wrapper of its own, so its horizontal placement is controlled by the
    text-align of the nearest block ancestor (the editor root or a nested

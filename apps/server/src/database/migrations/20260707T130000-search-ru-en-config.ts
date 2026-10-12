@@ -1,13 +1,12 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * #529 Phase A1 — the `ru_en` text-search configuration + the config swap.
+ * The `ru_en` text-search configuration + the config swap.
  *
- * WHY: the search stack was pinned to the `english` FTS config, which stems only
- * Latin words. On a Russian-language wiki that is a morphology black hole:
- * «ресторанов москвы» never matched a page titled «ресторан в москве». `ru_en`
- * layers the russian_stem over the Cyrillic token classes and english_stem over
- * the ascii ones, so BOTH languages get proper morphology from one config.
+ * The `english` FTS config stems only Latin words, so «ресторанов москвы» does
+ * not match «ресторан в москве». `ru_en` layers russian_stem over the Cyrillic
+ * token classes and english_stem over the ascii ones, so both languages get
+ * morphology from one config.
  *
  *   CREATE TEXT SEARCH CONFIGURATION ru_en (COPY = simple);
  *   ALTER ... asciiword/asciihword/hword_asciipart WITH english_stem;
@@ -16,27 +15,16 @@ import { type Kysely, sql } from 'kysely';
  * `to_tsvector('ru_en', …)` with the LITERAL config name is IMMUTABLE, so it is
  * valid inside a trigger, a generated column and an index expression.
  *
- * THE INVARIANT (acceptance #13): the config of the STORED column and the config
- * of the QUERY must change together. This migration flips BOTH stored sides
- * (pages.tsv via its trigger + a reindex; page_embeddings.fts, the RAG lexical
- * leg, via its generated expression); the matching QUERY-side flips
- * (search.service.ts and page-embedding.repo.ts `hybridSearch`) ship in the SAME
- * commit. Trigram indexes are LOWER(f_unaccent(...)) and do NOT depend on the FTS
- * config, so they are untouched.
+ * INVARIANT: the config of the STORED column and the config of the QUERY must
+ * change together. This migration flips both stored sides (pages.tsv via its
+ * trigger + a reindex; page_embeddings.fts via its generated expression), and
+ * the query side uses `ru_en` in the same release. Trigram indexes are
+ * LOWER(f_unaccent(...)) and do not depend on the FTS config.
  *
- * REINDEX / LOCK MODEL (deploy-critical). Kysely runs EACH migration in its OWN
- * transaction (see sibling 20260706T120000 "Kysely runs each migration in a
- * transaction"; migrate.ts / migration.service.ts set no `disableTransactions`,
- * and PostgresJSDialect has transactional DDL). A single migration file therefore
- * cannot commit between batches, so the issue's "procedural batch job OUTSIDE the
- * transaction + dual-config read window + migration_complete gate" is not
- * expressible in-migration here. That machinery bridges a reindex spread over
- * MANY committed batches, during which some rows are still `english` while others
- * are already `ru_en`. Our pages.tsv reindex is a SINGLE `UPDATE pages SET tsv`,
- * ATOMIC within THIS migration's own transaction: at COMMIT every row is `ru_en`
- * at once, so no morphology-desync window exists and no dual-config read path is
- * required — the query config flips to `ru_en` in the very same release. This is
- * the deliberate, correct adaptation to this framework (see the PR notes).
+ * REINDEX / LOCK MODEL (deploy-critical). Kysely runs each migration in its own
+ * transaction (no `disableTransactions`; transactional DDL), so the pages.tsv
+ * reindex is a single `UPDATE pages SET tsv`, atomic within this migration: at
+ * COMMIT every row is `ru_en` at once and no dual-config read window is needed.
  *
  *   - pages.tsv: swapping the trigger is a cheap catalog change (no table lock),
  *     and the reindex is a single `UPDATE pages SET tsv = <ru_en expr>` — a
@@ -64,15 +52,10 @@ import { type Kysely, sql } from 'kysely';
  *       (b) Perform the swap out-of-band BEFORE deploy — add a plain column →
  *           batched backfill → brief-lock swap → CREATE INDEX CONCURRENTLY — so
  *           the `fts` column's generated expression already references the TARGET
- *           config when the migration runs. The migration detects this (it reads
- *           the column's actual generation expression from pg_catalog) and does a
- *           TRUE no-op — no DROP, no ADD, no rewrite. This is real idempotency,
- *           not the old (false) "IF-EXISTS guards no-op" claim: `DROP COLUMN IF
- *           EXISTS` guards against ABSENCE, not presence, so it would have dropped
- *           and recreated an existing `fts` regardless. The at-target check is the
- *           only honest no-op path.
- *
- * Same documented trade-off family as the #443 trgm GIN migration (20260706T120000).
+ *           config when the migration runs. The migration reads the column's
+ *           generation expression from pg_catalog and then does nothing (no
+ *           DROP, no ADD, no rewrite). `DROP COLUMN IF EXISTS` alone would not
+ *           do: it guards against absence, not presence.
  */
 
 // pages.tsv trigger body for a given FTS config — mirrors the latest form
