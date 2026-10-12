@@ -44,6 +44,11 @@ const RESERVED_WINDOWS_NAMES = new Set([
   "lpt9",
 ]);
 
+// A path component git refuses in a tree (`verify_path`): `.git` in any case
+// and, under `core.protectNTFS` (on by default), its NTFS aliases — trailing
+// dots/spaces (`.git.`) and the 8.3 short name `git~1` (any digits here).
+const GIT_DIR_NAME_RE = /^(\.git|git~\d+)[. ]*$/i;
+
 // Cap on the sanitized length to stay well within filesystem path-component
 // limits (255 bytes on most FSes) while leaving room for an extension and a
 // disambiguation suffix.
@@ -67,8 +72,8 @@ function stripControlChars(input: string): string {
  *
  * Steps: replace forbidden / control characters with "-", collapse whitespace
  * runs to a single space, trim, cap the length, then guard against an empty
- * result, an all-dots result, or a reserved Windows device name by prefixing
- * with "_".
+ * result, an all-dots result, a reserved Windows device name, or a name git
+ * refuses as a path component (`.git` and its aliases) by prefixing with "_".
  */
 export function sanitizeTitle(title: string): string {
   let name = stripControlChars(title ?? "")
@@ -87,11 +92,14 @@ export function sanitizeTitle(title: string): string {
   // reserved Windows device name is unusable as a path component. The all-dots
   // case is a path-traversal hazard in particular: an unprefixed ".." would
   // become a parent-directory segment and let a page escape the vault, so it
-  // MUST be neutralized here (becomes "_..", which is a literal file name).
+  // MUST be neutralized here (becomes "_..", which is a literal file name). A
+  // folder named `.git` would make the export's tree write fail for the whole
+  // space, so it becomes "_.git".
   if (
     name.length === 0 ||
     /^\.+$/.test(name) ||
-    RESERVED_WINDOWS_NAMES.has(base)
+    RESERVED_WINDOWS_NAMES.has(base) ||
+    GIT_DIR_NAME_RE.test(name)
   ) {
     name = "_" + name;
   }
@@ -106,17 +114,4 @@ export function sanitizeTitle(title: string): string {
  */
 export function disambiguate(name: string, slugId: string): string {
   return `${name} ~${slugId}`;
-}
-
-/**
- * The stem of git's version of a page the pull could not merge, kept as a new
- * file beside it: `<stem> ~git`, then `<stem> ~git-2`, … for the `n`-th free one.
- */
-export function gitCopyStem(stem: string, n: number): string {
-  return disambiguate(stem, n === 1 ? "git" : `git-${n}`);
-}
-
-/** True for a page file named by `gitCopyStem`. */
-export function isGitCopyPath(path: string): boolean {
-  return / ~git(-\d+)?\.md$/.test(path);
 }

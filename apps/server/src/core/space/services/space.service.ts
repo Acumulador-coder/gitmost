@@ -124,8 +124,7 @@ export class SpaceService {
     workspaceId: string,
   ): Promise<Space> {
     if (
-      (typeof updateSpaceDto.gitSyncEnabled !== 'undefined' ||
-        typeof updateSpaceDto.autoMergeConflicts !== 'undefined') &&
+      typeof updateSpaceDto.gitSyncEnabled !== 'undefined' &&
       !this.environmentService.isGitSyncEnabled()
     ) {
       throw new BadRequestException('Git sync is disabled on this server');
@@ -235,25 +234,6 @@ export class SpaceService {
           workspaceId,
           'enabled',
           updateSpaceDto.gitSyncEnabled,
-          trx,
-        );
-      }
-
-      if (typeof updateSpaceDto.autoMergeConflicts !== 'undefined') {
-        const prev = settingsBefore?.gitSync?.autoMergeConflicts ?? false;
-        if (prev !== updateSpaceDto.autoMergeConflicts) {
-          before.autoMergeConflicts = prev;
-          after.autoMergeConflicts = updateSpaceDto.autoMergeConflicts;
-        }
-
-        // Merges into the SAME `gitSync` jsonb object as `enabled` (the repo's
-        // jsonb-merge preserves sibling keys), so toggling one never clobbers the
-        // other.
-        await this.spaceRepo.updateGitSyncSettings(
-          updateSpaceDto.spaceId,
-          workspaceId,
-          'autoMergeConflicts',
-          updateSpaceDto.autoMergeConflicts,
           trx,
         );
       }

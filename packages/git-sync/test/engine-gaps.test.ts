@@ -5,9 +5,6 @@ import { planReconciliation } from '../src/engine/reconcile';
 import { buildVaultLayout, type PageNode } from '../src/engine/layout';
 import { sanitizeTitle } from '../src/engine/sanitize';
 import { firstDivergence } from './roundtrip-helpers';
-import { applyPullActions } from '../src/engine/pull';
-import type { PullActions, ApplyPullActionsDeps } from '../src/engine/pull';
-import type { DeletionDecision } from '../src/engine/reconcile';
 import { serializePageFile, parsePageFile } from '@docmost/prosemirror-markdown';
 
 // Engine-layer coverage gaps flagged by the PR #119 reviewers (test-strategy
@@ -253,7 +250,7 @@ describe('firstDivergence (roundtrip-helpers.ts)', () => {
 // What IS testable — and is the invariant the reviewer cares about — is the
 // OBSERVABLE isolation: a move whose tree files are unreadable is isolated (it
 // resolves to a no-op Docmost call, never aborting the batch) while updates,
-// creates and deletes in the SAME batch still apply, and the refs still advance.
+// creates and deletes in the SAME batch still apply.
 describe('applyPushActions (push.ts) — move prefetch isolation', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -275,11 +272,10 @@ describe('applyPushActions (push.ts) — move prefetch isolation', () => {
   it('isolates a move whose tree reads are unreadable; other actions still apply', async () => {
     const client = makeClient();
     const git = {
-      updateRef: vi.fn(async () => {}),
-      fastForwardBranch: vi.fn(async () => ({ ok: true })),
       // The OLD-side parent/meta reads resolve to null (absent at the base).
       showFileAtRef: vi.fn(async () => null),
       commitAddingPath: vi.fn(async () => null),
+      pageIdsAtRef: vi.fn(async () => []),
     };
     // The update file exists and is readable; the move's NEW-path tree reads
     // throw (simulating an unreadable/missing parent folder file at `current`).
@@ -293,7 +289,6 @@ describe('applyPushActions (push.ts) — move prefetch isolation', () => {
         if (p in store) return store[p];
         throw new Error(`unreadable ${p}`);
       }),
-      writeFile: vi.fn(async () => {}),
       spaceId: 'sp',
       baseRef: 'base-sha',
     };
@@ -307,7 +302,7 @@ describe('applyPushActions (push.ts) — move prefetch isolation', () => {
       skipped: [],
     };
 
-    const res = await applyPushActions(deps, actions, 'COMMIT-SHA');
+    const res = await applyPushActions(deps, actions);
 
     // The update and the delete in the SAME batch still applied.
     expect(res.updated).toBe(1);
@@ -329,126 +324,7 @@ describe('applyPushActions (push.ts) — move prefetch isolation', () => {
     expect(res.noops).toHaveLength(1);
     expect(res.noops[0]).toMatchObject({ pageId: 'pg', reason: 'path-only-rename' });
 
-    // No failures -> the refs advance (a clean batch is not blocked by the
-    // isolated, gracefully-handled move).
+    // No failures: the isolated move was handled gracefully.
     expect(res.failures).toEqual([]);
-    expect(res.lastPushedAdvanced).toBe(true);
-    expect(git.updateRef).toHaveBeenCalledWith(expect.any(String), 'COMMIT-SHA');
-  });
-});
-
-// --- 6. pull.ts:applyPullActions — failedPageIds keyed per-pageId -------------
-//
-// `failedPageIds` is keyed by pageId: when MULTIPLE moves each want their old
-// path removed, but ONE page's new-path write fails, ONLY that page's old path
-// must be KEPT (the ⭐ data-loss guard) — every OTHER page's old path is still
-// removed. This proves the set is keyed by pageId (the failing one only), not a
-// coarse all-or-nothing gate.
-describe('applyPullActions (pull.ts) — failedPageIds keyed per-pageId', () => {
-  const VAULT = '/vault';
-  const APPLY: DeletionDecision = { apply: true };
-
-  beforeEach(() => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  function makeClient() {
-    return {
-      getPageJson: vi.fn(async (pageId: string) => ({
-        id: pageId,
-        slugId: `slug-${pageId}`,
-        title: `Title ${pageId}`,
-        spaceId: 'space',
-        parentPageId: null,
-        updatedAt: '2026-01-01T00:00:00.000Z',
-        content: {
-          type: 'doc',
-          content: [
-            { type: 'paragraph', content: [{ type: 'text', text: pageId }] },
-          ],
-        },
-      })),
-    };
-  }
-  function makeGit() {
-    return {
-      stageAll: vi.fn(async () => {}),
-      commit: vi.fn(async () => true),
-      checkout: vi.fn(async () => {}),
-      merge: vi.fn(async () => ({ ok: true, conflict: false, output: '' })),
-      mergeBase: vi.fn(async () => null),
-      revParse: vi.fn(async () => null),
-      isMergeInProgress: vi.fn(async () => false),
-    };
-  }
-  function makeFs(failWriteFor: Set<string>) {
-    const rms: string[] = [];
-    const fs = {
-      writeFile: vi.fn(async (abs: string) => {
-        if (failWriteFor.has(abs)) throw new Error(`write failed for ${abs}`);
-      }),
-      mkdir: vi.fn(async () => {}),
-      rm: vi.fn(async (abs: string) => {
-        rms.push(abs);
-      }),
-    };
-    return { fs, rms };
-  }
-
-  it('keeps ONLY the failing page old path; the other moves still remove theirs', async () => {
-    // Two moves, both removeOldPath:true. Page "ok" writes fine; page "bad"
-    // fails its new-path write. Only "bad"'s old path must be kept.
-    const client = makeClient();
-    const git = makeGit();
-    const fs = makeFs(new Set(['/vault/NewBad/Bad.md']));
-
-    const deps: ApplyPullActionsDeps = {
-      client,
-      git,
-      writeFile: fs.fs.writeFile,
-      mkdir: fs.fs.mkdir,
-      rm: fs.fs.rm,
-    };
-    const actions: PullActions = {
-      toWrite: [
-        { pageId: 'ok', relPath: 'NewOk/Ok.md' },
-        { pageId: 'bad', relPath: 'NewBad/Bad.md' },
-      ],
-      moved: [
-        {
-          pageId: 'ok',
-          fromRelPath: 'OldOk/Ok.md',
-          toRelPath: 'NewOk/Ok.md',
-          removeOldPath: true,
-        },
-        {
-          pageId: 'bad',
-          fromRelPath: 'OldBad/Bad.md',
-          toRelPath: 'NewBad/Bad.md',
-          removeOldPath: true,
-        },
-      ],
-      toDelete: [],
-      deletionDecision: APPLY,
-      existingCount: 2,
-      plannedDeleteCount: 0,
-    };
-
-    const res = await applyPullActions(deps, actions, VAULT);
-
-    // One write succeeded ("ok"), one failed ("bad").
-    expect(res.written).toBe(1);
-    expect(res.failed).toBe(1);
-
-    // The healthy page's old path WAS removed; the failing page's old path was
-    // KEPT (failedPageIds is keyed by pageId -> only "bad" is suppressed).
-    expect(fs.rms).toContain('/vault/OldOk/Ok.md');
-    expect(fs.rms).not.toContain('/vault/OldBad/Bad.md');
-    // Exactly one move old-path removal applied (the healthy one).
-    expect(res.movedApplied).toBe(1);
-    expect(fs.rms).toEqual(['/vault/OldOk/Ok.md']);
   });
 });

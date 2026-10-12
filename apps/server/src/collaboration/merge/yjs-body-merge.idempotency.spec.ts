@@ -15,7 +15,7 @@ import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
  * the same block coming back from git; the three-way merge could anchor on
  * NOTHING, and the trailing unit that git's export already contained (but the
  * merge could not match against the byte-identical live tail) was re-appended
- * each cycle. Each grown export then diverged from the last-pushed base by one
+ * each cycle. Each grown export then diverged from the last-export base by one
  * more unit — a self-sustaining loop.
  *
  * The fix normalizes the materialized default (`indent: 0`) out of the block key
@@ -108,7 +108,7 @@ describe('git-sync reconcile import is idempotent (no whole-body duplication)', 
     const { frag: incoming } = fragmentOf(
       Array.from({ length: UNITS }, (_, i) => unit(false, i)),
     );
-    // BASE = last-pushed file, lagging by ONE unit (the realistic divergence
+    // BASE = last-export file, lagging by ONE unit (the realistic divergence
     // that drives the trailing insert-vs-insert).
     const { frag: base } = fragmentOf(
       Array.from({ length: UNITS - 1 }, (_, i) => unit(false, i)),

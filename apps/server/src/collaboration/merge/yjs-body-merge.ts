@@ -21,8 +21,8 @@ import { buildLcsTable } from './lcs';
  * concurrent edits.
  *
  * Merge mode: a THREE-WAY merge (live vs incoming vs base) runs whenever the
- * engine plumbs the last-synced base (`baseMarkdown` from refs/docmost/last-pushed)
- * — which it now does end-to-end — so a block both sides changed is a genuine
+ * engine passes the body at the last export (`baseMarkdown` from
+ * refs/docmost/last-export), so a block both sides changed is a genuine
  * conflict resolved deterministically (git wins that block; the prior state is
  * preserved in page history). Only when NO base is available (a brand-new file)
  * does it fall back to a 2-way merge (live vs incoming). Common cases — unchanged

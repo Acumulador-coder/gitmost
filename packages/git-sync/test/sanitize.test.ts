@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   sanitizeTitle,
   disambiguate,
-  gitCopyStem,
-  isGitCopyPath,
 } from '../src/engine/sanitize.js';
 
 describe('sanitizeTitle', () => {
@@ -74,6 +72,19 @@ describe('sanitizeTitle', () => {
     expect(sanitizeTitle('..')).toBe('_..');
     expect(sanitizeTitle('...')).toBe('_...');
     expect(sanitizeTitle(' .. ')).toBe('_..');
+  });
+
+  it('neutralizes the names git refuses as a path component: .git in any case and its NTFS aliases', () => {
+    expect(sanitizeTitle('.git')).toBe('_.git');
+    expect(sanitizeTitle('.GIT')).toBe('_.GIT');
+    expect(sanitizeTitle('.git.')).toBe('_.git.');
+    expect(sanitizeTitle('.Git . .')).toBe('_.Git . .');
+    expect(sanitizeTitle('git~1')).toBe('_git~1');
+    expect(sanitizeTitle('GIT~12')).toBe('_GIT~12');
+    // Only the whole name: a title merely containing it is untouched.
+    expect(sanitizeTitle('.gitignore')).toBe('.gitignore');
+    expect(sanitizeTitle('git')).toBe('git');
+    expect(sanitizeTitle('my .git')).toBe('my .git');
   });
 
   it('is deterministic — the same input yields the same output', () => {
@@ -170,18 +181,5 @@ describe('disambiguate', () => {
     const a = disambiguate('Notes', 'slug-a');
     const b = disambiguate('Notes', 'slug-b');
     expect(a).not.toBe(b);
-  });
-});
-
-describe('gitCopyStem / isGitCopyPath', () => {
-  it('recognises every name gitCopyStem makes, and nothing else', () => {
-    for (const n of [1, 2, 3, 12]) {
-      expect(isGitCopyPath(`dir/${gitCopyStem('Page', n)}.md`)).toBe(true);
-      expect(isGitCopyPath(`${gitCopyStem(gitCopyStem('Page', 1), n)}.md`)).toBe(true);
-    }
-    expect(isGitCopyPath('Page.md')).toBe(false);
-    expect(isGitCopyPath('Page ~abc12.md')).toBe(false);
-    expect(isGitCopyPath('Page ~gitx.md')).toBe(false);
-    expect(isGitCopyPath('Page ~git.txt')).toBe(false);
   });
 });

@@ -80,7 +80,7 @@ export class SpaceLockService {
    * lock that took over after our TTL expired. Used by the heartbeat in
    * `withSpaceLock` so a long-running push (client-controlled receive-pack + the
    * Docmost cycle) cannot outlive the lock and let a concurrent cycle race the
-   * working tree. Never throws (a thrown timer callback would crash the process),
+   * vault. Never throws (a thrown timer callback would crash the process),
    * but a refresh it cannot CONFIRM is treated as a LOST lock: it aborts the
    * supplied controller so the in-flight protected fn stops instead of writing
    * blind while another replica may already have taken over the lock.
@@ -101,7 +101,7 @@ export class SpaceLockService {
       );
       // CAS miss (res !== 1): we no longer own the key — our TTL lapsed and
       // another replica may hold it now. Abort the in-flight cycle rather than
-      // swallowing the loss and racing the working tree.
+      // swallowing the loss and racing the vault.
       if (res !== 1) {
         this.logger.warn(
           `git-sync: lock for space ${spaceId} lost during refresh — aborting in-flight cycle`,
@@ -176,7 +176,7 @@ export class SpaceLockService {
       const controller = new AbortController();
       // Heartbeat: periodically (≈ TTL/3) extend the lock's TTL while `fn` runs so
       // a long push (client-controlled receive-pack + the Docmost cycle) cannot
-      // outlive the fixed TTL and let a concurrent cycle race the working tree. The
+      // outlive the fixed TTL and let a concurrent cycle race the vault. The
       // refresh is CAS-guarded (only extends while WE own it). `.unref()` keeps the
       // timer from holding the event loop open; it is ALWAYS cleared in `finally`.
       const heartbeat = setInterval(() => {
@@ -210,7 +210,7 @@ export class SpaceLockService {
     // Cross-instance, same-process single-writer guard: another live holder (a
     // different SpaceLockService in this process) is mid-cycle for this space.
     // This survives a swallowed heartbeat / Redis TTL lapse, so a second writer
-    // in the process cannot race the working tree — it is rejected 'lock-held'.
+    // in the process cannot race the vault — it is rejected 'lock-held'.
     if (SpaceLockService.liveLocks.has(spaceId)) {
       return { skipped: 'lock-held' };
     }

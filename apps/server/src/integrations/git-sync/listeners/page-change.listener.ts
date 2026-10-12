@@ -31,8 +31,8 @@ interface PageEventLike {
  * `lastUpdatedSource === 'git-sync'` is the orchestrator's OWN write, so we skip
  * it to avoid a write -> event -> sync echo. The guard ALWAYS runs (the page row
  * is fetched for every event, structural ones included). This is the cheap first
- * guard; the full bodyHash + updatedAt loop-guard (consuming the push side's
- * `PushedPageRecord`) is a later hardening step — noted, not built here.
+ * guard; a full bodyHash + updatedAt loop-guard is a later hardening step —
+ * noted, not built here.
  *
  * KNOWN OVER-SKIP (latency, NOT data loss): the guard keys ONLY on
  * `lastUpdatedSource`, and a user MOVE / RENAME / DELETE does NOT change that

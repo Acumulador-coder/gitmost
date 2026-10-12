@@ -379,48 +379,7 @@ export class GitHttpService implements OnModuleDestroy {
     const isReceivePack =
       req.method === 'POST' && parsedPath.subpath === 'git-receive-pack';
     if (serviceKind === 'read' || !isReceivePack) {
-      // The clone's default branch comes from the HEAD symref advertised by the
-      // upload-pack ref advertisement (or a dumb `GET HEAD`). The engine
-      // transiently checks out the read-only `docmost` mirror mid-cycle, so serve
-      // THAT advertisement with HEAD pinned to `main` under the per-space lock so
-      // a clone never defaults to `docmost` (bug #3). Pack streaming and every
-      // other read are resolved by object SHA and need no pin, so they stream
-      // directly (no lock) as before.
-      const isReadAdvertise =
-        req.method === 'GET' &&
-        ((parsedPath.subpath === 'info/refs' &&
-          service === 'git-upload-pack') ||
-          parsedPath.subpath === 'HEAD');
-      if (isReadAdvertise) {
-        // The read-advertise path runs under the space lock (to pin HEAD=main).
-        // AFTER reply.hijack() Fastify no longer manages this response, so a
-        // rejection here (e.g. SpaceLockService.acquire when Redis is down) would
-        // otherwise leave the socket open forever — every clone/fetch hangs until
-        // the client times out (review #5). Mirror the push branch: catch, answer
-        // 500 if nothing was written yet, and always end the raw socket.
-        try {
-          await this.orchestrator.serveReadAdvertisement(
-            spaceId,
-            workspaceId,
-            () => this.backend.run(backendRequest, rawReq, rawRes),
-          );
-        } catch (err) {
-          this.logger.error(
-            `git-sync: read advertisement failed for space ${spaceId}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
-          if (!rawRes.headersSent) {
-            rawRes.statusCode = 500;
-            rawRes.setHeader('Content-Type', 'text/plain');
-            rawRes.end('Internal server error');
-          } else if (!rawRes.writableEnded) {
-            rawRes.end();
-          }
-        }
-      } else {
-        await this.backend.run(backendRequest, rawReq, rawRes);
-      }
+      await this.backend.run(backendRequest, rawReq, rawRes);
       return;
     }
 
@@ -451,7 +410,7 @@ export class GitHttpService implements OnModuleDestroy {
       }
       // Any other error: the receive-pack closure handles its own response, so
       // we only log here and make sure the socket is closed. An error before the
-      // receive-pack (the vault recovery) has written nothing yet: answer 500.
+      // receive-pack (the vault preparation) has written nothing yet: answer 500.
       this.logger.error(
         `git-http: push ingestion error for space ${spaceId}: ${
           err instanceof Error ? err.message : String(err)

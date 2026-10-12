@@ -112,8 +112,8 @@ export interface GitHttpBackendRequest {
  * PATH_INFO / REMOTE_USER / conditional GIT_PROTOCOL wiring is unit-testable
  * without spawning git.
  *
- * PATH_INFO is the repo-relative CGI path. The vault is a NON-BARE working repo
- * on disk at `<dataDir>/<spaceId>` (the engine needs a working tree), so the
+ * PATH_INFO is the repo-relative CGI path. The vault is a bare repo on disk at
+ * `<dataDir>/<spaceId>` (no `.git` suffix on disk), so the
  * repo directory git http-backend must resolve is `<spaceId>` — NOT
  * `<spaceId>.git`. The URL carries the conventional `.git` suffix (stripped by
  * parseGitPath into `spaceId`); re-appending it here pointed the CGI at a
@@ -161,9 +161,9 @@ export class GitHttpBackendService {
    * the lock-held cycle body can run afterwards.
    *
    * `signal` (optional) is the git-sync per-space lock's lost-lock abort signal.
-   * A receive-pack writes `main`'s working tree, so if the lock lapses mid-push
+   * A receive-pack writes `main`, so if the lock lapses mid-push
    * (heartbeat CAS miss / Redis outage) the signal fires and we kill the child —
-   * preventing it from continuing to write the working tree while another replica
+   * preventing it from continuing to write the vault while another replica
    * may have taken over the lock and started a cycle (warning #3).
    */
   async run(
@@ -201,7 +201,7 @@ export class GitHttpBackendService {
       };
 
       // Reject early if the lock was already lost before we even spawned: do not
-      // start writing the working tree after a possible lock takeover.
+      // start writing the vault after a possible lock takeover.
       if (signal?.aborted) {
         if (!rawRes.headersSent) this.send500(rawRes, 'lock-lost');
         else
@@ -222,7 +222,7 @@ export class GitHttpBackendService {
       }
 
       // Lost-lock abort: the per-space lock lapsed mid-request. Kill the child so
-      // a receive-pack stops writing `main`'s working tree before another replica
+      // a receive-pack stops writing `main` before another replica
       // (which may now hold the lock) starts a cycle. Same kill+finish path the
       // watchdog uses (extracted into terminateChild).
       onAbort = () => {

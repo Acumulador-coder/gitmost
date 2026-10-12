@@ -75,12 +75,11 @@ export interface GitSyncClient {
   pageIdsExist(pageIds: string[]): Promise<string[]>;
 
   /**
-   * One page WITH its ProseMirror body content. `applyPullActions` reads
-   * `id`, `slugId`, `title`, `parentPageId`, `spaceId` (for the file meta) and
-   * `content` (to stabilize/serialize). `updatedAt` is carried for the
-   * poll-suppression loop-guard. `lastUpdatedSource` (`'git-sync'` when
-   * git-sync made the last write) tells the pull's add/add rule a create of
-   * git-sync's own that died before its id write-back.
+   * One page WITH its ProseMirror body content. The export (`buildExportTree`)
+   * reads `id` and `content` (to stabilize/serialize). `updatedAt` is carried
+   * for the poll-suppression loop-guard. `lastUpdatedSource` (`'git-sync'` when
+   * git-sync made the last write) lets the apply's retry-adopt recognize a
+   * create of git-sync's own that a cycle cut off before its export.
    */
   getPageJson(pageId: string): Promise<{
     id: string;
@@ -97,13 +96,11 @@ export interface GitSyncClient {
 
   /**
    * Merge a page's markdown BODY into the live page. `applyPushActions` passes
-   * the file's body with the frontmatter AND any git conflict markers already
-   * stripped — NOT the raw self-contained file — so `fullMarkdown` here is clean
-   * body text (the datasource re-parses defensively). The collab/Yjs write path
-   * (SPEC §2/§15.6) — never a raw jsonb overwrite. `applyPushActions` reads only
-   * an optional `updatedAt` off the result (via `extractUpdatedAt`).
+   * the file's body with the frontmatter stripped — NOT the raw self-contained
+   * file (the datasource re-parses defensively). The collab/Yjs write path
+   * (SPEC §2/§15.6) — never a raw jsonb overwrite. The result is not inspected.
    *
-   * `baseMarkdown` is the last-synced body (from `refs/docmost/last-pushed`,
+   * `baseMarkdown` is the body at the last export (`refs/docmost/last-export`,
    * likewise stripped), the common ancestor for a THREE-WAY merge against the
    * live doc so concurrent human edits survive (review #5). Optional/null -> 2-way.
    */
@@ -115,8 +112,9 @@ export interface GitSyncClient {
 
   /**
    * Create a new page and return the assigned id at `data.id`
-   * (`applyPushActions` reads `result.data.id`, then writes it back into the
-   * file's meta). An optional top-level/`data.updatedAt` feeds the loop-guard.
+   * (`applyPushActions` reads `result.data.id`; the export then writes the
+   * page's file with that id). An optional top-level/`data.updatedAt` feeds the
+   * loop-guard.
    */
   createPage(
     title: string,
