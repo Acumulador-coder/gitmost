@@ -63,20 +63,23 @@ export {
   BOT_AUTHOR_NAME,
   BOT_AUTHOR_EMAIL,
   DEFAULT_BRANCH,
+  LAST_EXPORT_REF,
 } from "./engine/git.js";
-export type { DiffEntry, MergeResult, CommitOptions } from "./engine/git.js";
+export type { DiffEntry, CommitOptions, TreeEntry } from "./engine/git.js";
 
 export {
   readExisting,
   computePullActions,
-  applyPullActions,
+  logDeletionDecision,
+  buildExportTree,
 } from "./engine/pull.js";
 export type {
   ReadExistingDeps,
   PullActionsInput,
   PullActions,
-  ApplyPullActionsDeps,
-  ApplyResult,
+  ExportTreeDeps,
+  ExportTreePlan,
+  ExportTreeResult,
 } from "./engine/pull.js";
 
 export {
@@ -85,11 +88,6 @@ export {
   applyPushActions,
   runPush,
   parentFolderFile,
-  LAST_PUSHED_REF,
-  DOCMOST_BRANCH,
-  LOCAL_AUTHOR_NAME,
-  LOCAL_AUTHOR_EMAIL,
-  LOCAL_SOURCE_TRAILER,
 } from "./engine/push.js";
 export type {
   CreateAction,
@@ -102,8 +100,7 @@ export type {
   PushActionsInput,
   MetaSide,
   ApplyPushDeps,
-  WrittenBackPage,
-  PushedPageRecord,
+  CreatedPage,
   PushFailure,
   PushNoop,
   ApplyPushResult,
@@ -113,19 +110,13 @@ export type {
 
 export type { Settings } from "./engine/settings.js";
 
-export { runCycle, recoverVault } from "./engine/cycle.js";
+export { runCycle, prepareVault } from "./engine/cycle.js";
 export type {
   RunCycleDeps,
   RunCycleResult,
-  CycleFs,
-  RecoverVaultDeps,
+  PrepareVaultDeps,
 } from "./engine/cycle.js";
-
-export {
-  assertVaultPathSafe,
-  isWithinRoot,
-  VaultPathUnsafeError,
-} from "./engine/path-guard.js";
-export type { PathGuardIo, VaultPathUnsafeReason } from "./engine/path-guard.js";
+export { upgradeLegacyVault } from "./engine/upgrade.js";
+export type { UpgradeVaultDeps } from "./engine/upgrade.js";
 
 export { parsePageFile, serializePageFile } from "@docmost/prosemirror-markdown";

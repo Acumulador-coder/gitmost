@@ -123,8 +123,8 @@ export class SpaceRepo {
       .updateTable('spaces')
       .set({
         // The jsonb key is a BOUND PARAMETER (`${prefKey}::text`), not
-        // `sql.raw(prefKey)`. The callers here only ever pass the literals
-        // 'enabled' / 'autoMergeConflicts', but sql.raw would splice the string
+        // `sql.raw(prefKey)`. The callers here only ever pass the literal
+        // 'enabled', but sql.raw would splice the string
         // straight into the statement — a latent SQL-injection footgun the moment
         // a future caller passes a request-derived key. Parameterizing closes it
         // with no behaviour change for the current literal callers.

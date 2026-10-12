@@ -1296,8 +1296,6 @@
   "Enable MCP server": "Enable MCP server",
   "Enable Git sync": "Enable Git sync",
   "Sync this space's pages to a Git repository.": "Sync this space's pages to a Git repository.",
-  "Auto-merge conflicts on push": "Auto-merge conflicts on push",
-  "When off (recommended), a page whose content still has unresolved Git conflict markers is skipped on push until you resolve the conflict in Git. When on, the markers are stripped and both sides' content is pushed.": "When off (recommended), a page whose content still has unresolved Git conflict markers is skipped on push until you resolve the conflict in Git. When on, the markers are stripped and both sides' content is pushed.",
   "Exposes the workspace as an MCP server at /mcp — this provides a capability, it doesn't consume a model.": "Exposes the workspace as an MCP server at /mcp — this provides a capability, it doesn't consume a model.",
   "Resolves to {{url}}": "Resolves to {{url}}",
   "Model": "Model",

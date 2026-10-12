@@ -254,7 +254,7 @@ describe('GitHttpBackendService.run', () => {
 
   it('(abort) an ALREADY-aborted signal -> no spawn, 500 lock-lost', async () => {
     // The per-space lock was already lost before run() reached the spawn: we must
-    // NOT start writing the working tree after a possible lock takeover.
+    // NOT start writing the vault after a possible lock takeover.
     const child = fakeChild();
     spawnMock.mockReturnValue(child);
     const service = buildService();
@@ -302,8 +302,8 @@ describe('buildGitBackendCgiEnv', () => {
     remoteUser: 'alice@example.com',
   };
 
-  it('points PATH_INFO at the NON-bare repo dir (no .git suffix)', () => {
-    // Regression guard: the vault lives at <root>/<spaceId> (a working repo), so
+  it('points PATH_INFO at the vault dir (no .git suffix)', () => {
+    // Regression guard: the vault lives at <root>/<spaceId> (no .git suffix), so
     // PATH_INFO must be /<spaceId>/<subpath>. A `.git` suffix made git
     // http-backend resolve <root>/<spaceId>.git and 404 every fetch/push.
     const env = buildGitBackendCgiEnv(base, '/vaults');

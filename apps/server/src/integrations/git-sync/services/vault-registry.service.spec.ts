@@ -63,7 +63,6 @@ function configWrites(): string[][] {
 }
 
 const SERVABLE_CONFIG: Record<string, string> = {
-  'receive.denyCurrentBranch': 'updateInstead',
   'receive.denyNonFastForwards': 'true',
   'http.receivepack': 'true',
   'http.uploadpack': 'true',
@@ -132,14 +131,12 @@ describe('VaultRegistryService', () => {
 
       // Collect every `git config <key> <value>` write.
       expect(configWrites()).toEqual([
-        ['receive.denyCurrentBranch', 'updateInstead'],
         // Security-critical: blocks force-push / history rewrites on main.
         ['receive.denyNonFastForwards', 'true'],
         ['http.receivepack', 'true'],
         ['http.uploadpack', 'true'],
-        // Security-critical (PR #119 review): a pushed symlink is checked out as
-        // a plain file, never a real link, so it cannot be followed to leak/
-        // overwrite a file outside the vault.
+        // Security-critical (PR #119 review): a checkout of the vault never
+        // materializes a pushed symlink as a real link.
         ['core.symlinks', 'false'],
       ]);
 

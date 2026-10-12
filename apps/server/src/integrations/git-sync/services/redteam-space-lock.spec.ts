@@ -3,7 +3,7 @@
 // (A, B) share ONE redis store. A holds 'X' and stays in-flight; the lock key
 // then disappears (TTL expiry while refreshLock silently failed). B must NOT be
 // able to acquire 'X' and run its fn concurrently with A — that would be two
-// writers racing the same working tree. This test asserts the DESIRED
+// writers racing the same vault. This test asserts the DESIRED
 // single-writer behavior, so it FAILS today if the lapse lets B in.
 import { Logger } from '@nestjs/common';
 import { SpaceLockService } from './space-lock.service';

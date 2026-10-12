@@ -48,7 +48,6 @@ interface Built {
   vaultRegistry: { ensureServable: AnyMock };
   orchestrator: {
     ingestExternalPush: AnyMock;
-    serveReadAdvertisement: AnyMock;
   };
   backend: { run: AnyMock };
 }
@@ -93,12 +92,6 @@ function build(opts: BuildOptions = {}): Built {
   const vaultRegistry = { ensureServable: jest.fn(async () => undefined) };
   const orchestrator = {
     ingestExternalPush: jest.fn(async () => undefined),
-    // The read-advertisement wrapper pins HEAD under the lock then serves; the
-    // mock just runs the serve callback so the read path still hits backend.run.
-    serveReadAdvertisement: jest.fn(
-      async (_spaceId: string, _workspaceId: string, serve: () => Promise<void>) =>
-        serve(),
-    ),
   };
   const backend = { run: jest.fn(async () => undefined) };
 
@@ -239,52 +232,6 @@ describe('GitHttpService.handle', () => {
     expect(state.hijacked).toBe(true);
     expect(built.backend.run).toHaveBeenCalledTimes(1);
     // A fetch must NOT take the push lock.
-    expect(built.orchestrator.ingestExternalPush).not.toHaveBeenCalled();
-  });
-
-  it('upload-pack ref advertisement is served HEAD-pinned via serveReadAdvertisement (bug #3)', async () => {
-    // GET info/refs?service=git-upload-pack carries the HEAD symref a clone reads
-    // for its default branch, so it must be served with HEAD pinned to `main`
-    // (under the lock) — not streamed raw — or a clone racing a mid-pull cycle
-    // would default to the read-only `docmost` mirror.
-    const built = build({ abilityCan: true });
-    const { reply } = fakeReply();
-    const req = fakeRequest({
-      url: '/git/space-1.git/info/refs?service=git-upload-pack',
-      method: 'GET',
-      authorization: basic('dev@example.com', 'pw'),
-    });
-
-    await built.service.handle(req, reply);
-
-    expect(built.orchestrator.serveReadAdvertisement).toHaveBeenCalledTimes(1);
-    expect(built.orchestrator.serveReadAdvertisement.mock.calls[0][0]).toBe(
-      'space-1',
-    );
-    // The workspace rides along so a lock-held fetch shows in /status.
-    expect(built.orchestrator.serveReadAdvertisement.mock.calls[0][1]).toBe(
-      'ws-1',
-    );
-    // The wrapper still streams the backend (the mock runs the serve callback).
-    expect(built.backend.run).toHaveBeenCalledTimes(1);
-    expect(built.orchestrator.ingestExternalPush).not.toHaveBeenCalled();
-  });
-
-  it('a POST git-upload-pack pack fetch streams directly (no HEAD-pin needed, resolved by SHA)', async () => {
-    // The pack negotiation is object-SHA based; only the ref advertisement carries
-    // the HEAD symref, so the pack POST streams the backend directly (no lock).
-    const built = build({ abilityCan: true });
-    const { reply } = fakeReply();
-    const req = fakeRequest({
-      url: '/git/space-1.git/git-upload-pack',
-      method: 'POST',
-      authorization: basic('dev@example.com', 'pw'),
-    });
-
-    await built.service.handle(req, reply);
-
-    expect(built.orchestrator.serveReadAdvertisement).not.toHaveBeenCalled();
-    expect(built.backend.run).toHaveBeenCalledTimes(1);
     expect(built.orchestrator.ingestExternalPush).not.toHaveBeenCalled();
   });
 
