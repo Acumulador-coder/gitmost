@@ -7,8 +7,8 @@ import {
 } from 'src/integrations/git-sync/git-sync.constants';
 
 /**
- * TP-2 — the git-sync per-space lock against REAL Redis (logical DB 15, so
- * nothing touches dev data). The unit specs run the lock against a fake; this
+ * The git-sync per-space lock against REAL Redis (logical DB 15, so nothing
+ * touches dev data). The unit specs run the lock against a fake; this
  * one executes the real `SET NX PX` acquire and the two Lua CAS scripts
  * (release, heartbeat refresh) on a Redis server. Each SpaceLockService stands
  * for one replica (its own instance id).

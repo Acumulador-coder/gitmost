@@ -1,7 +1,7 @@
 import { AiService, computeEmbeddingFingerprint } from './ai.service';
 
 /**
- * #530 Search Phase B (PR-1) unit coverage for the embedding layer:
+ * Unit coverage for the embedding layer:
  *  - computeEmbeddingFingerprint: a revision bump / prefix toggle MUST change the
  *    fingerprint even when the bare model name + dimension are unchanged (it is
  *    deliberately NOT the bare model name);

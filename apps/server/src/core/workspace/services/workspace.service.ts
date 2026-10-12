@@ -370,10 +370,9 @@ export class WorkspaceService {
         throw new NotFoundException('Workspace not found');
       }
 
-      // MCP is a community feature in this fork: the server itself serves the
-      // Model Context Protocol over HTTP at /mcp, so toggling it no longer
-      // requires an enterprise license. The toggle still persists via
-      // updateAiSettings(workspaceId, 'mcp', ...) below.
+      // MCP is a community feature in this fork (the server serves it over HTTP
+      // at /mcp), so toggling it needs no enterprise license. The toggle
+      // persists via updateAiSettings(workspaceId, 'mcp', ...) below.
 
       if (typeof updateWorkspaceDto.isScimEnabled !== 'undefined') {
         if (

@@ -8,7 +8,7 @@ import {
 import type { IAiChatMessageRow } from "@/features/ai-chat/types/ai-chat.types.ts";
 
 /**
- * PROPERTY test for message reconstruction over NORMALIZED transcripts (#555),
+ * PROPERTY test for message reconstruction over NORMALIZED transcripts,
  * layered on the PIN-SPEC trip-wire (`sdk-continuation-tripwire.test.ts`). The
  * trip-wire pins ONE hand-written transcript against the three `ai@6.0.207`
  * behaviors; this test GENERATES a family of normalized transcripts — varying

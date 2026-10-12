@@ -1,12 +1,8 @@
-// #489 — client-parts validation + resilient history conversion.
+// Client-parts validation + resilient history conversion.
 //
-// These unit tests exercise the two exported helpers against the REAL
-// `convertToModelMessages` from `ai` (NOT a mock): a genuinely malformed part
-// (a `null` element inside a parts array) makes the real converter throw
-// ("Cannot read properties of null"), which is the actual production
-// "bricked chat" mechanism this fix defends against. Asserting against the real
-// converter (rather than a mock-shaped error) is the whole point — a mock would
-// hide a version change in the converter's throw behaviour.
+// Runs against the REAL `convertToModelMessages` from `ai`: a malformed part (a
+// `null` element inside a parts array) makes it throw ("Cannot read properties
+// of null"). A mock would hide a change in the converter's throw behaviour.
 import { convertToModelMessages, type UIMessage } from 'ai';
 import {
   sanitizeUserParts,

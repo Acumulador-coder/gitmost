@@ -207,7 +207,7 @@ describe("describeChatError", () => {
   });
 
   it("does NOT treat a passing mention of billing as a quota error", () => {
-    // "billing" is no longer a quota signature; the verbatim text is surfaced.
+    // "billing" is not a quota signature; the verbatim text is surfaced.
     const body = "502: Bad Gateway | response body: see our billing page";
     expect(describeChatError(body, t)).toEqual({
       title: "Something went wrong",

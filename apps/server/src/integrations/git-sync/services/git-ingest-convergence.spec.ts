@@ -3,15 +3,13 @@ import * as Y from 'yjs';
 import { mergeXmlFragments3WayWithStats } from '../../../collaboration/merge/yjs-body-merge';
 
 /**
- * Convergence repro for the git-ingest "silent revert" data-loss bug.
+ * Convergence of a git-ingest write with a live editor ("silent revert").
  *
- * ROOT CAUSE (confirmed): the merge logic itself is correct, but the git-ingest
- * write was applied via `openDirectConnection` on whichever instance/process
- * runs git-sync (the api/worker). When an editor is connected to a DIFFERENT
- * collab instance/process, that opens a SEPARATE, detached Y.Doc. The merge
- * lands in that detached doc (and the DB), but the live editor's Y.Doc never
- * receives the Yjs update — so its next debounced autosave overwrites the DB
- * with its STALE state and silently reverts the git change.
+ * A git-ingest write applied via `openDirectConnection` on whichever process
+ * runs git-sync opens a SEPARATE, detached Y.Doc when the editor is connected
+ * to a DIFFERENT collab instance. The merge lands in that detached doc (and the
+ * DB), but the live editor's Y.Doc never receives the Yjs update, so its next
+ * debounced autosave overwrites the DB with its STALE state.
  *
  * These tests reproduce the invariant deterministically at the Yjs level (two
  * Y.Docs exchanging updates), because the real failure is DISTRIBUTED — it only
@@ -21,16 +19,15 @@ import { mergeXmlFragments3WayWithStats } from '../../../collaboration/merge/yjs
  * outcomes; full cross-instance convergence is not (and cannot be) proven in a
  * unit test without a live multi-instance Hocuspocus + redis.
  *
- *   PATH B (the BUG): the git update is NOT delivered to the editor's doc — the
+ *   PATH B: the git update is NOT delivered to the editor's doc — the
  *     editor's later autosave reverts the change. Asserts the LOSS.
- *   PATH A (the FIX): the git update IS delivered to the editor's doc as a Yjs
+ *   PATH A: the git update IS delivered to the editor's doc as a Yjs
  *     update — which is exactly what running the merge on the OWNING instance's
  *     shared Document does (its update is broadcast to every connection). The
  *     editor's CRDT converges and a later autosave preserves the git change.
  *
- * The fix routes git-sync's body write through CollaborationGateway.writePageBody
- * (the custom-event channel) so it executes on the owning instance — turning
- * PATH B into PATH A.
+ * git-sync's body write goes through CollaborationGateway.writePageBody (the
+ * custom-event channel) so it executes on the owning instance — PATH A.
  */
 
 type Spec = { text: string; id?: string };

@@ -14,17 +14,14 @@ import { streamText } from 'ai';
 import { AiChatService } from './ai-chat.service';
 
 /**
- * D2 — an explicit Stop DURING the external-MCP toolset build (the pre-streamText
+ * An explicit Stop during the external-MCP toolset build (the pre-streamText
  * setup phase) must:
  *   (a) unwedge the turn (stream() rejects instead of hanging at step 0), and
- *   (b) finalize the run as 'aborted' via the outer catch's onSettled — never leak
- *       the run row as 'running' (which would 409 every later turn in this chat).
- *
- * The setup phase does NOT yet observe streamText's terminal callbacks, so before
- * the fix a hung `toolsFor` ignored the run's abort signal and never finalized.
- * `raceAgainstAbortAndTimeout(toolsFor, runSignal, ...)` now rejects the
- * moment the run's signal aborts; the catch re-throws (signal aborted), and the
- * outer catch settles the run 'aborted'.
+ *   (b) finalize the run as 'aborted' via the outer catch's onSettled, never
+ *       leaving the run row 'running' (which would 409 every later turn).
+ * `raceAgainstAbortAndTimeout(toolsFor, runSignal, ...)` rejects the moment
+ * the run's signal aborts; the catch re-throws and the outer catch settles the
+ * run 'aborted'.
  */
 describe('AiChatService.stream — abort during external-MCP setup finalizes the run (D2)', () => {
   const streamTextMock = streamText as unknown as jest.Mock;

@@ -1,9 +1,9 @@
 /**
  * Standalone packaging smoke test — runs the REAL dist artifacts.
  *
- * Purpose: the #585 merge gate is "in the built Docker image the wasm and the
- * font are present and an in-container render produces a PNG with non-empty
- * text". This script is the in-container check. Build the server, then run:
+ * Checks that in the built Docker image the wasm and the font are present and
+ * an in-container render produces a PNG with non-empty text. Build the server,
+ * then run:
  *
  *   node dist/integrations/ai/rasterize/smoke.js
  *

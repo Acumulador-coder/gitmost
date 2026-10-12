@@ -1,14 +1,13 @@
 import './git-env';
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runPush } from '../src/engine/push';
-import { PUSH_REF } from '../src/engine/vault-refs';
 import type { PushDeps } from '../src/engine/push';
-import { VaultGit } from '../src/engine/git';
+import { BOT_AUTHOR_EMAIL, BOT_AUTHOR_NAME, VaultGit } from '../src/engine/git';
 import type { Settings } from '../src/engine/settings';
 import { serializeDocmostMarkdownBody } from '@docmost/prosemirror-markdown';
 
@@ -17,10 +16,10 @@ const execFileAsync = promisify(execFile);
 // runPush `--apply` against a REAL VaultGit in a temp repo (NO Docmost — the
 // client is faked). This guards the real-git BINDING contract that the plain-
 // object git fakes in run-push.test.ts cannot catch: the applier's git deps
-// (`updateRef`/`fastForwardBranch`/`showFileAtRef`) call `this.run`/`this.runRaw`
-// internally, so they only work when their `this` receiver is preserved. Passing
-// bare method references (`git.updateRef`, …) would throw `this.runRaw is not a
-// function` here. Only the LOCAL temp git is mutated; nothing is sent to Docmost.
+// (`showFileAtRef`/`pageIdsAtRef`/…) call `this.run`/`this.runRaw` internally,
+// so they only work when their `this` receiver is preserved. Passing bare
+// method references would throw `this.runRaw is not a function` here. Only the
+// LOCAL temp git is mutated; nothing is sent to Docmost.
 
 /** True if a usable `git` binary is on PATH (skip the suite otherwise). */
 async function gitAvailable(): Promise<boolean> {
@@ -74,53 +73,42 @@ describe('runPush --apply against a REAL VaultGit (binding contract)', () => {
     }
   });
 
-  it('writes through real git: createPage runs, docmost advances, no throw', async () => {
+  it('applies through real git: createPage runs and the create is reported, no throw', async () => {
     if (!available) return; // skip gracefully when git is unavailable
 
-    // Temp vault repo under the OS tmpdir (mirrors test/git.test.ts setup).
+    // Temp bare vault under the OS tmpdir; `main` starts at the initial commit,
+    // which is the base runPush diffs from.
     dir = await mkdtemp(join(tmpdir(), 'docmost-push-realgit-'));
-    const vault = dir;
-    const git = new VaultGit(vault);
+    const git = new VaultGit(dir);
     await git.ensureRepo();
-    // The `docmost` mirror branches off `main` at the initial commit; that
-    // commit is the merge-base runPush diffs from.
-    await git.ensureBranch('docmost', 'main');
+    const base = (await git.revParse('refs/heads/main'))!;
 
-    // A brand-new local file with meta carrying title + spaceId but NO pageId,
+    // A brand-new file with meta carrying title + spaceId but NO pageId,
     // committed on `main` AHEAD of the base -> computePushActions yields a CREATE.
     const newFile = serializeDocmostMarkdownBody(
       { version: 1, title: 'New', spaceId: 'sp-1' },
       'fresh body',
     );
-    await writeFile(join(vault, 'New.md'), newFile, 'utf8');
-    await git.stageAll();
-    await git.commit('add New.md', {
-      authorName: 'Human',
-      authorEmail: 'human@local',
+    const tree = await git.buildTree(base, [
+      { path: 'New.md', sha: await git.hashObject(newFile) },
+    ]);
+    const head = await git.commitTree(tree, [base], 'add New.md', {
+      authorName: BOT_AUTHOR_NAME,
+      authorEmail: BOT_AUTHOR_EMAIL,
     });
-
-    const docmostBefore = await git.revParse('docmost');
 
     const client = makeClientFake();
     const logs: string[] = [];
     const deps: PushDeps = {
-      settings: makeSettings(vault),
+      settings: makeSettings(dir),
       // The WHOLE real VaultGit — its methods must keep their `this` binding.
       git,
       makeClient: () => client as any,
-      readFile: (path) =>
-        import('node:fs/promises').then((fs) =>
-          fs.readFile(join(vault, ...path.split('/')), 'utf8'),
-        ),
-      writeFile: async (path, text) => {
-        const fs = await import('node:fs/promises');
-        await fs.writeFile(join(vault, ...path.split('/')), text, 'utf8');
-      },
+      baseRef: base,
+      headRef: head,
       log: (line) => logs.push(line),
     };
 
-    // The run must NOT throw — this is what FAILS before Fix 1 (the bare-method
-    // git deps would throw `this.runRaw is not a function` on the real VaultGit).
     const res = await runPush(deps, { dryRun: false });
 
     expect(res.mode).toBe('apply');
@@ -128,17 +116,6 @@ describe('runPush --apply against a REAL VaultGit (binding contract)', () => {
     // The FAKE client was actually called (the write path ran).
     expect(client.createPage).toHaveBeenCalledTimes(1);
     expect(res.applied?.created).toBe(1);
-    // The assigned pageId was written back to disk + committed.
-    expect(res.applied?.writtenBack).toEqual([{ path: 'New.md', pageId: 'new-id' }]);
-
-    // CRITICALLY: `docmost` ACTUALLY advanced in the real repo to `main`, the
-    // write-back commit (proving fastForwardBranch ran with binding), and the
-    // push's write marker is gone.
-    const docmostAfter = await git.revParse('docmost');
-    expect(docmostAfter).toMatch(/^[0-9a-f]{40}$/);
-    expect(docmostAfter).not.toBe(docmostBefore);
-    expect(docmostAfter).toBe(await git.revParse('main'));
-    expect(await git.readRef(PUSH_REF)).toBeNull();
-    expect(res.divergentDocmost).toBe(false);
+    expect(res.created).toEqual([{ path: 'New.md', pageId: 'new-id' }]);
   });
 });

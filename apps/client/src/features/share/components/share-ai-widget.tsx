@@ -41,7 +41,7 @@ interface ShareAiWidgetProps {
  * "omit"` to the anonymous `/api/shares/ai/stream` endpoint. The server stores
  * nothing.
  *
- * Presentation is now shared with the internal chat: the same `MessageList`
+ * Presentation is shared with the internal chat: the same `MessageList`
  * renders the streamed transcript, so the public share gets the SAME
  * incremental markdown render, animated typing indicator, and tool-call cards
  * as the internal chat. Only the anonymous specifics differ — no auth, no

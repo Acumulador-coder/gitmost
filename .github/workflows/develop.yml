@@ -62,12 +62,9 @@ jobs:
     needs: [test, e2e-server, e2e-mcp, build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Image boot-smoke (issue #476): every other job tests code from the working
-    # tree, but the :develop IMAGE that watchtower pulls was never actually
-    # started anywhere (incident classes #353/#452/#361-boot: startup-migrator
-    # crash-loop, runtime module missing from the image, wrong static-asset
-    # headers). The services below back a smoke boot of the exact image right
-    # before it is pushed; a smoke failure blocks the push.
+    # Image boot-smoke: the services below back a smoke boot of the exact :develop
+    # image right before it is pushed (startup migrator, runtime modules, static-asset
+    # headers); a smoke failure blocks the push.
     services:
       postgres:
         # via mirror.gcr.io (Docker Hub pull-through cache; avoids Hub anonymous
@@ -226,9 +223,9 @@ jobs:
       - name: Build git-sync
         run: pnpm --filter @docmost/git-sync build
 
-      # docmost-client.loader.ts type-imports from @docmost/mcp (issue #446); its
-      # build/ is gitignored and `test:e2e` type-checks, so build it here or tsc
-      # fails with TS2307 (mirrors the e2e-mcp / mcp-server-parity jobs).
+      # docmost-client.loader.ts type-imports from @docmost/mcp; its build/ is
+      # gitignored and `test:e2e` type-checks, so build it here or tsc fails with TS2307
+      # (mirrors the e2e-mcp / mcp-server-parity jobs).
       - name: Build mcp
         run: pnpm --filter @docmost/mcp build
 

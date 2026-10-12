@@ -394,9 +394,9 @@ export class RedisSyncExtension<TCE extends CustomEvents> implements Extension {
   }
 
   /**
-   * #647 refinement B — the `readLiveIfLoaded` primitive #654 gates on. Reads the
-   * live (fully hydrated) content of a document IF it is already loaded on SOME
-   * instance, WITHOUT force-loading it and WITHOUT claiming ownership.
+   * Reads the live (fully hydrated) content of a document IF it is already
+   * loaded on SOME instance, WITHOUT force-loading it and WITHOUT claiming
+   * ownership.
    *
    * Contract (see redis-sync.types `ReadLiveResult` + collaboration.handler
    * `readLiveContent`):

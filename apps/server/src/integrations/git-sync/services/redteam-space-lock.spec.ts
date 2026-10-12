@@ -1,6 +1,5 @@
-// Red-team finding #10 / TP-2: the KNOWN multi-replica gap of the per-space
-// lock, stated as it is. Two SpaceLockService instances stand for two replicas
-// sharing ONE redis store. If A's lock key lapses while A is still running (TTL
+// The KNOWN multi-replica gap of the per-space lock, stated as it is. Two
+// SpaceLockService instances stand for two replicas sharing ONE redis store. If A's lock key lapses while A is still running (TTL
 // expiry after its heartbeat refresh failed), nothing stops replica B from
 // acquiring it and running concurrently: there are no fencing tokens. The only
 // mitigation is that A's next heartbeat refresh CAS-misses and aborts A's

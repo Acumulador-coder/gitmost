@@ -1,27 +1,19 @@
 name: Nightly property fuzz
 
-# The daily heavy property run for the ProseMirror<->Markdown converter
-# (packages/prosemirror-markdown). The PR/CI test run keeps NUM_RUNS modest to
-# stay under budget; this cron cranks up total coverage with random seeds to hunt
-# for deeper round-trip counterexamples than a fixed-seed PR run can reach.
+# Daily heavy property run for the ProseMirror<->Markdown converter
+# (packages/prosemirror-markdown): random seeds and far more runs than the PR run.
 #
-# WHY SHARDING: a single mega-run (~10000 fast-check runs) OOMs the vitest worker
-# (empirically ~1625 runs -> "JS heap out of memory", ~2GB) because heap
-# accumulates across the whole property run in one process. Instead this job runs
-# SHARDS fresh vitest processes, each a MODERATE per-shard count with a DISTINCT
-# derived seed, so total coverage ~= SHARDS x PER_SHARD_NUM_RUNS across processes
-# that never accumulate heap. On the first failing shard we stop and keep that
-# shard's output for triage.
+# Runs SHARDS fresh vitest processes, each with PER_SHARD_NUM_RUNS and a distinct
+# derived seed: heap accumulates within one process, so a single ~10000-run process
+# OOMs the worker (~1625 runs exhaust ~2GB). Stops at the first failing shard and
+# keeps its output.
 #
-# Counterexample -> fixture workflow: when a shard fails, fast-check prints the
-# SHRUNK minimal counterexample plus the reproducing seed. This job files a Gitea
-# issue containing that seed + counterexample ONLY when the output actually holds
-# a fast-check counterexample; an infra failure (OOM/tsc/install, no
-# counterexample) is filed under a DISTINCT title so it can never poison the
-# counterexample dedup. A human then commits the shrunk doc as a PERMANENT fixture
-# under packages/prosemirror-markdown/test/fixtures/counterexamples/ with a case in
-# counterexamples.test.ts, and FIXES the converter (never weakens a property to
-# hide the bug). See packages/prosemirror-markdown/README.md.
+# A fast-check counterexample (shrunk case + seed) is filed as a Gitea issue; an
+# infra failure without a counterexample (OOM/tsc/install) is filed under a distinct
+# title so it never touches the counterexample dedup. The shrunk doc becomes a
+# permanent fixture under packages/prosemirror-markdown/test/fixtures/counterexamples/
+# with a case in counterexamples.test.ts, and the converter is fixed (a property is
+# never weakened to hide the bug). See packages/prosemirror-markdown/README.md.
 
 on:
   schedule:
@@ -123,18 +115,10 @@ jobs:
           echo "fail_seed=$FAIL_SEED" >> "$GITHUB_OUTPUT"
           exit "$FAILED"
 
-      # A GENUINE counterexample: fast-check printed a shrunk minimal case and its
-      # reproducing seed into property-output.txt. File a dedup-guarded issue.
-      #
-      # Dedup is keyed on a HASH of the SHRUNK COUNTEREXAMPLE (the minimal failing
-      # input), NOT on the issue title prefix. Keying on the prefix would let a
-      # single open issue swallow every OTHER counterexample (a different bug B whose
-      # title shares the prefix would be treated as a duplicate and stay silent until
-      # the first issue is closed). Hashing the shrunk example instead means two
-      # DIFFERENT counterexamples get two DIFFERENT issues, while a re-find of the
-      # SAME counterexample still dedupes onto the existing one. The infra-failure
-      # step (below) still keys on its own distinct title, so it can never poison
-      # this dedup either.
+      # A genuine counterexample: file a dedup-guarded issue. Dedup is keyed on a hash
+      # of the shrunk counterexample, not on the title prefix, so different
+      # counterexamples get separate issues while a re-find of the same one lands on the
+      # existing issue.
       - name: File counterexample issue
         # always() is REQUIRED: the fuzz step exits nonzero on a failing shard,
         # so a bare `if:` (implicitly success() && ...) would skip this step
@@ -154,13 +138,10 @@ jobs:
             echo "No fast-check counterexample signature — infra failure, handled by the next step."
             exit 0
           fi
-          # Extract the SHRUNK counterexample block: the "Counterexample:" line(s)
-          # up to (but excluding) the "Shrunk N time(s)" / "Got error" line. This is
-          # the minimal failing INPUT and is STABLE across the different seeds/paths
-          # that reach the same bug — unlike the seed, path, or shrink count (which
-          # precede/follow this block and vary run-to-run) and unlike the whole
-          # output (which embeds those varying parts). Hashing THIS is what makes the
-          # dedup identity the bug itself rather than an incidental run detail.
+          # Extract the shrunk counterexample block: the "Counterexample:" line(s) up to
+          # the "Shrunk N time(s)" / "Got error" line. It is stable across the seeds and
+          # paths that reach the same bug, unlike the seed, path and shrink count, so its
+          # hash identifies the bug itself.
           CE_TEXT=$(awk '/Counterexample:/{c=1} /Shrunk [0-9]+ time|Got error/{c=0} c{print}' property-output.txt)
           if [ -z "$CE_TEXT" ]; then
             # No parseable shrunk block (unexpected — the signature check above

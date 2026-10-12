@@ -253,7 +253,7 @@ export class PageRepo {
   }
 
   /**
-   * #599 (review F2) — the subset of `countEmbeddablePages` that was CREATED OR
+   * The subset of `countEmbeddablePages` that was CREATED OR
    * MODIFIED after `since` (the start of the reindex run that established the
    * active generation's recorded coverage).
    *
@@ -284,8 +284,7 @@ export class PageRepo {
    * The "embeddable content" qualifying predicate, shared verbatim by
    * countEmbeddablePages (the steady-state denominator) and getEmbeddablePageIds
    * (the set the bulk reindex iterates). Both MUST use the exact same condition
-   * or the live total and steady-state total diverge — extracting it here is what
-   * guarantees that, replacing the previous hand-duplicated copy. Callers supply
+   * or the live total and steady-state total diverge. Callers supply
    * the trivial workspaceId/deletedAt filters inline; this returns only the
    * non-trivial OR clause, evaluated against the `p` alias of `pages`.
    *
@@ -344,9 +343,8 @@ export class PageRepo {
    * steady-state value mid-run).
    *
    * IMPORTANT: the qualifying WHERE is shared with `countEmbeddablePages` via the
-   * private `embeddablePredicate` helper, so the two can no longer drift — if the
-   * embeddable definition changes, change it once there and both stay in lockstep
-   * (else the live total and steady-state total diverge again). Dropping
+   * private `embeddablePredicate` helper; change the embeddable definition only
+   * there. Dropping
    * text-less pages is correct: `reindexPage` no-ops on
    * a page with no extractable content anyway, and a page that lost its text but
    * still has stale embeddings IS in this set (the EXISTS clause), so it is still

@@ -12,8 +12,7 @@ type DriverProps = Pick<UseChatSessionOptions, "activeChatId" | "chats"> & {
 
 // Drive the hook the way the window does: the parent owns `activeChatId` and
 // passes it back in. `setActiveChatId` is a spy so we can assert the EXACT id the
-// hook adopts (the #137 regression: it must be the authoritative streamed id, not
-// the newest chat in the list).
+// hook adopts (the authoritative streamed id, not the newest chat in the list).
 function setup(initial: DriverProps) {
   const setActiveChatId = vi.fn();
   const onInvalidateChatList = vi.fn();

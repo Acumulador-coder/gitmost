@@ -29,7 +29,7 @@ const SCROLLABLE_OVERFLOW = new Set(["auto", "scroll", "overlay"]);
  * could be stale after a paste, plus the document scrolling element. We nudge
  * ALL of them (a zero-delta nudge is harmless) because the real scroll container
  * varies — a styled overflow ancestor on most pages, the document itself on
- * others — and `overflow: overlay` (common on macOS, where #146 reproduces)
+ * others — and `overflow: overlay` (common on macOS, where the stale hit-test shows up)
  * must count as scrollable too. Called only AFTER the paste has committed, so
  * `scrollHeight > clientHeight` reflects the inserted content.
  */
@@ -54,17 +54,17 @@ export function collectScrollAncestors(node: HTMLElement): HTMLElement[] {
 
 /**
  * Re-flow the editor's scroll containers after a paste so the browser refreshes
- * its click hit-testing geometry (#146). Pasting markdown/code inserts React
+ * its click hit-testing geometry. Pasting markdown/code inserts React
  * NodeViews that mount ASYNCHRONOUSLY; until the next reflow, ProseMirror's
  * posAtCoords/caretRangeFromPoint can map a click to a stale (offset) line —
- * which users observed clears itself on any scroll. We reproduce that scroll's
+ * which clears itself on any scroll. We reproduce that scroll's
  * side effect with a ZERO-delta nudge (re-assign scrollTop/Left to their current
  * value), invalidating the hit-test layer WITHOUT moving the viewport. The
  * container lookup AND the nudge run across two animation frames so they happen
  * AFTER the pasted content + NodeViews commit (only then is the real scroll
  * container measurable).
  *
- * This is the SECOND of two #146 mitigations; the FIRST is the content-first DOM
+ * This is one of two click-offset mitigations; the other is the content-first DOM
  * order in the NodeViews (code-block-view.tsx, footnotes-list-view.tsx,
  * footnote-definition-view.tsx). Editing one, check the other.
  */

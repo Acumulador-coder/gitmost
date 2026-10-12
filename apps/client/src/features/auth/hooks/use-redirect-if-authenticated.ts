@@ -8,12 +8,12 @@ export function useRedirectIfAuthenticated() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // #642, part 4 — require a CONFIRMED `/me` fetch, NOT a bare `data`.
+    // Require a CONFIRMED `/me` fetch, NOT a bare `data`.
     // useCurrentUser seeds `data` from the persisted user via react-query
     // `initialData`, which makes status:'success' with `data.user`
     // present while `isFetched` is still false (no real fetch happened yet).
     // Redirecting on that seed would bounce /login → app → /me → 401, and the
-    // 401 interceptor's currentUser purge (#642 part 3) turns that into an
+    // 401 interceptor's currentUser purge turns that into an
     // infinite /login ⇄ app loop. `isFetched` flips true only after the network
     // `/me` actually resolves, so gate on it.
     //

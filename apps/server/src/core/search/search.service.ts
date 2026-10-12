@@ -14,8 +14,8 @@ import { ShareRepo } from '@docmost/db/repos/share/share.repo';
 import { PagePermissionRepo } from '@docmost/db/repos/page/page-permission.repo';
 import { PageEmbeddingRepo } from '@docmost/db/repos/ai-chat/page-embedding.repo';
 import { ShareService } from '../share/share.service';
-// #599: SearchService no longer talks to AiService directly — every semantic read
-// goes through EmbeddingGenerationService, which embeds the query with the CURRENT
+// Every semantic read goes through EmbeddingGenerationService, which embeds the
+// query with the CURRENT
 // provider but reports the ACTIVE generation's fingerprint to filter rows by.
 import { EmbeddingGenerationService } from '../../integrations/ai/embedding-generation.service';
 import { AiEmbeddingNotConfiguredException } from '../../integrations/ai/ai-embedding-not-configured.exception';
@@ -44,10 +44,9 @@ const RRF_K = 60;
 // LITERALLY by a `col LIKE '%' || q || '%'` predicate. Without this a query of
 // `%` or `_` would match every row.
 //
-// S2 (acceptance #10): escaping is intentionally SYMMETRIC on `%` and `_` — the
-// ability to literal-search a bare `%` (or `_`) as a real character was
-// deliberately dropped. Such a query parses to no positive recall and returns
-// total:0 rather than matching everything. That trade-off is accepted.
+// Escaping is intentionally SYMMETRIC on `%` and `_`, so a bare `%` (or `_`)
+// cannot be searched as a literal character: such a query parses to no positive
+// recall and returns total:0 rather than matching everything.
 export function escapeLikePattern(raw: string): string {
   return (raw ?? '')
     .replace(/\\/g, '\\\\')
@@ -423,7 +422,7 @@ export class SearchService {
             rawQuery,
           );
 
-        // #599 (D2) — the MODEL of the served generation changed under us. The rows
+        // The MODEL of the served generation changed under us. The rows
         // of the active generation and this query vector belong to two independently
         // trained embedding spaces: their cosine is noise (the spaces are related by
         // an arbitrary rotation), and RRF would inject those arbitrarily ranked pages
@@ -454,10 +453,10 @@ export class SearchService {
             limit: getVectorCandidates(),
             // Filter page_embeddings by (immutable) workspace_id directly, so the
             // composite index bites on its leading column and candidates are
-            // workspace-scoped at the embedding level (#530 review WARNING 2). Space
-            // scoping stays on the pages join only — page_embeddings.space_id can be
-            // STALE after a cross-space move, so filtering it here would drop a moved
-            // page's vector hit (re-review regression fix).
+            // workspace-scoped at the embedding level. Space scoping stays on the
+            // pages join only — page_embeddings.space_id can be STALE after a
+            // cross-space move, so filtering it here would drop a moved page's
+            // vector hit.
             workspaceId: scope.workspaceId,
           });
           semanticAvailable = true;
@@ -473,14 +472,10 @@ export class SearchService {
           // and simply report the state without the numbers (a swap in flight is
           // still reported stale, that fact needs no DB count).
           //
-          // #599 (R3) — when the COUNT fails, coverage is UNKNOWN, and the DTO
-          // defines `full` as "the active generation covers every page". We must not
-          // claim that on no evidence: on a legacy workspace with 0 indexed pages a
-          // single failed COUNT would turn an honest `stale` into a lying `full`
-          // ("semantic search is complete") while the index is empty. Unknown
-          // coverage therefore reports `stale` (numbers omitted) — the honest,
-          // safe-direction answer: "the arm ran, but we cannot prove it is complete;
-          // a reindex may be needed".
+          // When the COUNT fails, coverage is UNKNOWN, and the DTO defines `full`
+          // as "the active generation covers every page" — so unknown coverage
+          // reports `stale` (numbers omitted): a legacy workspace with 0 indexed
+          // pages must not report `full` because of a failed COUNT.
           semanticStale = generation.swapping;
           try {
             const coverage = await this.embeddingGeneration.getCoverage(
@@ -524,12 +519,11 @@ export class SearchService {
     // Lexical branches ranked SEPARATELY (FTS by ts_rank_cd, substring by tier);
     // when a query vector is available a third VECTOR branch is fused over the
     // UNION of lexical + vector candidates. RRF: score = Σ w/(k + rank_branch).
-    // Deterministic ORDER BY rrf DESC, id so pagination never dupes/skips (A4,
-    // acceptance #8). Each id carries `lexical` — whether the page actually
-    // matches the query. #701: only those are matches (`items`/`total`); the
-    // vector arm re-ranks them via RRF, while vector-only neighbours go to
-    // `related` and are never counted. On degrade the query is byte-identical to
-    // Phase A.
+    // Deterministic ORDER BY rrf DESC, id so pagination never dupes/skips (A4).
+    // Each id carries `lexical` — whether the page actually matches the query.
+    // Only those are matches (`items`/`total`); the vector arm re-ranks them via
+    // RRF, while vector-only neighbours go to `related` and are never counted. On
+    // degrade the query is the plain lexical one.
     //
     // The fused query is bounded by a per-statement timeout (see runRankedQuery):
     // if the brute-force vector scan is cancelled (SQLSTATE 57014) we degrade to
@@ -567,14 +561,14 @@ export class SearchService {
       }
     }
 
-    // #599 semantic state:
+    // Semantic state:
     //   'off'   — the arm never ran and there is nothing to reindex about it
     //             (kill-switch / no provider / a degrade).
     //   'stale' — either the arm RAN over an incompletely covered generation
     //             (`available: true` — a partially covered generation still returns
     //             real hits), or the arm was deliberately NOT raised because the
     //             served generation's model no longer matches the configured one
-    //             (D2: `available: false`, lexical only, a reindex will fix it).
+    //             (`available: false`, lexical only, a reindex will fix it).
     //   'full'  — the arm ran over a fully covered, same-model generation.
     if (semanticAvailable && semanticStale && !semanticReason) {
       semanticReason = 'stale';
@@ -627,8 +621,8 @@ export class SearchService {
     // reachable window afterwards (rows past it are unreachable → truncatedAtCap).
     // Accepted for the small-tenant fork target — do NOT convert `cap` into a SQL
     // LIMIT thinking it bounds compute; it does not, and doing so breaks the exact
-    // total contract (acceptance #8/#11). `total` counts the permitted LEXICAL
-    // matches only (#701) — vector-only neighbours never enter it.
+    // total contract. `total` counts the permitted LEXICAL matches only —
+    // vector-only neighbours never enter it.
     const total = matchIds.length;
     const truncatedAtCap = total > cap;
     const window = matchIds.slice(0, cap);
@@ -680,11 +674,11 @@ export class SearchService {
   }
 
   /**
-   * Run the ranked-candidate-ids query and return the ids in RRF order (#530),
-   * each flagged `lexical` when the page actually matches the query (#701).
+   * Run the ranked-candidate-ids query and return the ids in RRF order,
+   * each flagged `lexical` when the page actually matches the query.
    *
    * When `vectorArm` is null (degrade / semantic off / no query vector) this runs
-   * the BYTE-IDENTICAL Phase-A 2-branch lexical query — the semantic layer must
+   * the plain 2-branch lexical query — the semantic layer must
    * be a pure superset that never changes lexical behaviour on degrade.
    *
    * When a vector arm is supplied it is UNION ALL'd with the lexical arm into one
@@ -1017,9 +1011,9 @@ export class SearchService {
    * walking UP parentPageId. Returns hitId → ancestor titles ordered root →
    * direct parent (the hit's own title excluded).
    *
-   * A8 fix: the recursive walk now skips soft-deleted ancestors (`deleted_at IS
-   * NULL`) and stays within the hit's own space, so a deleted or cross-space
-   * ancestor's title can no longer leak into `path`.
+   * The recursive walk skips soft-deleted ancestors (`deleted_at IS NULL`) and
+   * stays within the hit's own space, so a deleted or cross-space ancestor's
+   * title never leaks into `path`.
    *
    * `rootPageId` (share scope) stops the walk at the share root: its title is
    * the top of every `path`, and no title above the share ever leaves the

@@ -8,12 +8,12 @@ import type {
   CommentSignalTrackerLike,
 } from './docmost-client.loader';
 
-// Test-double type for the loopback client. `DocmostClientLike` is now DERIVED
-// from the real `DocmostClient` (issue #446), so its method RETURN types are the
-// concrete client shapes. These probe stubs deliberately return minimal shapes
-// (e.g. `getPageRaw` yielding only `{ title }`), so the doubles use the same
-// method NAMES but loose async returns; each is cast to `DocmostClientLike` at
-// the (return-erased) mock site, leaving production positional-call safety intact.
+// Test-double type for the loopback client. `DocmostClientLike` is DERIVED from
+// the real `DocmostClient`, so its method RETURN types are the concrete client
+// shapes. These probe stubs return minimal shapes (e.g. `getPageRaw` yielding
+// only `{ title }`), so the doubles use the same method NAMES but loose async
+// returns; each is cast to `DocmostClientLike` at the (return-erased) mock site,
+// leaving production positional-call safety intact.
 type FakeDocmostClient = Partial<
   Record<keyof DocmostClientLike, (...args: any[]) => Promise<any>>
 >;
@@ -26,12 +26,12 @@ import {
   createListCommentsProbe,
 } from '../../../../../../packages/mcp/src/comment-signal';
 // The REAL client-side citation extractor: proves that the passive signal does
-// NOT strip a tool's citations (the #417 in-app regression this spec guards).
+// NOT strip a tool's citations.
 import { toolCitations } from '../../../../../../apps/client/src/features/ai-chat/utils/tool-parts';
 import type { Tool } from 'ai';
 
 /**
- * #417 — the passive "new comments: N" signal on the IN-APP surface. Two layers:
+ * The passive "new comments: N" signal on the IN-APP surface. Two layers:
  *  1. `wrapToolsWithCommentSignal` NON-DESTRUCTIVE delivery (fake tracker): the
  *     tool's `execute` output (what streams to the UI / persists as part.output)
  *     stays byte-identical, and the signal reaches the MODEL only via a separate
@@ -135,11 +135,9 @@ describe('wrapToolsWithCommentSignal (in-app non-destructive delivery)', () => {
   });
 
   it('citations SURVIVE the signal path for searchPages and createPage', async () => {
-    // The regression #417 Finding 1 guarded here: with the old { result,
-    // newCommentsSignal } wrapper, searchPages (output.results) and createPage (output.id)
-    // lost their citations. The non-destructive delivery keeps part.output raw,
-    // so the REAL client `toolCitations` yields identical links on the signal
-    // path as on the no-signal path.
+    // The non-destructive delivery keeps part.output raw, so the REAL client
+    // `toolCitations` yields identical links for searchPages (output.results) and
+    // createPage (output.id) on the signal path as on the no-signal path.
     const line =
       '[signal] new comments: 3 on page p9 — call listComments(pageId) for details';
     const searchOut = {

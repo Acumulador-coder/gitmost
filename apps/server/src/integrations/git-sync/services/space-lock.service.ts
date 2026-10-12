@@ -25,25 +25,9 @@ export class GitSyncDeadlineError extends Error {
 }
 
 /**
- * How long a writer waits for the read advertisements already in flight on a
- * space to finish (each is a ref listing: milliseconds). Past it the writer
- * skips with an ERROR instead of waiting on a stuck reader.
- */
-const READ_DRAIN_MAX_MS = 5_000;
-/** Poll step while a writer waits for in-flight readers to finish. */
-const READ_DRAIN_POLL_MS = 10;
-
-/**
  * The per-space lock used by the git-sync control plane: an in-process per-space
  * mutex (no overlapping cycles on one instance) PLUS a Redis leader lock
- * (single writer across replicas). Extracted from `GitSyncOrchestrator` so the
- * locking primitive is a single reusable, independently testable unit
- * (PR #119 refactor #2).
- *
- * Writers (`withSpaceLock`: cycles, pushes) are exclusive. Read advertisements
- * (`withSpaceReadLock`) share the space with each other and only exclude
- * writers; a writer waiting for the space makes new readers wait, so a stream
- * of reads cannot starve the cycle (OR-1).
+ * (single writer across replicas).
  *
  * KNOWN MULTI-REPLICA GAP: there are no fencing tokens. If a holder's Redis key
  * lapses (TTL expiry while a heartbeat refresh failed), another replica can
@@ -57,13 +41,8 @@ export class SpaceLockService {
   private readonly redis: Redis;
   /** Unique per process instance — the leader-lock value (CAS on release). */
   private readonly instanceId = randomUUID();
-  /**
-   * In-process per-space mutex: spaceIds held (or being entered) by a writer on
-   * this process. A writer's reservation also stops new read advertisements.
-   */
+  /** In-process per-space mutex: spaceIds held (or being entered) on this process. */
   private readonly running = new Set<string>();
-  /** Per-space count of read advertisements in flight on this process. */
-  private readonly readers = new Map<string, number>();
 
   constructor(redisService: RedisService) {
     this.redis = redisService.getOrThrow();
@@ -112,7 +91,7 @@ export class SpaceLockService {
    * lock that took over after our TTL expired. Used by the heartbeat in
    * `withSpaceLock` so a long-running push (client-controlled receive-pack + the
    * Docmost cycle) cannot outlive the lock and let a concurrent cycle race the
-   * working tree. Never throws (a thrown timer callback would crash the process),
+   * vault. Never throws (a thrown timer callback would crash the process),
    * but a refresh it cannot CONFIRM is treated as a LOST lock: it aborts the
    * supplied controller so the in-flight protected fn stops instead of writing
    * blind while another replica may already have taken over the lock.
@@ -133,7 +112,7 @@ export class SpaceLockService {
       );
       // CAS miss (res !== 1): we no longer own the key — our TTL lapsed and
       // another replica may hold it now. Abort the in-flight cycle rather than
-      // swallowing the loss and racing the working tree.
+      // swallowing the loss and racing the vault.
       if (res !== 1) {
         this.logger.warn(
           `git-sync: lock for space ${spaceId} lost during refresh — aborting in-flight cycle`,
@@ -157,16 +136,16 @@ export class SpaceLockService {
    * retrying with a capped exponential backoff until `timeoutMs` elapses before
    * returning the skip sentinel. The poll cycle holds the lock while it
    * processes a whole space, so a legitimate external push that briefly overlaps
-   * a cycle should WAIT a moment rather than immediately 503 (bug: ~60% of
-   * pushes 503'd under continuous polling). The poll cycle passes NO retry (it
+   * a cycle should WAIT a moment rather than immediately 503 (under continuous
+   * polling most pushes would). The poll cycle passes NO retry (it
    * just skips and the next tick reconciles).
    *
-   * `deadlineMs` bounds `fn` in wall-clock time (GL-7). When it passes, the
+   * `deadlineMs` bounds `fn` in wall-clock time. When it passes, the
    * signal handed to `fn` is aborted with a `GitSyncDeadlineError`, the lease
    * stops being renewed (so the Redis lock lapses within its TTL even if `fn`
    * ignores the abort) and this call rejects with that error at once, so the
    * caller is never blocked by a hung `fn`. The space stays reserved on this
-   * process until `fn` really settles: two writers never share a working tree.
+   * process until `fn` really settles: two writers never share the vault.
    */
   async withSpaceLock<T>(
     spaceId: string,
@@ -194,16 +173,6 @@ export class SpaceLockService {
           continue;
         }
         return reservation;
-      }
-      // Writer preference (OR-1): the reservation above already makes new read
-      // advertisements wait; let the ones in flight (a HEAD pin + a ref
-      // listing) finish before touching the working tree.
-      const drained = this.readers.get(spaceId)
-        ? await this.drainReaders(spaceId)
-        : true;
-      if (!drained) {
-        this.releaseInProcess(spaceId);
-        return { skipped: 'in-progress' };
       }
       // Reserved in-process — now contend for the Redis leader lock. Release the
       // in-process slot on EVERY non-running path so a retry/skip leaves no leak.
@@ -238,7 +207,7 @@ export class SpaceLockService {
     const controller = new AbortController();
     // Heartbeat: periodically (≈ TTL/3) extend the lock's TTL while `fn` runs so
     // a long push (client-controlled receive-pack + the Docmost cycle) cannot
-    // outlive the fixed TTL and let a concurrent cycle race the working tree. The
+    // outlive the fixed TTL and let a concurrent cycle race the vault. The
     // refresh is CAS-guarded (only extends while WE own it). `.unref()` keeps the
     // timer from holding the event loop open; it is ALWAYS cleared in `finally`.
     const heartbeat = setInterval(() => {
@@ -301,78 +270,6 @@ export class SpaceLockService {
         },
       );
     });
-  }
-
-  /**
-   * Run a read advertisement on the space (OR-1). Readers share the space with
-   * each other and only exclude writers: `fn` runs once no writer holds the
-   * space on this process (its in-process reservation) or elsewhere (the Redis
-   * key), so it never overlaps a cycle's checkout. While a writer holds or waits
-   * for the space, the reader retries with a capped backoff up to
-   * `acquireRetry.timeoutMs` and then returns the skip sentinel ('in-progress':
-   * a writer on this process; 'lock-held': the Redis lock is held elsewhere).
-   * A reader never takes the Redis lock and never blocks a writer for longer
-   * than its own `fn`.
-   */
-  async withSpaceReadLock<T>(
-    spaceId: string,
-    fn: () => Promise<T>,
-    options: {
-      acquireRetry: { timeoutMs: number; baseMs: number; maxMs: number };
-    },
-  ): Promise<T | { skipped: 'lock-held' | 'in-progress' }> {
-    const retry = options.acquireRetry;
-    const deadline = Date.now() + retry.timeoutMs;
-    let attempt = 0;
-    for (;;) {
-      let busy: 'lock-held' | 'in-progress' | null = null;
-      if (this.running.has(spaceId)) {
-        busy = 'in-progress';
-      } else if (await this.heldElsewhere(spaceId)) {
-        busy = 'lock-held';
-      }
-      // A writer on this process may have reserved the space during the Redis
-      // check (state changes across the await).
-      if (!busy && this.running.has(spaceId)) busy = 'in-progress';
-      if (!busy) break;
-      if (Date.now() >= deadline) return { skipped: busy };
-      await this.sleep(this.nextBackoff(attempt++, retry, deadline));
-    }
-    // Registered with no await since the last `running` check, so a writer
-    // reserving from now on waits for this reader in drainReaders.
-    this.readers.set(spaceId, (this.readers.get(spaceId) ?? 0) + 1);
-    try {
-      return await fn();
-    } finally {
-      const left = (this.readers.get(spaceId) ?? 1) - 1;
-      if (left > 0) this.readers.set(spaceId, left);
-      else this.readers.delete(spaceId);
-    }
-  }
-
-  /** True when the space's Redis lock key exists (held by another holder). */
-  private async heldElsewhere(spaceId: string): Promise<boolean> {
-    return (await this.redis.exists(GIT_SYNC_LOCK_PREFIX + spaceId)) > 0;
-  }
-
-  /**
-   * Wait (bounded by READ_DRAIN_MAX_MS) until no read advertisement is in
-   * flight on the space. False, with an ERROR, when readers are still there.
-   */
-  private async drainReaders(spaceId: string): Promise<boolean> {
-    const until = Date.now() + READ_DRAIN_MAX_MS;
-    while ((this.readers.get(spaceId) ?? 0) > 0) {
-      if (Date.now() >= until) {
-        this.logger.error(
-          `git-sync: space ${spaceId}: ${this.readers.get(spaceId)} read ` +
-            `advertisement(s) still in flight after ${READ_DRAIN_MAX_MS} ms — ` +
-            `skipping this cycle/push (in-progress)`,
-        );
-        return false;
-      }
-      await this.sleep(READ_DRAIN_POLL_MS);
-    }
-    return true;
   }
 
   /**

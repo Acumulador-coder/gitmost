@@ -8,7 +8,7 @@ import { Provider, createStore, getDefaultStore } from "jotai";
 import * as Y from "yjs";
 
 /**
- * #564 — local-first phase 2 (body-instant), the REAL PageEditor.
+ * Local-first body-instant behaviour of the REAL PageEditor.
  *
  * Everything load-bearing here is production code: the real Y.Doc, the real
  * tiptap collab extensions (ySync/yCursor via @tiptap/extension-collaboration),
@@ -39,7 +39,7 @@ import * as Y from "yjs";
  * two different `prosemirror-view` module instances; decorations built by one
  * fail `instanceof DecorationSet` in the other and `DecorationGroup.from` builds
  * a group with `undefined` members. That is a module-resolution artifact of the
- * test runner, unrelated to #564, and none of the guards under test live in
+ * test runner, and none of the guards under test live in
  * those node extensions.
  */
 
@@ -161,7 +161,7 @@ vi.mock("@hocuspocus/provider", async () => {
     /**
      * test driver: the remote room synced (or un-synced).
      *
-     * The ORDER here is the real one and is load-bearing for #564 F3: hocuspocus
+     * The ORDER here is the real one and is load-bearing: hocuspocus
      * registers the `onSynced` CONFIGURATION callback as the first "synced"
      * listener, so the session's handler (and through it the page editor) runs
      * BEFORE any listener an extension attached later (UniqueID's `createIds`)
@@ -217,12 +217,12 @@ vi.mock("@hocuspocus/provider", async () => {
 // @tiptap/extension-unique-id — the real one, with a collab provider, does
 // `provider.on("synced", createIds)`, and `createIds` synchronously
 // `view.dispatch`es the id-assigning transaction and then IMMEDIATELY
-// unsubscribes. It gets exactly ONE shot, inside the provider's synced emit
-// (#564 F3). The stamper reproduces that timing exactly and lets the #564 tests
+// unsubscribes. It gets exactly ONE shot, inside the provider's synced emit.
+// The stamper reproduces that timing exactly and lets the tests
 // count id-stamp attempts and inject a visible edit, which the real extension
 // cannot do.
 //
-// #709 — the REAL UniqueID (the local override in @docmost/editor-ext) is in
+// The REAL UniqueID (the local override in @docmost/editor-ext) is in
 // the trimmed list too: the warm-session tests assert on what it does on an
 // already synced provider (ids right away, no "synced" listener). Its
 // not-yet-synced path — subscribe, then unsubscribe on destroy — is covered in
@@ -284,8 +284,8 @@ vi.mock(
 // specifier "roughjs/bin/rough" — unresolvable by Node's ESM loader. The rejected
 // lazy import lands as an UNHANDLED rejection some ticks later and vitest charges
 // it to whichever test happens to be running, failing tests at random. It is a
-// module-resolution artifact of the test runner and the menu has nothing to do
-// with #564, so it is stubbed out.
+// module-resolution artifact of the test runner and the menu is unrelated to
+// these tests, so it is stubbed out.
 vi.mock("@/features/editor/components/excalidraw/excalidraw-menu-lazy", () => ({
   default: () => null,
 }));
@@ -477,7 +477,7 @@ function getEditor(store: ReturnType<typeof createStore>): Editor {
 }
 
 // Warm the store with the resolved (workspace, user) scope BEFORE the first
-// render. In production the #640 `getOnInit` on `currentUserAtom` reads the
+// render. In production the `getOnInit` on `currentUserAtom` reads the
 // persisted user at atom CONSTRUCTION (app boot — localStorage is already
 // populated from the prior session), so the very first frame, and therefore the
 // one-shot `[pageId]` provider effect that reads `scopeKeyAtom`, already sees the
@@ -623,7 +623,7 @@ describe("#564 body-instant: live body from the local ydoc, read-only until remo
   });
 
   it("a UniqueID-style provider.on('synced') dispatch lands (rejected before sync, passes in the emit)", async () => {
-    // #564 F3. @tiptap/extension-unique-id assigns every node its `data-id` from
+    // @tiptap/extension-unique-id assigns every node its `data-id` from
     // a `provider.on("synced")` callback that dispatches ONCE and unsubscribes
     // immediately. That callback runs INSIDE the same synchronous emit as the
     // page editor's own onSynced handler — so if the Yjs write guard only opened
@@ -808,7 +808,7 @@ describe("#564 body-instant: live body from the local ydoc, read-only until remo
   });
 });
 
-// #640 (Ф4), rule #8 — the fail-closed local-ydoc gate, tested through the REAL
+// The fail-closed local-ydoc gate, tested through the REAL
 // component on its OBSERVABLE property: was ANY `IndexeddbPersistence`
 // constructed? The helpers (canOpenLocalYdoc / isSessionExpired / the anon
 // scope check) are unit-tested elsewhere; this asserts the wiring in
@@ -948,10 +948,9 @@ describe("#641 offline banner hysteresis (sticky latch + navigator.onLine)", () 
   });
 });
 
-// Ф7 (#643) — the body-instant phase. The gate `page && space` is removed, so
-// PageEditor now mounts on cached meta and owns three body states, plus a lazy
-// collab-token callback and an `editable` that no longer recreates the editor.
-// Tested through the REAL component on its OBSERVABLE properties.
+// Body-instant: PageEditor mounts on cached meta and owns three body states,
+// plus a lazy collab-token callback and an `editable` that does not recreate
+// the editor. Tested through the REAL component on its OBSERVABLE properties.
 describe("Ф7 body states: skeleton vs static vs live (parts 3 + 7)", () => {
   it("crit 2 — first visit (empty ydoc, cache miss, NOT reconciled) shows a body SKELETON, not an empty editor, not a foreign static copy", async () => {
     const store = makeStore();

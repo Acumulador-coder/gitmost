@@ -87,7 +87,7 @@ export class GitHttpService implements OnModuleDestroy {
    * `/git/*` Fastify route bypasses the Nest pipeline (so ThrottlerGuard, which is
    * only on controllers, never runs) and there is no fastify rate-limit plugin, so
    * without this `verifyUserCredentials` (bcrypt) would run unthrottled on every
-   * request. Both keys are scoped to the client IP (GH-3): per IP (one source's
+   * request. Both keys are scoped to the client IP: per IP (one source's
    * guesses across all emails) and per IP+email. There is deliberately NO global
    * per-email key — it let anyone, from any IP, lock a victim out of git without
    * even reaching bcrypt. 5 failures per key per 60 s. A speed bump, not a hard
@@ -97,7 +97,7 @@ export class GitHttpService implements OnModuleDestroy {
   /** Periodic sweep of expired limiter buckets, to bound the limiter's memory. */
   private readonly sweepIntervalMs = 60_000;
   private readonly sweepTimer: NodeJS.Timeout;
-  /** The cached workspace lookups, shared with DomainMiddleware (#348). */
+  /** The cached workspace lookups, shared with DomainMiddleware. */
   private readonly workspaceLoader: WorkspaceLoader;
 
   constructor(
@@ -152,7 +152,7 @@ export class GitHttpService implements OnModuleDestroy {
 
   /**
    * Handle one `/git/<spaceId>.git/<subpath>` request. This raw root route runs
-   * outside Nest's exception filter (GH-6), so every unexpected throw — a DB
+   * outside Nest's exception filter, so every unexpected throw — a DB
    * lookup, the vault preparation, the backend bridge — ends here in a logged
    * 500 instead of an unhandled rejection or, after `reply.hijack()`, a socket
    * left open.
@@ -172,7 +172,7 @@ export class GitHttpService implements OnModuleDestroy {
   /**
    * Log an infrastructure failure in full and answer 500 with what failed,
    * through the Fastify reply when it is still ours, or on the raw response
-   * after a hijack. Never throws. The 500 matters (GH-2): a 401/404 for an
+   * after a hijack. Never throws. The 500 matters: a 401/404 for an
    * infrastructure failure would make git clients erase saved credentials or
    * hide the outage as a missing repository.
    */
@@ -222,7 +222,7 @@ export class GitHttpService implements OnModuleDestroy {
     const parsedPath = rest === null ? null : parseGitPath(rest);
 
     // --- resolve the requested git service kind (read vs write) -------------
-    // GH-1: a duplicated `service` query parameter parses here as an array,
+    // A duplicated `service` query parameter parses here as an array,
     // while git http-backend reads the raw query string itself — the authz
     // classification and the service that actually runs could disagree. Such a
     // request is refused (400 via the gate's bad-request) instead of guessed.
@@ -264,7 +264,7 @@ export class GitHttpService implements OnModuleDestroy {
     let credentialsValid = false;
     let throttled = false;
     if (basic && workspaceId) {
-      // Brute-force speed bump (GH-3: both keys scoped to the client IP, see
+      // Brute-force speed bump (both keys scoped to the client IP, see
       // `failedLogins`). Reserve BOTH keys ATOMICALLY and BEFORE bcrypt
       // (tryReserve folds the check and the increment into one synchronous
       // step), so the (threshold+1)-th attempt is rejected before
@@ -322,7 +322,7 @@ export class GitHttpService implements OnModuleDestroy {
           if (!(err instanceof UnauthorizedException)) {
             // Not a credentials rejection (e.g. a DB error): answer a logged
             // 500 — a 401 here would make git's credential helper erase the
-            // user's saved password (GH-2). The password/header is never logged.
+            // user's saved password. The password/header is never logged.
             this.respondInternalError(
               reply,
               'could not verify the credentials',
@@ -362,7 +362,7 @@ export class GitHttpService implements OnModuleDestroy {
     let spaceHasRestrictedPages = false;
     let permissionGranted = false;
     if (credentialsValid && user && workspaceId && parsedPath && serviceKind) {
-      // A lookup failure here reaches handle()'s logged 500 (GH-6).
+      // A lookup failure here reaches handle()'s logged 500.
       const space = await this.spaceRepo.findById(
         parsedPath.spaceId,
         workspaceId,
@@ -513,41 +513,7 @@ export class GitHttpService implements OnModuleDestroy {
     const isReceivePack =
       req.method === 'POST' && parsedPath.subpath === 'git-receive-pack';
     if (serviceKind === 'read' || !isReceivePack) {
-      // The clone's default branch comes from the HEAD symref advertised by the
-      // upload-pack ref advertisement (or a dumb `GET HEAD`). The engine
-      // transiently checks out the read-only `docmost` mirror mid-cycle, so serve
-      // THAT advertisement with HEAD pinned to `main` under the per-space lock so
-      // a clone never defaults to `docmost` (bug #3). Pack streaming and every
-      // other read are resolved by object SHA and need no pin, so they stream
-      // directly (no lock) as before.
-      const isReadAdvertise =
-        req.method === 'GET' &&
-        ((parsedPath.subpath === 'info/refs' &&
-          service === 'git-upload-pack') ||
-          parsedPath.subpath === 'HEAD');
-      if (isReadAdvertise) {
-        // The read-advertise path runs under the space lock (to pin HEAD=main).
-        // AFTER reply.hijack() Fastify no longer manages this response, so a
-        // rejection here (e.g. SpaceLockService.acquire when Redis is down) would
-        // otherwise leave the socket open forever — every clone/fetch hangs until
-        // the client times out (review #5). Mirror the push branch: catch, answer
-        // 500 if nothing was written yet, and always end the raw socket.
-        try {
-          await this.orchestrator.serveReadAdvertisement(
-            spaceId,
-            workspaceId,
-            () => this.backend.run(backendRequest, rawReq, rawRes),
-          );
-        } catch (err) {
-          this.respondInternalError(
-            reply,
-            `the ref advertisement of space ${spaceId} failed`,
-            err,
-          );
-        }
-      } else {
-        await this.backend.run(backendRequest, rawReq, rawRes);
-      }
+      await this.backend.run(backendRequest, rawReq, rawRes);
       return;
     }
 
@@ -557,7 +523,7 @@ export class GitHttpService implements OnModuleDestroy {
         spaceId,
         workspaceId,
         // The lock's lost-lock signal is threaded into the backend so the
-        // receive-pack child is killed if the lock lapses mid-write (warning #3).
+        // receive-pack child is killed if the lock lapses mid-write.
         (signal) => this.backend.run(backendRequest, rawReq, rawRes, signal),
       );
     } catch (err) {
@@ -578,7 +544,7 @@ export class GitHttpService implements OnModuleDestroy {
       }
       // Any other error: the receive-pack closure handles its own response, so
       // we only log here and make sure the socket is closed. An error before the
-      // receive-pack (the vault recovery) has written nothing yet: answer 500.
+      // receive-pack (the vault preparation) has written nothing yet: answer 500.
       this.respondInternalError(
         reply,
         `the push ingestion of space ${spaceId} failed`,

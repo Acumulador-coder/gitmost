@@ -109,7 +109,7 @@ function selectPageMeta(page: IPage): IPageMeta {
   // Drop `content`; react-query's structural sharing (replaceEqualDeep) then
   // returns the SAME reference whenever the remaining fields are unchanged, so a
   // pure content churn (typing / debouncedUpdateContent, collab `page.updated`)
-  // no longer changes this slice's identity and its ~13 subscribers don't
+  // does not change this slice's identity and its ~13 subscribers don't
   // re-render on every keystroke wave.
   const { content: _content, ...meta } = page;
   return meta as IPageMeta;
@@ -624,15 +624,14 @@ export function invalidateOnUpdatePage(
   title: string,
   icon: string,
 ) {
-  // Scoped page-tree refresh (was a blanket `invalidatePageTree()`): this is the
-  // FIELD-only update path (title/icon — no structural change), and the sidebar
-  // tree is already updated pointwise (applyUpdateOne / optimistic setData) plus
-  // via the sidebar-pages cache below. Invalidating ALL ["page-tree"] queries
-  // here refetched every open recursive subpages-embed block on each
-  // rename/icon-change — pure duplicate work. Instead patch just the affected
+  // Scoped page-tree refresh: this is the FIELD-only update path (title/icon —
+  // no structural change), and the sidebar tree is already updated pointwise
+  // (applyUpdateOne / optimistic setData) plus via the sidebar-pages cache below.
+  // Invalidating ALL ["page-tree"] queries would refetch every open recursive
+  // subpages-embed block on each rename/icon-change, so patch just the affected
   // node IN PLACE in every cached embed subtree: same visible result, no network
-  // churn, no full embed-tree rebuild. Structural events (create/move/delete)
-  // keep the blanket invalidate in their own helpers.
+  // churn. Structural events (create/move/delete) keep the blanket invalidate in
+  // their own helpers.
   const pageTreeMatches = queryClient.getQueriesData<IPage[]>({
     queryKey: ["page-tree"],
   });

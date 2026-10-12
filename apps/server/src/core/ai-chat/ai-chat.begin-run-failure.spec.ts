@@ -7,19 +7,15 @@ import { AiChatService } from './ai-chat.service';
 import { RunAlreadyActiveError } from './ai-chat-run.service';
 
 /**
- * Fail-fast guard for beginRun failures (#486, commit 4).
+ * Fail-fast guard for beginRun failures. When runHooks.begin() rejects for a
+ * reason other than RunAlreadyActiveError (e.g. a DB-pool blip), the turn must
+ * not continue untracked (a run without a run-row cannot be stopped and slips
+ * past the one-run gate): it throws A_RUN_BEGIN_FAILED (503) before the first
+ * byte and before the user row is persisted.
  *
- * When runHooks.begin() rejects for a reason OTHER than RunAlreadyActiveError
- * (e.g. a DB-pool blip), the turn must NOT continue untracked. The old code
- * logged and streamed anyway, leaving a run with NO run-row: in autonomous mode
- * nobody could abort it (/stop can't see it, disconnect doesn't abort it, and the
- * one-run gate would admit a SECOND run) — an unstoppable invisible run until
- * restart. The fix throws A_RUN_BEGIN_FAILED (503) BEFORE the first byte and
- * before the user row is persisted.
- *
- * We drive `stream()` directly on a prototype instance wired with only the
- * collaborators it touches before the throw, so the assertion is on the REAL
- * control flow, not a mock of it.
+ * Drives `stream()` directly on a prototype instance wired with only the
+ * collaborators it touches before the throw, so the assertion is on the real
+ * control flow.
  */
 describe('AiChatService beginRun failure (#486)', () => {
   function makeService(insertSpy: jest.Mock): AiChatService {

@@ -1,13 +1,9 @@
 name: Test
 
-# NO `paths:` filter on purpose (issue #447). The tool-spec REGISTRY is split
-# across two packages that MUST stay in sync: the specs live in `packages/mcp`
-# but the parity/tier guard tests that read them live in the `apps/server` jest
-# suite. A PR touching only `packages/mcp/**` must therefore still run the SERVER
-# suite (and vice-versa), or an in-app wiring break slips through green and only
-# surfaces on develop after merge. The `test` job below runs BOTH suites via
-# `pnpm -r test` on every PR; the dedicated `mcp-server-parity` job makes that
-# cross-package gate explicit and fast. Do not add a `paths:` filter here.
+# No `paths:` filter: the tool-spec registry lives in `packages/mcp` but its
+# parity/tier guard tests live in the `apps/server` jest suite, so a change to
+# either package must run both suites (the `test` job via `pnpm -r test`, plus the
+# `mcp-server-parity` job).
 on:
   pull_request:
   workflow_call:
@@ -21,16 +17,12 @@ permissions:
   contents: read
 
 jobs:
-  # Guard against a long-lived branch adding a migration whose timestamped
-  # filename sorts BEFORE migrations already applied on the target branch (and
-  # thus in prod). The Kysely startup migrator rejects that as "corrupted
-  # migrations" and crash-loops the app on boot (incident #361). This gate fails
-  # the PR so the migration is renamed to a current timestamp before merge.
-  # Runs for pull_request (diff against the base branch) AND for push (#476
-  # retrospective: a DIRECT push to develop used to bypass this PR-only gate
-  # entirely — now the push is diffed against its `before` SHA; workflow_call
-  # from develop.yml inherits the caller's push event). workflow_dispatch has
-  # nothing to diff against and still skips the job.
+  # Fails when a migration's timestamped filename sorts BEFORE migrations already
+  # applied on the target branch: the Kysely startup migrator rejects that as
+  # "corrupted migrations" and crash-loops the app on boot. pull_request diffs
+  # against the base branch, push against its `before` SHA (workflow_call from
+  # develop.yml inherits the caller's push event); workflow_dispatch has nothing to
+  # diff against and skips the job.
   migration-order:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -95,15 +87,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Real Postgres + Redis so the server integration suite (`*.int-spec.ts`,
-    # behind `pnpm --filter server test:int`) runs in CI (red-team finding #7).
-    # Without it, cost-cap / FK-cascade / jsonb-round-trip / real-apply tests
-    # only ran locally, so regressions in those paths stayed green in CI.
-    # Postgres uses the pgvector image because migrations create vector columns
-    # and global-setup runs `CREATE EXTENSION vector`. Credentials/db match the
-    # defaults in apps/server/test/integration/db.ts + global-setup.ts
-    # (docmost / docmost_dev_pw, maintenance db `docmost`, redis on 6379), so no
-    # TEST_*_URL overrides are needed.
+    # Real Postgres + Redis for the server integration suite (`*.int-spec.ts`,
+    # behind `pnpm --filter server test:int`). Postgres uses the pgvector image
+    # because migrations create vector columns and global-setup runs `CREATE
+    # EXTENSION vector`. Credentials/db match the defaults in
+    # apps/server/test/integration/db.ts + global-setup.ts (docmost / docmost_dev_pw,
+    # maintenance db `docmost`, redis on 6379), so no TEST_*_URL overrides are needed.
     services:
       postgres:
         # via mirror.gcr.io (Docker Hub pull-through cache; avoids Hub anonymous
@@ -167,24 +156,17 @@ jobs:
       - name: Build token-estimate
         run: pnpm --filter @docmost/token-estimate build
 
-      # The client's `test` script is `vitest run` — esbuild, which STRIPS types
-      # without checking them. Its `build` script (the release path, and what the
-      # Docker image runs) is `... && tsc && vite build`. So a type error in any
-      # client file sails through this workflow green and only surfaces when the
-      # image is built. That is not hypothetical: #624 shipped 4 TS errors in new
-      # test files with a fully green PR gate (#625). Typecheck the client
-      # explicitly, after the workspace packages it resolves are built (tsc reads
-      # their .d.ts from dist/, so this step MUST stay below the build steps).
-      # tsconfig `include` covers src/**, so *.spec/*.test files are checked too —
-      # that is the point: #624's four errors were all in test files.
+      # The client's `test` script is `vitest run` (esbuild strips types without
+      # checking them), while its `build` script, used by the Docker image, runs
+      # `tsc && vite build`. Typecheck explicitly here; tsc reads the workspace
+      # packages' .d.ts from dist/, so this step MUST stay below the build steps.
+      # tsconfig `include` covers src/**, so test files are checked too.
       - name: Typecheck client
         run: pnpm --filter client typecheck
 
-      # git-sync and mcp are no longer committed in built form (build/ is
-      # gitignored), so CI must compile them: the server resolves both via their
-      # built build/index.js (git-sync's runtime consumer lands on this branch,
-      # #119). The server pretest also builds them, but building here keeps it
-      # explicit and independent of pnpm lifecycle ordering.
+      # git-sync and mcp build/ is gitignored and the server resolves both via their
+      # built build/index.js. The server pretest also builds them, but building here
+      # keeps it explicit and independent of pnpm lifecycle ordering.
       - name: Build git-sync and mcp
         run: pnpm --filter @docmost/git-sync build && pnpm --filter @docmost/mcp build
 
@@ -211,15 +193,11 @@ jobs:
       - name: Run server integration tests
         run: pnpm --filter server test:int
 
-  # Cross-package tool-spec parity gate (issue #447). The tool-spec registry lives
-  # in `packages/mcp` but its parity/tier guard tests live in the `apps/server`
-  # jest suite, so a PR touching ONLY one of the two packages must still run BOTH
-  # sides — otherwise an in-app wiring break (e.g. PR #434 drawio) passes the mcp
-  # suite green and only surfaces on develop after merge. The `test` job already
-  # runs everything via `pnpm -r test`; this job is a fast, explicitly-named guard
-  # that runs the mcp `node --test` suite AND the server tool-guard jest specs
-  # together, so the coupling is visible and can never be accidentally split by a
-  # path filter. No Postgres/Redis needed: these specs mock the DB/loader.
+  # Cross-package tool-spec parity gate: the registry lives in `packages/mcp` but
+  # its parity/tier guard tests live in the `apps/server` jest suite. This job runs
+  # the mcp `node --test` suite and the server tool-guard jest specs together so the
+  # coupling is explicit and no path filter can split it. No Postgres/Redis needed:
+  # these specs mock the DB/loader.
   mcp-server-parity:
     runs-on: ubuntu-latest
     timeout-minutes: 15

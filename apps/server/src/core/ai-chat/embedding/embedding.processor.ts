@@ -79,28 +79,16 @@ export class EmbeddingProcessor extends WorkerHost implements OnModuleDestroy {
       }
 
       case QueueJob.WORKSPACE_CREATE_EMBEDDINGS: {
-        // #599 (R2) — this one must NOT be swallowed. A bulk reindex that ends with
-        // failed pages (a TEI timeout, a 429) does not flip the active generation,
-        // so the workspace stays in the swap window: ~2x pgvector rows on an
-        // un-indexed column, `semantic.state: 'stale'`, and lexical-only search after
-        // a model change. Swallowing the error completed the job "successfully" and
-        // nothing ever re-ran it — the degradation was PERMANENT from a single
-        // transient hiccup. Rethrow so BullMQ fails the job and RETRIES it with
-        // backoff (the reindex is enqueued with attempts: 3, see
-        // AiSettingsService.reindex / WorkspaceService); the run is idempotent, so a
-        // retry re-attempts exactly the pages that failed. When the attempts are
-        // exhausted the job stays failed (logged by the `failed` worker event) and
-        // the workspace remains in the safe old-generation-serving state — degraded
-        // and VISIBLE (`stale`), never a silent success.
-        //
-        // #599 (review F1) — the SAME rethrow carries StaleReindexTargetError: a run
-        // whose config changed mid-flight must not report success either. Its retry
-        // is the ONLY thing that will ever build the new target, because the reindex
-        // that config change tried to enqueue was de-duplicated against this very
-        // job (a stable per-workspace jobId).
-        //
-        // Only the WORKSPACE-level run is retried this way: the per-page jobs above
-        // keep their per-item isolation (one bad page must not re-run the others).
+        // Not swallowed: a bulk reindex that ends with failed pages (or whose
+        // config changed mid-run, StaleReindexTargetError) does not flip the active
+        // generation, so the workspace stays in the swap window (~2x pgvector rows,
+        // `semantic.state: 'stale'`, lexical-only search after a model change).
+        // Rethrow so BullMQ fails the job and RETRIES it with backoff (attempts: 3,
+        // see AiSettingsService.reindex / WorkspaceService); the run is idempotent.
+        // A stale-target retry is the only thing that builds the new target: the
+        // config change's enqueue was de-duplicated against this job (stable
+        // per-workspace jobId). When attempts are exhausted the job stays failed and
+        // the old generation keeps serving. Per-page jobs above keep isolation.
         try {
           await this.indexer.reindexWorkspace(workspaceId);
         } catch (err) {

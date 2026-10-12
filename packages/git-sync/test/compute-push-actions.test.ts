@@ -3,9 +3,9 @@ import { computePushActions } from '../src/engine/push';
 import type { DiffEntry, MetaSide } from '../src/engine/push';
 import type { DocmostMdMeta } from '@docmost/prosemirror-markdown';
 
-// FS→Docmost push, FIRST increment (DESIGN.md §7). `computePushActions` is the PURE
+// FS→Docmost push, FIRST increment (SPEC §6). `computePushActions` is the PURE
 // half: it classifies each `git diff --name-status` row into a Docmost action by
-// `pageId` identity (DESIGN.md §4, §7), with NO IO — the `metaAt` resolver is injected.
+// `pageId` identity (SPEC §4/§8), with NO IO — the `metaAt` resolver is injected.
 // These tests cover every classification incl. edges.
 
 /** Build a `metaAt` resolver from a `path|side -> meta` table. */
@@ -112,7 +112,7 @@ describe('computePushActions — M (modified)', () => {
 
   it('modified file that DROPPED its pageId recovers it from the pre-image -> update (bug C10-D1)', () => {
     // The current file lost its `gitmost_id` frontmatter (a tool rewrote the whole
-    // file), but its version at the diff base still had it. Recover the id
+    // file), but the last-export version at this path still had it. Recover the id
     // and apply the body edit instead of silently skipping+reverting it.
     const changes: DiffEntry[] = [{ status: 'M', path: 'Doc.md' }];
     const metaAt = metaTable({
@@ -137,10 +137,10 @@ describe('computePushActions — D (deleted)', () => {
     expect(actions.skipped).toEqual([]);
   });
 
-  it('deleted file with NO recoverable pageId -> skipped (untracked guard, DESIGN.md §7)', () => {
+  it('deleted file with NO recoverable pageId -> skipped (untracked guard §8)', () => {
     const changes: DiffEntry[] = [{ status: 'D', path: 'Stray.md' }];
     // No pre-image pageId -> the untracked-file guard skips it (never deletes a
-    // page that was never tracked, DESIGN.md §7).
+    // page that was never tracked, SPEC §8).
     const actions = computePushActions({ changes, metaAt: metaTable({}) });
     expect(actions.deletes).toEqual([]);
     expect(actions.skipped).toEqual([
@@ -179,7 +179,7 @@ describe('computePushActions — R/C (renamed/moved)', () => {
     // It is ALSO recorded as an UPDATE for the new path (F4) so a body edit
     // riding along the rename in the same diff is pushed, not lost. The update
     // carries `basePath = oldPath` so the 3-way merge base is resolved from where
-    // the file lived at the diff base (the OLD path), not the new path (which would
+    // the file lived at last-export (the OLD path), not the new path (which would
     // return null and degrade to a 2-way clobber). Never a create/delete though.
     expect(actions.creates).toEqual([]);
     expect(actions.updates).toEqual([
@@ -227,7 +227,7 @@ describe('computePushActions — R/C (renamed/moved)', () => {
     ]);
     // The body also rides along as an UPDATE for the new path (F4). For a COPY the
     // `basePath` is the SOURCE path (`Src.md`): the source still exists in the
-    // diff base's tree, so the copy's body 3-way-merges against its source's
+    // last-export tree, so the copy's body 3-way-merges against its source's
     // last-synced text — a real common ancestor, not a null 2-way base.
     expect(actions.updates).toEqual([
       { pageId: 'p-copy', path: 'Copy.md', basePath: 'Src.md' },

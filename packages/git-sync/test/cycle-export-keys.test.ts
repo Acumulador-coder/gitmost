@@ -1,20 +1,15 @@
-import "./git-env";
-import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { runCycle } from "../src/engine/cycle";
-import { VaultGit } from "../src/engine/git";
 import {
+  cleanupVaults,
   git,
   gitAvailable,
-  makeClient,
-  makeSettings,
-  nodeFs,
+  setupVault,
   type FakePage,
 } from "./cycle-realgit-helpers";
 
-// Change detection: the pull re-reads (getPageJson) and re-converts only live
+// Change detection: the export re-reads (getPageJson) and re-converts only live
 // pages whose export key (updatedAt + relPath + tree fields) changed since their
 // last successful export. Driven against a REAL vault so the skip is proven on
 // the observable property — the number of page reads — across real cycles.
@@ -37,47 +32,27 @@ function fixturePages(): FakePage[] {
 
 describe("runCycle — export-key change detection", () => {
   let available = false;
-  let dir: string | undefined;
 
   beforeAll(async () => {
     available = await gitAvailable();
   });
 
-  afterEach(async () => {
-    if (dir) await rm(dir, { recursive: true, force: true });
-    dir = undefined;
-  });
+  afterEach(cleanupVaults);
 
   async function setup() {
-    dir = await mkdtemp(join(tmpdir(), "docmost-export-keys-"));
-    const vault = new VaultGit(dir);
-    const pages = fixturePages();
-    const client = makeClient(pages);
-    const exportKeys = new Map<string, string>();
-    const root = dir;
-    const cycle = (signal?: AbortSignal) =>
-      runCycle({
-        spaceId: "space-1",
-        client: client as any,
-        vault,
-        settings: makeSettings(root),
-        fs: nodeFs,
-        log: () => undefined,
-        warn: () => undefined,
-        exportKeys,
-        signal,
-      });
+    const h = await setupVault(fixturePages());
+    const { client, exportKeys, pages } = h;
+    const cycle = (signal?: AbortSignal) => h.cycle(undefined, signal);
     /** Page ids read via getPageJson since the last call (then resets). */
     const reads = (): string[] => {
       const ids = client.getPageJson.mock.calls.map((c) => c[0] as string);
       client.getPageJson.mockClear();
       return ids.sort();
     };
-    // Initial full export.
-    expect((await cycle()).ran).toBe(true);
+    // The initial full export (setupVault's first cycle).
     expect(reads()).toEqual([P, C1, C2, R].sort());
     expect(exportKeys.size).toBe(4);
-    return { dir: root, pages, client, exportKeys, cycle, reads };
+    return { dir: h.root, pages, client, exportKeys, cycle, reads };
   }
 
   it("a second cycle with nothing changed reads ZERO pages", async () => {
@@ -131,7 +106,7 @@ describe("runCycle — export-key change detection", () => {
     if (!available) return;
     const { dir, cycle, reads } = await setup();
 
-    const lock = join(dir, ".git", "index.lock");
+    const lock = join(dir, "HEAD.lock");
     await writeFile(lock, "");
     const anHourAgo = Date.now() / 1000 - 3600;
     await utimes(lock, anHourAgo, anHourAgo);

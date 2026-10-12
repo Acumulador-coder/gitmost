@@ -136,7 +136,7 @@ const CTX = { workspaceId: 'ws-1', userId: 'svc-user', spaceId: 'space-1' };
 // The same bound context; kept as a separate name where a test is about the
 // reconciling space (the cross-space guards compare against it).
 const CTX_SPACE = CTX;
-// The fields every id-scoped write checks (GA-1): a page of the reconciling
+// The fields every id-scoped write checks: a page of the reconciling
 // space in the reconciling workspace.
 const IN_SPACE = { workspaceId: 'ws-1', spaceId: 'space-1' };
 // A syntactically VALID parent uuid. createPage/movePage now coerce a malformed
@@ -568,19 +568,12 @@ describe('GitmostDataSourceService', () => {
       expect(res).toEqual({ data: { id: 'new-id' }, updatedAt: undefined });
     });
 
-    // F1 (bug C9-D1, parent-id variant): a parent folder-note carrying a broken
-    // non-UUID `gitmost_id` makes the push planner hand createPage a malformed
-    // parentPageId. Left as-is it flows into pageService.create -> findById
-    // (slugId fallback -> no row) -> NotFoundException, a throw that never clears
-    // the push `failures` set, so the WHOLE space wedges forever. The fix COERCES
-    // the malformed parent to root (undefined) so the page is created at the space
-    // root (self-heal) instead of being dropped — and never wedges.
-    //
-    // NON-VACUITY: the mocked pageService.create asserts it received
-    // `parentPageId: undefined`. Against the UNcoerced createPage the malformed
-    // string would flow straight through and this assertion would fail (create
-    // would be called with parentPageId:'[unclosed-broken-id'), so the test
-    // genuinely exercises the coercion.
+    // A parent folder-note carrying a broken non-UUID `gitmost_id` makes the push
+    // planner hand createPage a malformed parentPageId. Passed through, it would
+    // reach pageService.create -> findById (slugId fallback -> no row) ->
+    // NotFoundException, a throw that never clears the push `failures` set and
+    // wedges the WHOLE space. createPage COERCES the malformed parent to root
+    // (undefined), asserted on the mocked pageService.create below.
     it('coerces a malformed (non-UUID) parentPageId to root and does NOT wedge (F1)', async () => {
       const { service, mocks } = build();
       mocks.pageService.create.mockResolvedValue({ id: 'new-id' });
@@ -679,7 +672,7 @@ describe('GitmostDataSourceService', () => {
       const { service, mocks } = build();
       await service.bind(CTX).deletePage('p1');
       // Passes git-sync provenance so the soft-delete stamps
-      // lastUpdatedSource='git-sync' (loop-guard, PR #119 review).
+      // lastUpdatedSource='git-sync' (loop-guard).
       expect(mocks.pageService.removePage).toHaveBeenCalledWith(
         'p1',
         'svc-user',
@@ -813,19 +806,14 @@ describe('GitmostDataSourceService', () => {
       expect(mocks.pageService.movePage).not.toHaveBeenCalled();
     });
 
-    // F1 (parent-id variant), mirror of the createPage case. A malformed
+    // Mirror of the createPage case. A malformed
     // (non-UUID) destination parentPageId would reach computeMovePosition's raw
     // uuid predicate (22P02, swallowed but mis-logged) or — when a position is
     // supplied — pageService.movePage's findById -> NotFoundException (NOT a
-    // 22P02, so NOT swallowed -> the space wedges). The fix coerces it to root
-    // (null) so the reparent targets root instead of wedging. The page here has a
-    // current parent, so coerced-root != current parent and the echo-guard does
-    // not short-circuit — the move proceeds against a null (root) parent.
-    //
-    // NON-VACUITY: the assertion is `dto.parentPageId === null`. Against the
-    // UNcoerced movePage the malformed string would flow through to
-    // pageService.movePage's dto and this would fail (it would be the raw
-    // '[broken-parent' token).
+    // 22P02, so NOT swallowed -> the space wedges). movePage coerces it to root
+    // (null). The page here has a current parent, so coerced-root != current
+    // parent and the echo-guard does not short-circuit — the move proceeds
+    // against a null (root) parent (`dto.parentPageId === null`).
     it('coerces a malformed (non-UUID) parentPageId to root and does NOT wedge (F1)', async () => {
       const { service, mocks } = build([]); // no siblings -> fresh position key
       mocks.pageRepo.findById.mockResolvedValue({
@@ -973,7 +961,7 @@ describe('GitmostDataSourceService', () => {
         deletedAt: new Date('2026-06-20T10:00:00.000Z'),
       });
       const res = await service.bind(CTX).restorePage('p1');
-      // Stamps lastUpdatedSource='git-sync' on restore (loop-guard, PR #119).
+      // Stamps lastUpdatedSource='git-sync' on restore (loop-guard).
       expect(mocks.pageRepo.restorePage).toHaveBeenCalledWith(
         'p1',
         'ws-1',
@@ -983,10 +971,10 @@ describe('GitmostDataSourceService', () => {
     });
   });
 
-  // GA-1: a vault file of space A can carry the gitmost_id of a page in space B
-  // or in another workspace. Every id-scoped write must leave such a page alone:
+  // A vault file of space A can carry the gitmost_id of a page in space B or in
+  // another workspace. Every id-scoped write must leave such a page alone:
   // PageService runs these writes as the service user, without CASL.
-  describe('GA-1 guard: id-scoped writes never touch a page of another space or workspace', () => {
+  describe('foreign-page guard: id-scoped writes never touch a page of another space or workspace', () => {
     const OTHER_SPACE = {
       id: 'pB',
       workspaceId: 'ws-1',
@@ -1070,9 +1058,9 @@ describe('GitmostDataSourceService', () => {
     });
   });
 
-  // GL-7: every datasource call honours the cycle's abort signal (lost lock or
-  // cycle deadline), and a body write is awaited for a bounded time only.
-  describe('cycle abort and body-write deadline (GL-7)', () => {
+  // Every datasource call honours the cycle's abort signal (lost lock or cycle
+  // deadline), and a body write is awaited for a bounded time only.
+  describe('cycle abort and body-write deadline', () => {
     const LIVE_PAGE = {
       id: 'p1',
       ...IN_SPACE,
@@ -1164,8 +1152,8 @@ describe('GitmostDataSourceService', () => {
     });
   });
 
-  // Phase-B+ continuous-sync methods: not yet called by the engine but wired into
-  // the GitSyncClient seam (PR #119 review #5). Exercised via the bound client.
+  // Continuous-sync methods: not called by the engine but wired into the
+  // GitSyncClient seam. Exercised via the bound client.
   describe('listRecentSince', () => {
     it('queries non-deleted pages newest-first and ISO-stringifies updatedAt', async () => {
       const rows = [

@@ -14,7 +14,7 @@ const AUTH_TAG_LENGTH = 16; // GCM authentication tag length
 const KEY_LENGTH = 32; // 256-bit key for aes-256-gcm
 
 /**
- * Symmetric secret encryption helper (§6.3 / A2 crypto part).
+ * Symmetric secret encryption helper.
  *
  * Encrypts short secrets (e.g. provider API keys) with AES-256-GCM. The key is
  * derived from APP_SECRET via scrypt using a per-record random salt, so two

@@ -146,14 +146,12 @@ describe("Page chrome (local-first boot cache)", () => {
 
     // Title + header are on screen even though the page query is still pending.
     expect(chromeTitle()).toContain("Cached title");
-    // The page icon is a Lucide IconRef now, not a glyph renderable in a
-    // text-only <title>; the legacy emoji no longer prefixes the tab title.
+    // The page icon is a Lucide IconRef, not a glyph renderable in a text-only
+    // <title>, so no emoji prefixes the tab title.
     expect(chromeTitle()).not.toContain("🚀");
     expect(screen.getByTestId("page-header")).toBeDefined();
-    // Ф7 (#643) — the body NO LONGER waits for the network: with local-first ON
-    // the editor mounts on the cached meta (it renders from the local ydoc / a
-    // skeleton internally). Phase 1's "body stays skeleton until /pages/info"
-    // assertion is exactly what #643 removes.
+    // The body does not wait for the network: the editor mounts on the cached
+    // meta (it renders from the local ydoc / a skeleton internally).
     expect(screen.getByTestId("full-editor")).toBeDefined();
   });
 

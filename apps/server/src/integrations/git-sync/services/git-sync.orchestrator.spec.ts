@@ -1,5 +1,5 @@
 // Unit tests for the git-sync control plane. The engine's `runCycle`
-// (which owns the PULL->PUSH branch choreography) is mocked so we exercise ONLY
+// (which owns the apply/export choreography) is mocked so we exercise ONLY
 // the orchestrator's wiring: gating, the Redis leader lock + in-process mutex
 // (via SpaceLockService),
 // the remote-template substitution in the settings it hands the engine, the
@@ -11,14 +11,12 @@
 // `@docmost/git-sync` package cannot be `require()`d under jest). The `mock`
 // prefix lets the hoisted factory reference it.
 const mockRunCycle = jest.fn();
-const mockRecoverVault = jest.fn();
+const mockPrepareVault = jest.fn();
 
 jest.mock('../git-sync.loader', () => ({
   loadGitSync: jest.fn(async () => ({
     runCycle: mockRunCycle,
-    recoverVault: mockRecoverVault,
-    DEFAULT_BRANCH: 'main',
-    RECEIVE_REF: 'refs/docmost/receiving',
+    prepareVault: mockPrepareVault,
   })),
 }));
 // The real registry is a disabled no-op under jest (no METRICS_PORT); spy on the
@@ -55,12 +53,12 @@ import { GIT_SYNC_LOCK_TTL_MS } from '../git-sync.constants';
 type AnyMock = jest.Mock;
 
 const runCycleMock = mockRunCycle as unknown as AnyMock;
-const recoverVaultMock = mockRecoverVault as unknown as AnyMock;
+const prepareVaultMock = mockPrepareVault as unknown as AnyMock;
 
 /** The default happy-path cycle result the engine returns. */
 const OK_CYCLE = {
   ran: true,
-  pull: { written: 0, deleted: 0, conflict: false, failures: 0 },
+  pull: { written: 0, deleted: 0, failures: 0 },
   push: { mode: 'apply', failures: 0 },
 };
 
@@ -73,16 +71,8 @@ interface BuildOptions {
   /** A hook applied to the fake vault so a test can override its behaviour. */
   vaultOverrides?: Record<string, unknown>;
   /**
-   * The row `buildSettings` reads for the per-space `autoMergeConflicts` flag
-   * (`executeTakeFirst` on the `autoMergeConflicts`-aliased query). Default: the
-   * SAFE off value. Pass `undefined` to model a missing row (no space / no
-   * settings).
-   */
-  settingsRow?: { autoMergeConflicts: boolean } | undefined;
-  /**
    * The per-space opt-in flag `runOnce` reads via `isSpaceGitSyncEnabled`
-   * (`executeTakeFirst` on the `enabled`-aliased query — a DIFFERENT query from
-   * the `autoMergeConflicts` read above; commit c838fdee added it). Default
+   * (`executeTakeFirst` on the `enabled`-aliased query). Default
    * `true` so a build() space passes the per-space gate and the cycle proceeds.
    * Set `false` to model a space that did NOT opt in (skipped:'space-not-enabled').
    */
@@ -99,11 +89,10 @@ interface Built {
   vaultRegistry: { getVault: AnyMock; vaultPath: AnyMock };
   vault: Record<string, AnyMock>;
   scheduler: Record<string, AnyMock>;
-  redis: { set: AnyMock; eval: AnyMock; exists: AnyMock };
+  redis: { set: AnyMock; eval: AnyMock };
   redisService: { getOrThrow: AnyMock };
   db: unknown;
   restrictions: { spaceHasRestrictedPages: AnyMock };
-  spaceLock: SpaceLockService;
 }
 
 function build(opts: BuildOptions = {}): Built {
@@ -115,12 +104,9 @@ function build(opts: BuildOptions = {}): Built {
     spaceEnabled = true,
     restricted = false,
   } = opts;
-  // Distinguish "key omitted" (default off row) from "key present but undefined"
-  // (a deliberately MISSING settings row).
-  const settingsRow =
-    'settingsRow' in opts ? opts.settingsRow : { autoMergeConflicts: false };
-  const serviceUserId =
-    'serviceUserId' in opts ? opts.serviceUserId : 'svc-user';
+  // Distinguish "key omitted" (default to a valid id) from "key present but
+  // undefined" (an unset service user).
+  const serviceUserId = 'serviceUserId' in opts ? opts.serviceUserId : 'svc-user';
 
   const env: Record<string, AnyMock> = {
     getGitSyncServiceUserId: jest.fn(() => serviceUserId),
@@ -146,14 +132,6 @@ function build(opts: BuildOptions = {}): Built {
   const vault: Record<string, AnyMock> = {
     assertGitAvailable: jest.fn(async () => undefined),
     ensureRepo: jest.fn(async () => undefined),
-    isMergeInProgress: jest.fn(async () => false),
-    ensureBranch: jest.fn(async () => undefined),
-    checkout: jest.fn(async () => undefined),
-    listTrackedFiles: jest.fn(async () => []),
-    pinHeadToMain: jest.fn(async () => true),
-    updateRef: jest.fn(async () => undefined),
-    deleteRef: jest.fn(async () => undefined),
-    isWorkingTreeDirty: jest.fn(async () => false),
     ...(vaultOverrides as Record<string, AnyMock>),
   };
   const vaultRegistry = {
@@ -170,20 +148,13 @@ function build(opts: BuildOptions = {}): Built {
     // Default: lock acquired. Tests override per-case.
     set: jest.fn(async () => 'OK'),
     eval: jest.fn(async () => 1),
-    // Read advertisements only check whether the key is held elsewhere.
-    exists: jest.fn(async () => 0),
   };
   const redisService = { getOrThrow: jest.fn(() => redis) };
 
-  // Chainable Kysely stub. TWO distinct single-row queries run through the same
-  // builder and both end in `executeTakeFirst`, so the stub must tell them apart
-  // by the column ALIAS the real code selects (they are otherwise identical):
+  // Chainable Kysely stub. The single-row query ends in `executeTakeFirst`:
   //   - `isSpaceGitSyncEnabled` (per-space opt-in gate in `runOnce`, added by
   //     c838fdee): `.select(sql\`...->>'enabled' = 'true'\`.as('enabled'))` ->
   //     the code reads `row?.enabled`. Return `{ enabled: spaceEnabled }`.
-  //   - `buildSettings`: `.select(sql\`...->>'autoMergeConflicts' = 'true'\`
-  //     .as('autoMergeConflicts'))` -> the code reads `row?.autoMergeConflicts`.
-  //     Return `settingsRow` (default SAFE off; `undefined` models a missing row).
   // `enabledSpaces` uses `.select([...strings]).execute()` (no alias, no
   // executeTakeFirst) and is stubbed/replaced in the tests that exercise it.
   const db = (() => {
@@ -204,7 +175,7 @@ function build(opts: BuildOptions = {}): Built {
       },
       where: () => builder,
       executeTakeFirst: async () =>
-        lastAlias === 'enabled' ? { enabled: spaceEnabled } : settingsRow,
+        lastAlias === 'enabled' ? { enabled: spaceEnabled } : undefined,
       execute: async () => [],
     };
     return { selectFrom: () => builder };
@@ -240,7 +211,6 @@ function build(opts: BuildOptions = {}): Built {
     redisService,
     db,
     restrictions,
-    spaceLock,
   };
 }
 
@@ -256,7 +226,7 @@ async function until(cond: () => boolean, timeoutMs = 2_000): Promise<void> {
 /** The engine runs a clean cycle by default. */
 function primeEngineHappyPath(): void {
   runCycleMock.mockResolvedValue(OK_CYCLE);
-  recoverVaultMock.mockResolvedValue(false);
+  prepareVaultMock.mockResolvedValue(false);
 }
 
 beforeEach(() => {
@@ -358,74 +328,18 @@ describe('GitSyncOrchestrator', () => {
       });
       expect(deps.signal).toBeInstanceOf(AbortSignal);
     });
-
-    it('threads autoMergeConflicts:true from the space settings row into the engine settings', async () => {
-      const built = build({ settingsRow: { autoMergeConflicts: true } });
-      await built.orchestrator.runOnce('space-1', 'ws-1');
-      const [deps] = runCycleMock.mock.calls[0];
-      expect(deps.settings.autoMergeConflicts).toBe(true);
-    });
-
-    it('defaults autoMergeConflicts to false when the settings row is missing', async () => {
-      const built = build({ settingsRow: undefined });
-      await built.orchestrator.runOnce('space-1', 'ws-1');
-      const [deps] = runCycleMock.mock.calls[0];
-      expect(deps.settings.autoMergeConflicts).toBe(false);
-    });
-
-    it("escalates a divergent-`docmost` push refusal to WARN and surfaces the flag in the status", async () => {
-      const built = build();
-      const warnSpy = jest
-        .spyOn(Logger.prototype, 'warn')
-        .mockImplementation(() => undefined);
-      // The engine refused to fast-forward a divergent `docmost` mirror (§5).
-      runCycleMock.mockResolvedValue({ ...OK_CYCLE, divergentDocmost: true });
-
-      const res = await built.orchestrator.runOnce('space-1', 'ws-1');
-
-      // The flag is surfaced in the returned status (consumable by /status).
-      expect(res.divergentDocmost).toBe(true);
-      // And escalated from the engine's info `log` to a WARN naming the space.
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('DIVERGENT'),
-      );
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('space-1'));
-    });
-
-    it("does NOT warn when the cycle is clean (divergentDocmost falsy)", async () => {
-      const built = build();
-      const warnSpy = jest
-        .spyOn(Logger.prototype, 'warn')
-        .mockImplementation(() => undefined);
-      runCycleMock.mockResolvedValue(OK_CYCLE);
-
-      const res = await built.orchestrator.runOnce('space-1', 'ws-1');
-
-      expect(res.divergentDocmost).toBeUndefined();
-      expect(warnSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining('DIVERGENT'),
-      );
-    });
-
-    it("surfaces the engine's skipped status (e.g. merge-in-progress) verbatim", async () => {
-      const built = build();
-      runCycleMock.mockResolvedValue({ ran: false, skipped: 'merge-in-progress' });
-
-      const res = await built.orchestrator.runOnce('space-1', 'ws-1');
-      expect(res).toEqual({
-        spaceId: 'space-1',
-        ran: false,
-        skipped: 'merge-in-progress',
-      });
-    });
   });
 
   describe('ingestExternalPush', () => {
-    it('repairs the vault BEFORE the receive-pack (a dirty main rejects the push)', async () => {
+    it('prepares the vault (legacy upgrade) under the lock BEFORE the receive-pack', async () => {
       const order: string[] = [];
       const built = build();
-      recoverVaultMock.mockImplementation(async (deps: any) => {
-        order.push(`recover:${deps.spaceId}`);
+      built.redis.set.mockImplementation(async () => {
+        order.push('lock');
+        return 'OK';
+      });
+      prepareVaultMock.mockImplementation(async (deps: any) => {
+        order.push(`prepare:${deps.spaceId}`);
         expect(deps.vault).toBe(built.vault);
         return true;
       });
@@ -439,7 +353,12 @@ describe('GitSyncOrchestrator', () => {
 
       await built.orchestrator.ingestExternalPush('space-1', 'ws-1', runReceivePack);
 
-      expect(order).toEqual(['recover:space-1', 'receive-pack', 'cycle']);
+      expect(order[0]).toBe('lock');
+      expect(order.filter((o) => o !== 'lock')).toEqual([
+        'prepare:space-1',
+        'receive-pack',
+        'cycle',
+      ]);
     });
 
     it('streams the receive-pack FIRST, then runs the Docmost cycle', async () => {
@@ -474,7 +393,7 @@ describe('GitSyncOrchestrator', () => {
         built.orchestrator.ingestExternalPush('space-1', 'ws-1', runReceivePack),
       ).rejects.toBeInstanceOf(GitSyncLockHeldError);
 
-      // We must never write to the working tree concurrently with a cycle.
+      // We must never move `main` concurrently with a cycle.
       expect(runReceivePack).not.toHaveBeenCalled();
       expect(runCycleMock).not.toHaveBeenCalled();
       // The refused push shows in the space's status.
@@ -499,154 +418,10 @@ describe('GitSyncOrchestrator', () => {
       // Lock was still released (CAS eval) despite the cycle error.
       expect(built.redis.eval).toHaveBeenCalled();
     });
-
-    it('marks the receive-pack with RECEIVE_REF: set at main before it, deleted once it resolved with a clean tree', async () => {
-      const order: string[] = [];
-      const built = build({
-        vaultOverrides: {
-          updateRef: jest.fn(async (ref: string, target: string) => {
-            order.push(`set ${ref} ${target}`);
-          }),
-          deleteRef: jest.fn(async (ref: string) => {
-            order.push(`delete ${ref}`);
-          }),
-          isWorkingTreeDirty: jest.fn(async () => {
-            order.push('dirty? no');
-            return false;
-          }),
-        },
-      });
-      runCycleMock.mockImplementation(async () => {
-        order.push('cycle');
-        return OK_CYCLE;
-      });
-      const runReceivePack = jest.fn(async () => {
-        order.push('receive-pack');
-      });
-
-      await built.orchestrator.ingestExternalPush('space-1', 'ws-1', runReceivePack);
-
-      expect(order).toEqual([
-        'set refs/docmost/receiving main',
-        'receive-pack',
-        'dirty? no',
-        'delete refs/docmost/receiving',
-        'cycle',
-      ]);
-    });
-
-    it('keeps RECEIVE_REF (WARN naming the space) when a resolved receive-pack left main dirty — it was cut off', async () => {
-      const warn = jest
-        .spyOn(Logger.prototype, 'warn')
-        .mockImplementation(() => undefined);
-      const built = build({
-        vaultOverrides: { isWorkingTreeDirty: jest.fn(async () => true) },
-      });
-      const runReceivePack = jest.fn(async () => undefined);
-
-      await built.orchestrator.ingestExternalPush('space-7', 'ws-1', runReceivePack);
-
-      expect(built.vault.updateRef).toHaveBeenCalledWith(
-        'refs/docmost/receiving',
-        'main',
-      );
-      expect(built.vault.deleteRef).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringMatching(/space-7.*receive-pack was cut off.*recovery discards it/),
-      );
-      // The cycle still runs; its recovery discards the half-written tree.
-      expect(runCycleMock).toHaveBeenCalledTimes(1);
-    });
-
-    it('keeps RECEIVE_REF when the receive-pack rejects, so the next recovery discards what it left', async () => {
-      const built = build();
-      const runReceivePack = jest.fn(async () => {
-        throw new Error('receive-pack died');
-      });
-
-      await expect(
-        built.orchestrator.ingestExternalPush('space-1', 'ws-1', runReceivePack),
-      ).rejects.toThrow('receive-pack died');
-
-      expect(built.vault.updateRef).toHaveBeenCalledWith(
-        'refs/docmost/receiving',
-        'main',
-      );
-      expect(built.vault.deleteRef).not.toHaveBeenCalled();
-      expect(runCycleMock).not.toHaveBeenCalled();
-    });
   });
 
-  describe('serveReadAdvertisement (bug #3 — stable advertised HEAD)', () => {
-    it('pins HEAD to main and serves under the space read lock (no Redis lock taken)', async () => {
-      const built = build();
-      const serve = jest.fn(async () => undefined);
-
-      await built.orchestrator.serveReadAdvertisement('space-1', 'ws-1', serve);
-
-      // A reader only checks the Redis key; it never takes or releases it, so
-      // a stream of reads cannot hold the space's lock (OR-1).
-      expect(built.redis.exists).toHaveBeenCalledTimes(1);
-      expect(built.redis.set).not.toHaveBeenCalled();
-      expect(built.redis.eval).not.toHaveBeenCalled();
-      // HEAD pinned BEFORE serving, on the right vault.
-      expect(built.vaultRegistry.getVault).toHaveBeenCalledWith('space-1');
-      expect(built.vault.pinHeadToMain).toHaveBeenCalledTimes(1);
-      expect(serve).toHaveBeenCalledTimes(1);
-      const pinOrder = built.vault.pinHeadToMain.mock.invocationCallOrder[0];
-      const serveOrder = serve.mock.invocationCallOrder[0];
-      expect(pinOrder).toBeLessThan(serveOrder);
-    });
-
-    it('warns, naming the space, when the pin is skipped (HEAD off main, dirty tree)', async () => {
-      const built = build({
-        vaultOverrides: { pinHeadToMain: jest.fn(async () => false) },
-      });
-      const warnSpy = jest
-        .spyOn(Logger.prototype, 'warn')
-        .mockImplementation(() => undefined);
-      const serve = jest.fn(async () => undefined);
-
-      await built.orchestrator.serveReadAdvertisement('space-7', 'ws-1', serve);
-
-      expect(serve).toHaveBeenCalledTimes(1);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/space-7.*not pinned/),
-      );
-    });
-
-    it('does not warn when HEAD is pinned', async () => {
-      const built = build();
-      const warnSpy = jest
-        .spyOn(Logger.prototype, 'warn')
-        .mockImplementation(() => undefined);
-
-      await built.orchestrator.serveReadAdvertisement('space-7', 'ws-1', jest.fn(async () => undefined));
-
-      expect(warnSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining('not pinned'),
-      );
-    });
-
-    it('records a fetch that found the lock held in the space status', async () => {
-      const built = build();
-      built.redis.exists.mockResolvedValue(1); // held by another holder
-      const serve = jest.fn(async () => undefined);
-
-      await built.orchestrator.serveReadAdvertisement('space-1', 'ws-1', serve);
-
-      expect(serve).toHaveBeenCalledTimes(1);
-      const [status] = built.orchestrator.getSpaceStatuses('ws-1');
-      expect(status.spaceId).toBe('space-1');
-      expect(status.lastSkipReason).toBe('lock-held');
-      expect(status.lockHeldSince).toEqual(expect.any(String));
-      // Served unpinned: the pin never ran while the lock was held elsewhere.
-      expect(built.vault.pinHeadToMain).not.toHaveBeenCalled();
-    }, 15_000);
-  });
-
-  // GA-2/GA-3/GA-4: git-sync cannot enforce page-level restrictions, so a space
-  // holding any is refused before anything is exported or written.
+  // git-sync cannot enforce page-level restrictions, so a space holding any is
+  // refused before anything is exported or written.
   describe('restricted spaces', () => {
     it('refuses the cycle: nothing exported or written, ERROR log and a failed status naming the reason', async () => {
       const built = build({ restricted: true });
@@ -693,8 +468,7 @@ describe('GitSyncOrchestrator', () => {
     });
   });
 
-  // GL-7: a cycle that never returns must not hold its space (or the poll)
-  // forever.
+  // A cycle that never returns must not hold its space (or the poll) forever.
   describe('cycle deadline', () => {
     it('aborts a hung cycle at the deadline: ERROR, failed status, lease no longer renewed, space busy until the cycle settles', async () => {
       jest.useFakeTimers();
@@ -789,84 +563,6 @@ describe('GitSyncOrchestrator', () => {
 
       releaseHung();
       await firstTick;
-    });
-  });
-
-  // OR-1: read advertisements share the space and give way to a waiting cycle,
-  // so a stream of `git ls-remote`s cannot starve the space's sync.
-  describe('read advertisements vs cycles', () => {
-    it('a cycle arriving during a read waits for it, and later reads wait for the cycle', async () => {
-      const built = build();
-      let releaseRead!: () => void;
-      const read1 = built.orchestrator.serveReadAdvertisement(
-        'space-1',
-        'ws-1',
-        () =>
-          new Promise<void>((resolve) => {
-            releaseRead = resolve;
-          }),
-      );
-      await until(() => releaseRead !== undefined);
-
-      const cycle = built.orchestrator.runOnce('space-1', 'ws-1');
-      await until(() => (built.spaceLock as any).running.has('space-1'));
-      const serve2 = jest.fn(async () => undefined);
-      const read2 = built.orchestrator.serveReadAdvertisement(
-        'space-1',
-        'ws-1',
-        serve2,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      // Neither the cycle nor the newer read has overtaken the read in flight.
-      expect(runCycleMock).not.toHaveBeenCalled();
-      expect(serve2).not.toHaveBeenCalled();
-
-      releaseRead();
-      const res = await cycle;
-      expect(res.ran).toBe(true);
-      await read2;
-      await read1;
-      // The newer read was served (pinned) after the cycle, not before it.
-      expect(serve2).toHaveBeenCalledTimes(1);
-      expect(serve2.mock.invocationCallOrder[0]).toBeGreaterThan(
-        runCycleMock.mock.invocationCallOrder[0],
-      );
-      expect(built.vault.pinHeadToMain).toHaveBeenCalledTimes(2);
-    });
-
-    it('concurrent reads do not wait for each other and share one HEAD pin', async () => {
-      let finishPin!: (pinned: boolean) => void;
-      const built = build({
-        vaultOverrides: {
-          pinHeadToMain: jest.fn(
-            () =>
-              new Promise<boolean>((resolve) => {
-                finishPin = resolve;
-              }),
-          ),
-        },
-      });
-      const serve1 = jest.fn(async () => undefined);
-      const serve2 = jest.fn(async () => undefined);
-
-      const read1 = built.orchestrator.serveReadAdvertisement(
-        'space-1',
-        'ws-1',
-        serve1,
-      );
-      const read2 = built.orchestrator.serveReadAdvertisement(
-        'space-1',
-        'ws-1',
-        serve2,
-      );
-      await until(() => finishPin !== undefined);
-      await new Promise((resolve) => setImmediate(resolve));
-      finishPin(true);
-      await Promise.all([read1, read2]);
-
-      expect(built.vault.pinHeadToMain).toHaveBeenCalledTimes(1);
-      expect(serve1).toHaveBeenCalledTimes(1);
-      expect(serve2).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -998,8 +694,8 @@ describe('GitSyncOrchestrator', () => {
     });
   });
 
-  // A failing space used to be invisible: pollTick dropped runOnce's status and
-  // /status reported only config, while runOnce logged an ERROR every 15 s.
+  // A failing space must be visible in /status and the metrics, not only as an
+  // ERROR logged on every poll.
   describe('per-space health, transition logging and metrics', () => {
     const incCycle = incGitSyncCycle as unknown as AnyMock;
     const setFailing = setGitSyncFailingSpaces as unknown as AnyMock;
@@ -1155,7 +851,6 @@ describe('GitSyncOrchestrator', () => {
         pull: {
           written: 3,
           deleted: 0,
-          conflict: false,
           failures: 2,
           firstFailure: {
             pageId: 'page-big',

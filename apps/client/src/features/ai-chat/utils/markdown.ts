@@ -7,8 +7,8 @@ import { Node as PMNode, DOMSerializer } from "@tiptap/pm/model";
 import DOMPurify from "dompurify";
 
 // The Docmost editor schema, built once. Chat markdown is rendered through the
-// SAME schema the editor/import use (issue #347), so chat output matches how the
-// page would render the same markdown.
+// SAME schema the editor/import use, so chat output matches how the page would
+// render the same markdown.
 const chatSchema = getSchema(docmostExtensions);
 
 /**
@@ -94,7 +94,7 @@ function neutralizeInternalLinksHook(node: Element): void {
 
 /**
  * Render AI markdown to sanitized HTML for read-only display. We reuse the
- * canonical converter (issue #347): markdown -> ProseMirror JSON (the SAME
+ * canonical converter: markdown -> ProseMirror JSON (the SAME
  * `markdownToProseMirrorSync` the editor paste/import path uses, so chat output
  * matches the editor's markdown flavor) -> HTML via `markdownToChatHtml`
  * (DOMSerializer), then sanitize with DOMPurify — LLM output is untrusted, so it
@@ -103,7 +103,7 @@ function neutralizeInternalLinksHook(node: Element): void {
  * Stays SYNCHRONOUS: both callers render inside React (a memo and a useMemo),
  * so the whole pipeline must resolve without awaiting. The converter's sync
  * entry makes that possible; on any conversion error we return "" so the caller
- * falls back to raw text (the same fallback the old Promise-guard produced).
+ * falls back to raw text.
  */
 export function renderChatMarkdown(
   markdown: string,

@@ -1,13 +1,10 @@
 /**
- * Server-side Markdown export for an AI agent chat (#183). The DB is the single
- * source of truth: this renders a chat purely from its persisted message rows
- * (`AiChatMessage[]` — role / content / metadata.parts / toolCalls / usage).
- * Because the assistant row is now persisted UPFRONT and updated per step, an
- * interrupted turn is included up to its last finished step.
+ * Server-side Markdown export for an AI agent chat. It renders a chat purely from
+ * its persisted message rows (`AiChatMessage[]` — role / content / metadata.parts /
+ * toolCalls / usage). The assistant row is persisted upfront and updated per step,
+ * so an interrupted turn is included up to its last finished step.
  *
- * Ported from the client `utils/chat-markdown.ts`. It is a PURE function (apart
- * from `new Date()` for the export timestamp), so it is straightforward to
- * unit-test and a future background worker can reuse it.
+ * Pure apart from `new Date()` for the export timestamp.
  *
  * Only a few fixed role/tool labels are localized via the `lang` param; the
  * structural document words (Input/Output/Error/Tokens/...) stay English because
@@ -49,9 +46,7 @@ interface UsageLike {
   reasoningTokens?: number;
 }
 
-/** Localized label table. The client-side Markdown builder was removed by #183
- *  (the export is now server-side only), so this no longer mirrors a second
- *  exporter — instead the tool-action labels are kept in parity with the
+/** Localized label table. The tool-action labels are kept in parity with the
  *  on-screen action-log labels in the client's `tool-parts.tsx` (`toolLabelKey`)
  *  so the export reads the same as the UI. Only role + tool-action labels are
  *  localized; everything structural is an English constant in the renderer. */
@@ -113,17 +108,12 @@ const LABELS: Record<
 
 /**
  * Make an untrusted title safe to interpolate into a Markdown blockquote
- * HEADING. escapeAttr() neutralizes the XML/HTML breakers (`<` `>` `"`) and
- * collapses whitespace for the PROMPT sink (`page="…"`), but this export sink is
- * MARKDOWN — link/image syntax survives escapeAttr. So additionally backslash-
- * escape `[` and `]`: that disables both `[text](url)` links and `![text](url)`
- * images, so a cross-user title like `![x](http://evil)` or `[phish](http://evil)`
- * cannot inject a remote (auto-loading) image or a clickable link into the
- * downloaded .md disguised as a trusted system annotation. A bare `(url)` with no
- * preceding `[]` is inert Markdown, so brackets are the only security-critical
- * characters here. (We leave backticks to escapeAttr's whitespace pass — a title
- * shown as inline code cannot escape the blockquote line or load a resource, so
- * it is not a security concern for this sink.)
+ * HEADING. escapeAttr() neutralizes `<` `>` `"` and collapses whitespace, but
+ * link/image syntax survives it. So `[` and `]` are also backslash-escaped: that
+ * disables both `[text](url)` links and `![text](url)` images, so a cross-user
+ * title cannot inject a remote image or a clickable link into the downloaded .md.
+ * A bare `(url)` with no preceding `[]` is inert Markdown, so brackets are the
+ * only security-critical characters here.
  */
 function markdownHeadingSafe(title: string): string {
   return escapeAttr(title).replace(/[[\]]/g, (m) => `\\${m}`);
@@ -323,14 +313,10 @@ export function buildChatMarkdown(args: {
     // warning the model received.
     const pc = pageChangedOf(row);
     if (pc) {
-      // The page title is UNTRUSTED cross-user data (a collaborative page's title
-      // controllable by another user). escapeAttr() alone (the prompt sink) is
-      // INSUFFICIENT here: this is a MARKDOWN sink, so we neutralize link/image
-      // syntax too (backslash-escaping `[`/`]`) before interpolating it into this
-      // `> **…**` blockquote heading — otherwise `![x](url)` / `[phish](url)` would
-      // inject a remote image or clickable link into the downloaded .md. An
-      // all-`<>"` title escapes to empty and correctly falls to the bare heading.
-      // The diff body is already safe via fence(). (#288 review F1.)
+      // The page title is UNTRUSTED cross-user data; markdownHeadingSafe() also
+      // neutralizes link/image syntax before it goes into this `> **…**` heading.
+      // An all-`<>"` title escapes to empty and falls to the bare heading. The
+      // diff body is already safe via fence().
       const safeTitle = markdownHeadingSafe(pc.title);
       const heading = safeTitle
         ? `${L.pageEditedByUser} ("${safeTitle}")`

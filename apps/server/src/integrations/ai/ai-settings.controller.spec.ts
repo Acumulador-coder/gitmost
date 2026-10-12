@@ -7,16 +7,14 @@ import { User, Workspace } from '@docmost/db/types/entity.types';
 import { UpdateAiSettingsDto } from './dto/update-ai-settings.dto';
 
 /**
- * #599 (R1) — changing the embedding config must AUTO-ENQUEUE the reindex.
+ * Changing the embedding config must AUTO-ENQUEUE the reindex.
  *
  * The fingerprint (model + revision + prefix scheme + dimensions) is what both
- * readers filter by, and the D2 guard drops the vector arm entirely while the active
- * generation's model differs from the configured one. So an admin who switches the
- * embedding model used to lose semantic search in BOTH search and RAG — silently,
- * and INDEFINITELY, until a human happened to click "Reindex now". Nothing else
- * enqueued the run.
+ * readers filter by, and the vector arm is off while the active generation's
+ * model differs from the configured one, so without a reindex semantic search
+ * stays off after a model switch.
  *
- * The flip side matters just as much: a full re-embed of a workspace is expensive
+ * Conversely, a full re-embed of a workspace is expensive
  * and provider-billed, so an edit that does NOT move the fingerprint (an API-key
  * rotation, a chat-model change, a system-prompt tweak) must enqueue NOTHING.
  */

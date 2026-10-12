@@ -84,12 +84,11 @@ describe("MessageItem markdown memoization", () => {
     expect(callsFor("gamm")).toBe(1);
   });
 
-  // REGRESSION (empty-render bug): the AI SDK streams a turn by MUTATING the same
-  // `parts` IN PLACE and reusing the message object. A row that mounted empty
-  // (reasoning-first providers render nothing at first) must still stream its text
-  // in once the parent hands down a fresh signature snapshot. Before the fix the
-  // memo recomputed the signature from the (mutated) message — identical on both
-  // sides — and froze the row at its empty render, so the answer never appeared.
+  // The AI SDK streams a turn by MUTATING the same `parts` IN PLACE and reusing
+  // the message object. A row that mounted empty (reasoning-first providers render
+  // nothing at first) must still stream its text in once the parent hands down a
+  // fresh signature snapshot; a memo that recomputes the signature from the mutated
+  // message sees identical sides and freezes the row at its empty render.
   it("streams text in after the row mounted empty and parts mutated in place", () => {
     renderChatMarkdownSpy.mockClear();
     // Reuse ONE message object across renders (as the SDK does).

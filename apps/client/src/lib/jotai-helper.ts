@@ -24,8 +24,8 @@ export const uiLocalStorage = (): Storage | undefined => {
 // Build a fail-soft, validated SyncStorage over `uiLocalStorage`. Every stored
 // value is run through the caller's `validate`; anything that fails (corrupt
 // JSON already yields the initial from createJSONStorage, out-of-contract shapes
-// are rejected here) degrades to the initial value. Exported for the regression
-// guard test (acceptance #6) that asserts `subscribe` is absent.
+// are rejected here) degrades to the initial value. Exported for the guard test
+// that asserts `subscribe` is absent.
 export function createUiStorage<Value>(
   validate: (v: unknown) => v is Value,
 ): SyncStorage<Value> {

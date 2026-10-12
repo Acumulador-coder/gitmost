@@ -104,7 +104,7 @@ export function getOfflineGraceMs(): number {
   return parseDurationMs(getConfigValue("OFFLINE_GRACE", "30d"));
 }
 
-// #641, part 5 — per-request timeout for the OFFLINE-CRITICAL requests (/me,
+// Per-request timeout for the OFFLINE-CRITICAL requests (/me,
 // /pages/info, /spaces/*) ONLY. It is deliberately NOT set on the axios instance
 // (api-client.ts): uploads, imports and long exports share that instance and
 // must stay untimed (they are already special-cased there). A hung connection —

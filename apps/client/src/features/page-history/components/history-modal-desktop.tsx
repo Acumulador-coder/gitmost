@@ -47,14 +47,12 @@ interface Props {
 }
 
 /**
- * #568 — redesigned DESKTOP page-history window: a single-row header (title,
- * selected-version label, Highlight-changes toggle + N/M diff navigation, Restore,
- * close) over a two-pane body — LEFT navigation panel (calendar heatmap + dense
- * revision list), RIGHT the rendered version with change highlighting.
- *
- * Mechanics are REUSED verbatim: the same list query + atoms + diff engine +
- * restore hook as the original body. Only the layout and row density change.
- * The mobile branch (history-modal-mobile) is untouched.
+ * DESKTOP page-history window: a single-row header (title, selected-version
+ * label, Highlight-changes toggle + N/M diff navigation, Restore, close) over a
+ * two-pane body — LEFT navigation panel (calendar heatmap + dense revision
+ * list), RIGHT the rendered version with change highlighting. It uses the same
+ * list query, atoms, diff engine and restore hook as the mobile branch
+ * (history-modal-mobile).
  */
 export default function HistoryModalDesktop({ pageId, onClose }: Props) {
   const { t } = useTranslation();

@@ -7,17 +7,17 @@ import type { IPage } from "@/features/page/types/page.types";
 import type { ICurrentUser } from "@/features/user/types/user.types";
 
 /**
- * Ф7 (#643) — the body gate is removed: page.tsx now mounts FullEditor on the
- * cached META (not on `page && space`). These tests assert the DATA-LOSS-SAFE
- * props contract at the page.tsx level — the exact resolutions the issue calls
- * out as traps — by capturing what FullEditor receives (it is mocked to a bare
- * div; the body internals live in page-editor.local-first.test.tsx).
+/**
+ * page.tsx mounts FullEditor on the cached META (not on `page && space`). These
+ * tests assert the data-loss-safe props contract at the page.tsx level by
+ * capturing what FullEditor receives (it is mocked to a bare div; the body
+ * internals live in page-editor.local-first.test.tsx).
  *
- *  - trap 2 / crit 5 CROSS-PAGE BODY: `content` comes ONLY from `livePage`,
- *    never the possibly-PREVIOUS `page` (keepPreviousData). Navigating A→B with a
- *    cache-hit for B must show B's content (or nothing yet), NEVER A's body.
- *  - trap 3 ROUTING: `spaceSlug` comes from the ROUTE (useParams), never the
- *    meta cache (which stores none).
+ *  - CROSS-PAGE BODY: `content` comes ONLY from `livePage`, never the possibly
+ *    PREVIOUS `page` (keepPreviousData). Navigating A→B with a cache-hit for B
+ *    must show B's content (or nothing yet), NEVER A's body.
+ *  - ROUTING: `spaceSlug` comes from the ROUTE (useParams), never the meta cache
+ *    (which stores none).
  */
 
 const fullEditorProps: Record<string, unknown>[] = [];

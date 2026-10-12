@@ -3,16 +3,16 @@ import { streamText, Output } from 'ai';
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
 
 /**
- * Regression tests for patches/ai@6.0.134.patch (server heap OOM on long
- * autonomous agent runs, #184).
+ * Tests for patches/ai@6.0.134.patch (server heap growth on long autonomous
+ * agent runs).
  *
  * Unpatched ai@6.0.134 substitutes the default text() output strategy even
  * when the caller passes NO `output` option. Its createOutputTransformStream
  * then accumulates the ENTIRE turn text and, on EVERY text-delta, enqueues a
  * flat snapshot of all text so far as `partialOutput` (O(n^2) memory). Those
  * snapshots pile up in the never-consumed leftover tee() branch of
- * DefaultStreamTextResult.baseStream, which is what OOM'd production during a
- * ~28k-chunk agent turn. The pnpm patch skips partialOutput production
+ * DefaultStreamTextResult.baseStream until the heap runs out on a long (~28k
+ * chunk) agent turn. The pnpm patch skips partialOutput production
  * entirely when no output strategy was requested, while keeping per-delta
  * streaming granularity.
  */

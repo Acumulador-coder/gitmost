@@ -6,12 +6,12 @@ import { QueueJob } from '../../integrations/queue/constants';
 const flushMicrotasks = () => new Promise((r) => setImmediate(r));
 
 /**
- * #399: the comment inline-mark update is moved OFF the HTTP critical path.
- * resolveComment / unresolve / the ephemeral-suggestion delete must NO LONGER
- * await CollaborationGateway.handleYjsEvent (which loaded the whole Y.Doc and
- * ran the store pipeline synchronously, ~4.5s p95). Instead they enqueue an
- * idempotent COMMENT_MARK_UPDATE job onto the GENERAL_QUEUE with the payload the
- * worker replays.
+ * The comment inline-mark update runs OFF the HTTP critical path:
+ * resolveComment / unresolve / the ephemeral-suggestion delete must NOT await
+ * CollaborationGateway.handleYjsEvent (which loads the whole Y.Doc and runs the
+ * store pipeline synchronously, ~4.5s p95). Instead they enqueue an idempotent
+ * COMMENT_MARK_UPDATE job onto the GENERAL_QUEUE with the payload the worker
+ * replays.
  *
  * The service is constructed directly with jest mocks (the @InjectQueue tokens
  * cannot be resolved by Test.createTestingModule — see comment.service.spec.ts).

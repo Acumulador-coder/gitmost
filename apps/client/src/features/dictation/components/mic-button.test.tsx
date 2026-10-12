@@ -67,7 +67,7 @@ describe("MicButton — disabled reason label", () => {
     // `disabled` attribute — otherwise pointer-events:none would kill the tooltip.
     expect(button.getAttribute("data-disabled")).toBe("true");
     expect(button.hasAttribute("disabled")).toBe(false);
-    // And it no longer silently reads "Start dictation".
+    // And it does not silently read "Start dictation".
     expect(screen.queryByRole("button", { name: "Start dictation" })).toBeNull();
   });
 

@@ -8,19 +8,16 @@ import {
 import type { AiChatMessage } from '@docmost/db/types/entity.types';
 
 /**
- * #490 write-volume regression — an OBSERVABLE-PROPERTY test on a LIVE Postgres,
- * not "bytes through a mock repo" (a mock measures exactly the thing that does not
- * hurt). It drives a realistic 50-step run where each step returns a ~100 KB tool
- * output and, at every `onStepFinish`, UPDATEs the assistant row the way the
- * service does — then reads the REAL write volume via the `pg_current_wal_lsn()`
+ * Write-volume test on a live Postgres: a realistic 50-step run where each step
+ * returns a ~100 KB tool output and every `onStepFinish` UPDATEs the assistant row
+ * the way the service does; the real write volume is the `pg_current_wal_lsn()`
  * delta around the run.
  *
- * The property proven: v2 stores each tool OUTPUT only in `metadata.parts`, no
- * longer ALSO in the `tool_calls` trace. So:
- *   1. the trace (`tool_calls`) column's write volume is now O(Σ steps) — tiny,
- *      linear outcome flags — vs the pre-#490 O(N²) that re-persisted every prior
- *      output on every step; and
- *   2. the FULL-row write volume drops sharply (the duplicated output copy is gone).
+ * v2 stores each tool OUTPUT only in `metadata.parts`, not also in the
+ * `tool_calls` trace (v1). So:
+ *   1. the trace column's write volume is O(Σ steps) of small outcome flags, not
+ *      the O(N²) of re-persisting every prior output on every step; and
+ *   2. the FULL-row write volume drops sharply.
  *
  * Connects to the local gitmost test Postgres (docker `gitmost-test-pg` on :5432);
  * SKIPS cleanly when that DB is not reachable so it never breaks a DB-less CI.
@@ -145,7 +142,7 @@ describe('#490 write-volume on a live Postgres (pg_current_wal_lsn delta)', () =
         `v2=${(v2 / 1e6).toFixed(2)}MB (${(v1 / v2).toFixed(0)}x smaller)`,
     );
 
-    // The trace no longer carries outputs: v2 is a tiny fraction of v1's WAL.
+    // v2's trace carries no outputs: a tiny fraction of v1's WAL.
     expect(v2).toBeLessThan(v1 * 0.1);
     // And v2's trace WAL is small in absolute terms — O(Σ steps) of flags, not
     // O(N² × output). 50 steps of ~40-byte flags is well under a few MB of WAL.
@@ -214,7 +211,7 @@ describe('#490 write-volume on a live Postgres (pg_current_wal_lsn delta)', () =
 });
 
 /**
- * #520 reactive-recovery COUNTER lifecycle on a LIVE Postgres — proves the
+ * Overflow-counter lifecycle on a live Postgres — proves the
  * consecutive-overflow count survives a real jsonb metadata round-trip (the persist
  * path), not just an in-memory object. flushAssistant BUILDS the row metadata, we
  * WRITE it to a jsonb column, READ it back, then reconstruct the assistant row and

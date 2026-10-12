@@ -4,10 +4,9 @@ import { CREDENTIALS_MISMATCH_MESSAGE } from '../auth.constants';
 import { hashPassword } from '../../../common/helpers';
 
 /**
- * LIVE security contract for AuthService.verifyUserCredentials / login (M4
- * item 5).
+ * LIVE security contract for AuthService.verifyUserCredentials / login.
  *
- * The (now-fixed) jest config CAN import AuthService at the module level (the
+ * The jest config CAN import AuthService at the module level (the
  * `^src/(.*)$` moduleNameMapper resolves the transitive `src/...` imports and the
  * ts-jest transform loads the graph). AuthService cannot be `.compile()`-d via
  * the Nest TestingModule (its full provider graph is not wired here), but it can

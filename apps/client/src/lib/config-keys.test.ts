@@ -8,30 +8,18 @@ import {
 } from "@/lib/client-config-keys.ts";
 
 /**
- * #638 finding 1 — the dev config plumbing, guarded by DERIVATION.
+ * The dev config plumbing, guarded by DERIVATION.
  *
- * In prod every client config value arrives through `window.CONFIG`, filled by
- * the server in `static.module.ts`. In DEV there is no server-rendered
- * `window.CONFIG`: `getConfigValue` reads `process.env[key]`, and vite replaces
- * `process.env` wholesale with the static object `vite.config.ts` builds. A key
- * absent from that object is not merely unset in dev — it is *unreachable*,
- * reading `undefined` forever and collapsing to `getConfigValue`'s default no
- * matter what `.env` says. That is why the (since removed) local-first flag was
- * ALWAYS false in dev, so every dev verification of the local-first phases
- * measured the old path; the same held for OFFLINE_GRACE and the two raster
- * flags.
+ * In DEV there is no server-rendered `window.CONFIG`: `getConfigValue` reads
+ * `process.env[key]`, and vite replaces `process.env` wholesale with the static
+ * object `vite.config.ts` builds via `buildDefineEnv`. A key absent from that
+ * object is unreachable in dev. This test derives the required key set from the
+ * `getConfigValue("…")` call sites in `config.ts` and checks the list against
+ * it; adding a `getConfigValue("NEW_KEY")` without listing NEW_KEY reds it.
  *
- * `vite.config.ts` now GENERATES that object via `buildDefineEnv`, so there is
- * one list instead of three. This test closes the remaining gap — that the list
- * still matches what `config.ts` actually reads — by DERIVING the required key
- * set from the `getConfigValue("…")` call sites rather than restating it. Adding
- * a `getConfigValue("NEW_KEY")` without listing NEW_KEY reds this suite.
- *
- * Note the trap this design avoids: under vitest `process.env` is the real Node
- * object and vite's substitution never runs, so a test that simply reads
- * `process.env.OFFLINE_GRACE` passes vacuously and proves nothing about
- * the bundle. What a dev build actually sees is the output of `buildDefineEnv`,
- * so that function — the real one the config calls — is what is exercised here.
+ * Under vitest `process.env` is the real Node object and vite's substitution
+ * never runs, so reading `process.env.X` would pass vacuously; the test
+ * exercises `buildDefineEnv`, the function the config actually calls.
  */
 
 // The client vitest runs with apps/client as cwd.

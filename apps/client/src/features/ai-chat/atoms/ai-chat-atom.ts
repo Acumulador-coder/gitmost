@@ -6,8 +6,8 @@ import { atomWithUiStorage } from "@/lib/jotai-helper.ts";
  * localStorage so a drag/resize survives a full page reload. `null` means
  * "never placed yet" — the window then computes an initial top-right placement.
  * On restore the value is clamped (position AND size) to the current viewport
- * (see AiChatWindow). `getOnInit` means the value is already in the atom on the
- * window's first open after reload, so it is no longer clobbered by the default.
+ * (see AiChatWindow). `getOnInit` puts the value in the atom before the
+ * window's first open after reload, so the default never clobbers it.
  */
 export type AiChatWindowGeom = {
   left: number;

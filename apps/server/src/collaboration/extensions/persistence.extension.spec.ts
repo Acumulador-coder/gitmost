@@ -38,8 +38,8 @@ import {
 } from '@hocuspocus/server';
 
 /**
- * Provenance-precedence coverage for PersistenceExtension.onStoreDocument
- * (test-strategy Module 4 / item #2): the contract `agent > git-sync > user`,
+ * Provenance-precedence coverage for PersistenceExtension.onStoreDocument:
+ * the contract `agent > git-sync > user`,
  * plus the negative that a git-sync store does NOT pin a boundary history
  * snapshot. We drive the precedence through the real public method (onChange to
  * arm the sticky agent marker, then onStoreDocument), mocking the repos / db /

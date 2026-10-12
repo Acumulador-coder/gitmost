@@ -46,21 +46,21 @@ export class SearchDTO {
   @IsNumber()
   offset?: number;
 
-  // --- Opt-in agent-lookup mode (#443). ------------------------------------
+  // --- Opt-in agent-lookup mode. ---------------------------------------------
   // These fields are ADDITIVE and default-off: a web client that sends none of
-  // them gets byte-identical FTS behaviour and result shape. In the unified #529
-  // engine, `parentPageId` and `titleOnly` are read by SearchService.searchPage
-  // (subtree scoping and title-only matching, respectively). `substring` is NOT
-  // read by the native driver — it is accepted-but-ignored, kept only for
-  // back-compat with the upstream lookup request shape.
+  // them gets byte-identical FTS behaviour and result shape. `parentPageId` and
+  // `titleOnly` are read by SearchService.searchPage (subtree scoping and
+  // title-only matching, respectively). `substring` is NOT read — it is
+  // accepted-but-ignored, kept only for compatibility with the upstream lookup
+  // request shape.
   //
   // NOTE (standalone stdio vs stock upstream): stock upstream validates this DTO
   // with `whitelist: true`, so an older server silently strips these unknown
   // fields and the request degrades gracefully to the plain FTS behaviour.
 
-  // Accepted-but-ignored by the #529 native driver (kept for upstream lookup
-  // back-compat). The unified engine ALWAYS runs the hybrid FTS + substring/
-  // trigram branches with tiered ranking, so this flag no longer toggles anything.
+  // Accepted-but-ignored (kept for upstream lookup compatibility). The engine
+  // ALWAYS runs the hybrid FTS + substring/trigram branches with tiered ranking,
+  // so this flag toggles nothing.
   @IsOptional()
   @IsBoolean()
   substring?: boolean;

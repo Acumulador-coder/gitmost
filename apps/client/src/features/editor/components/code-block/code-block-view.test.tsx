@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
 
-// Covers the read-only render branch (PR #278): the language <Select> renders
-// only when `editor.isEditable`; in read-only the copy button still shows.
-// Mocks mirror the #146 structural harness (footnote-views.structure.test.tsx),
-// except Select becomes a detectable node so we can assert its presence/absence.
+// Covers the read-only render branch: the language <Select> renders only when
+// `editor.isEditable`; in read-only the copy button still shows. Mocks mirror
+// the structural harness in footnote-views.structure.test.tsx, except Select
+// becomes a detectable node so we can assert its presence/absence.
 vi.mock("@tiptap/react", () => ({
   NodeViewWrapper: ({ children }: any) => <div>{children}</div>,
   NodeViewContent: (props: any) => <div data-node-view-content="" {...props} />,

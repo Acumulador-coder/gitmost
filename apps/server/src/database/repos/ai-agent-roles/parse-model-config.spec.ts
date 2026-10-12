@@ -1,12 +1,9 @@
 import { parseModelConfig } from './ai-agent-roles.repo';
 
 /**
- * Unit tests for parseModelConfig: the read-side normalizer that repairs the
- * jsonb double-encoding regression on `model_config`. Rows written by the old
- * `::jsonb` bind round-trip as a JSON STRING, which the read path's
- * `typeof === 'object'` check rejected — silently dropping the model override.
- * parseModelConfig accepts an already-parsed object, parses a legacy JSON
- * string, and rejects everything that is not an object (null = no override).
+ * Unit tests for parseModelConfig, the read-side normalizer for `model_config`:
+ * it accepts an already-parsed object, parses a double-encoded JSON string, and
+ * rejects everything that is not an object (null = no override).
  */
 describe('parseModelConfig', () => {
   it('passes an already-parsed object through', () => {

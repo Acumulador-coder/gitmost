@@ -5,19 +5,16 @@ import {
 } from './mcp-clients.service';
 
 /**
- * #489 — external-MCP in-run transport recovery.
+ * External-MCP in-run transport recovery.
  *
  * The transport-error classification + retry gate are exercised against the REAL
  * undici error CLASSES prod throws (`errors.SocketError` / `errors.BodyTimeoutError`,
  * carrying the true `UND_ERR_*` codes and class names), wrapped EXACTLY as undici's
  * `fetch` wraps them — a `TypeError('fetch failed'|'terminated')` whose `.cause` is
- * the undici error. These are the real classes, not hand-rolled `{code:'...'}`
- * mocks: constructing the genuine class is what makes this a faithful test of the
- * prod predicate (epic root-cause #4 — a mock-shaped predicate would leave the
- * evict/retry path silently dead in production while CI stays green). We construct
- * rather than drive a live fetch because Jest's environment degrades the live-fetch
- * error to a generic `Error` cause (no undici code), which would NOT be the prod
- * shape.
+ * the undici error. A mock-shaped predicate could leave the evict/retry path dead
+ * in production while CI stays green. The errors are constructed rather than
+ * produced by a live fetch because Jest's environment degrades the live-fetch
+ * error to a generic `Error` cause (no undici code).
  */
 
 /** A REAL undici socket reset, wrapped as fetch wraps it. */
@@ -242,16 +239,16 @@ describe('McpClientsService in-run transport recovery (#489)', () => {
     await Promise.all(toolset.clients.map((c) => c.close()));
   });
 
-  // #489 (review, MEDIUM) — the Docmost write-class map keys by DOCMOST tool
-  // names; a THIRD-PARTY server may name a WRITE tool `getPage` (a Docmost read
-  // name). It must NOT inherit readOnly and must NOT auto-retry on a transport
-  // error — a blind retry of that write is a double-apply (the #435 class). Here
-  // the server is UNTRUSTED (buildService default, isInternalDocmostServer=false),
-  // so the map is not applied and `getPage` classifies as a write.
+  // The Docmost write-class map keys by DOCMOST tool names; a THIRD-PARTY server
+  // may name a WRITE tool `getPage` (a Docmost read name). It must NOT inherit
+  // readOnly and must NOT auto-retry on a transport error — a blind retry of that
+  // write is a double-apply. Here the server is UNTRUSTED (buildService default,
+  // isInternalDocmostServer=false), so the map is not applied and `getPage`
+  // classifies as a write.
   //
   // MUTATION-VERIFY: forcing the server "trusted" (buildService(..., true)) makes
   // `getPage` inherit readOnly -> it WOULD reconnect+retry (connect twice) and the
-  // assertions below fail — i.e. removing the trust scope re-opens the bug.
+  // assertions below fail.
   it('a THIRD-PARTY WRITE tool named like a Docmost read does NOT auto-retry (no double-apply)', async () => {
     const realErr = await realSocketResetError();
     // Untrusted: default trusted=false — a real third-party server.
@@ -276,19 +273,17 @@ describe('McpClientsService in-run transport recovery (#489)', () => {
 });
 
 /**
- * #476/#685 — the recovery-reconnect path (`reconnectServer`) MUST apply the
- * SAME allowlist semantics as the initial `buildEntry` build: ANY array —
- * including `[]` — is authoritative, so an empty/deny-all allowlist yields ZERO
- * tools after a reconnect too. The bug (#685): `reconnectServer` used a
- * `Array.isArray(allow) && allow.length > 0` guard that read `[]` as falsy and
- * silently widened deny-all to allow-all EXACTLY on recovery-reconnect — a
- * fail-closed → fail-open flip precisely when the transport degraded (the repo
- * also clamps a corrupt allowlist row to `[]` fail-closed).
+ * The recovery-reconnect path (`reconnectServer`) MUST apply the SAME allowlist
+ * semantics as the initial `buildEntry` build: ANY array — including `[]` — is
+ * authoritative, so an empty/deny-all allowlist yields ZERO tools after a
+ * reconnect too. An `allow.length > 0` guard would read `[]` as falsy and widen
+ * deny-all to allow-all exactly when the transport degraded (the repo also clamps
+ * a corrupt allowlist row to `[]` fail-closed).
  *
  * The `buildEntry` side of this invariant is pinned in mcp-allowlist-filter.spec.ts
  * (via `toolsFor`); this pins the recovery side directly on `reconnectServer`.
  *
- * MUTATION-VERIFY: reverting the fix to
+ * MUTATION-VERIFY: changing the pick to
  *   `Array.isArray(allow) && allow.length > 0 ? pick(raw, allow) : raw`
  * reddens the two `[]` cases below (they would expose ALL three tools).
  */

@@ -13,14 +13,14 @@ export interface DayCount {
 }
 
 /**
- * #568/#605 — pure, tz-aware "all revisions per day" bucketer for the
+ * Pure, tz-aware "all revisions per day" bucketer for the
  * mini-calendar heatmap. Reuses the already-tested tz core (`zonedDayStart` +
  * `isoDay` from bucket-by-day.ts) so DST/day boundaries stay identical to the
  * work-time punch-card — no copy-pasted date math.
  *
  * ALL rows are counted regardless of kind (manual, agent, idle/boundary
  * autosnapshots, legacy null): the heatmap reflects total day activity, not
- * just versions (#605). This is intentionally broader than the client's "Only
+ * just versions. This is intentionally broader than the client's "Only
  * versions" list filter, which stays about versions.
  *
  * Returns days ascending by `dayISO`; days with no revision are omitted

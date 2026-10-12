@@ -4,9 +4,9 @@ import {
 } from '../../../collaboration/constants';
 
 /**
- * #395 — tunables for the work-time estimate (§10). Defaults are calibrated off
- * #374's idle-pulse ceilings: after #374 a continuous editing session leaves a
- * history row at least every ~IDLE_MAX_WAIT (10m user / 5m agent), so a gap
+ * Tunables for the work-time estimate (§10). Defaults are calibrated off the
+ * idle-pulse ceilings: a continuous editing session leaves a history row at
+ * least every ~IDLE_MAX_WAIT (10m user / 5m agent), so a gap
  * WIDER than that ceiling contains un-pulsed idle time = (partial) inactivity.
  * `tGap` therefore sits a little above the user ceiling, `agentTGap` a little
  * above the agent ceiling — a gap within the threshold is pulse-backed and

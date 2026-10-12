@@ -24,16 +24,12 @@ interface MessageItemProps {
    * NOT recomputed from `message` inside `arePropsEqual`.
    *
    * WHY (load-bearing): the AI SDK streams deltas by mutating the SAME `parts`
-   * array/objects in place and handing back a message wrapper that SHARES those
-   * mutated parts. So inside `arePropsEqual`, `prev.message` and `next.message`
-   * both reflect the CURRENT (latest) parts — `messageSignature(prev.message) ===
-   * messageSignature(next.message)` is therefore ALWAYS true, the memo skips every
-   * post-mount render, and the assistant row freezes at its initial empty (null)
-   * render — i.e. the streamed answer + tool cards never appear (reasoning-first
-   * providers start empty, so NOTHING shows). Snapshotting the signature into this
-   * immutable string prop in the parent fixes that: `prev.signature` holds the
-   * value from the previous render (old content) and `next.signature` the new
-   * content, so they differ as the turn streams in and the row re-renders.
+   * array/objects in place and handing back a message wrapper that SHARES them.
+   * Inside `arePropsEqual` both `prev.message` and `next.message` reflect the
+   * latest parts, so a recomputed signature is always equal, the memo skips every
+   * post-mount render and the row freezes at its initial empty render. The
+   * parent's snapshot keeps the previous render's value in `prev.signature` and the
+   * new content in `next.signature`, so they differ as the turn streams in.
    */
   signature: string;
   /**
@@ -91,17 +87,15 @@ interface MessageItemProps {
  * Props are primitives, so React.memo's default shallow compare is exactly right
  * (the `text` string is compared by value).
  *
- * Streaming gate (#492) — mirrors ReasoningBlock:
- *  - `streaming` (this is the live, actively-growing tail part of an in-flight
- *    turn): render incrementally via StreamingMarkdownText — the stabilized blocks
- *    go through the canonical pipeline (each parsed ONCE, memoized) and only the
- *    live tail is cheap plain text. This makes the per-tick cost O(new blocks),
- *    not the pre-#492 O(ticks) whole-answer re-parse on every ~20Hz delta.
+ * Streaming gate — mirrors ReasoningBlock:
+ *  - `streaming` (the live, actively-growing tail part of an in-flight turn):
+ *    render incrementally via StreamingMarkdownText — stabilized blocks go
+ *    through the canonical pipeline (each parsed ONCE, memoized) and only the
+ *    live tail is cheap plain text, so the per-tick cost is O(new blocks).
  *  - finalized (the common case, and the turn-end flip): render the WHOLE text
- *    through ONE canonical pass — byte-identical to the pre-#492 output (visual
- *    parity). The row re-renders on the streaming→done flip because
- *    `messageSignature` tracks each part's `state` (and `turnStreaming` flips at
- *    turn end), so the incremental view always converges to this single render.
+ *    through ONE canonical pass. The row re-renders on the streaming→done flip
+ *    because `messageSignature` tracks each part's `state` (and `turnStreaming`
+ *    flips at turn end), so the incremental view always converges to this render.
  */
 const MarkdownPart = memo(function MarkdownPart({
   text,
@@ -141,15 +135,15 @@ const MarkdownPart = memo(function MarkdownPart({
 /**
  * Render a single UIMessage by iterating its `parts`:
  *  - `text` parts -> sanitized markdown.
+ *  - `reasoning` parts -> a collapsible ReasoningBlock.
  *  - `tool-*` / `dynamic-tool` parts -> an action-log card (with citations).
- * Other part kinds (reasoning, sources, files, step-start) are ignored for v1.
+ * Other part kinds (sources, files, step-start) are ignored.
  * User messages render their text as a right-aligned plain bubble.
  *
- * This component is memoized (see `arePropsEqual` at the bottom) on a cheap
- * per-message content signature: the streaming TAIL message's signature changes
- * on each delta so it still re-renders and streams in, while finalized rows are
- * skipped. Each text part's markdown is itself memoized via `MarkdownPart`, so a
- * long turn no longer re-parses the whole transcript on every token.
+ * Memoized (see `arePropsEqual` at the bottom) on a cheap per-message content
+ * signature: the streaming TAIL message's signature changes on each delta so it
+ * re-renders and streams in, while finalized rows are skipped. Each text part's
+ * markdown is itself memoized via `MarkdownPart`.
  */
 function MessageItem({
   message,
@@ -336,7 +330,7 @@ function MessageItem({
  *  `messageSignature(next.message)`. The AI SDK mutates the shared `parts` in
  *  place, so both `prev.message` and `next.message` reflect the latest content
  *  here — recomputing the signature from them yields equal strings every time and
- *  freezes the row at its initial empty render (the bug this guards against). See
+ *  freezes the row at its initial empty render. See
  *  the `signature` prop doc. Likewise there is NO `prev.message === next.message`
  *  fast path: same-reference-but-mutated must still re-render when the snapshot
  *  signature changed. */

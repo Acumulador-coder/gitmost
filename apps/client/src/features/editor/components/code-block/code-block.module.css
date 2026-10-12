@@ -17,12 +17,11 @@
     justify-content: center;
 }
 
-/* #146: the menu follows the <pre> in the DOM (so the editable contentDOM is
-   FIRST and click hit-testing is correct). Instead of sitting in-flow, it is
-   floated into the top-right corner as an absolute overlay anchored to the
-   `position: relative` .codeBlock wrapper (see code.css), so it no longer
-   takes a full-width row above the code. The Mantine dropdown is portaled, so
-   it is never clipped by the overlay. */
+/* The menu follows the <pre> in the DOM (so the editable contentDOM is FIRST
+   and click hit-testing is correct). It is floated into the top-right corner as
+   an absolute overlay anchored to the `position: relative` .codeBlock wrapper
+   (see code.css) instead of taking a full-width row above the code. The Mantine
+   dropdown is portaled, so it is never clipped by the overlay. */
 .menuGroup {
     position: absolute;
     top: 8px;

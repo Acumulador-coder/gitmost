@@ -112,12 +112,12 @@ export interface GitHttpBackendRequest {
  * PATH_INFO / REMOTE_USER / conditional GIT_PROTOCOL wiring is unit-testable
  * without spawning git.
  *
- * PATH_INFO is the repo-relative CGI path. The vault is a NON-BARE working repo
- * on disk at `<dataDir>/<spaceId>` (the engine needs a working tree), so the
+ * PATH_INFO is the repo-relative CGI path. The vault is a bare repo on disk at
+ * `<dataDir>/<spaceId>` (no `.git` suffix on disk), so the
  * repo directory git http-backend must resolve is `<spaceId>` — NOT
  * `<spaceId>.git`. The URL carries the conventional `.git` suffix (stripped by
- * parseGitPath into `spaceId`); re-appending it here pointed the CGI at a
- * non-existent `<dataDir>/<spaceId>.git` and every fetch/push 404'd.
+ * parseGitPath into `spaceId`); re-appending it here would point the CGI at a
+ * non-existent `<dataDir>/<spaceId>.git` and every fetch/push would 404.
  */
 export function buildGitBackendCgiEnv(
   parsed: GitHttpBackendRequest,
@@ -148,7 +148,7 @@ export function buildGitBackendCgiEnv(
 }
 
 /**
- * Concurrency budget for spawned `git http-backend` children (GH-4). Every
+ * Concurrency budget for spawned `git http-backend` children. Every
  * smart-HTTP request spawns one child (an upload-pack in turn runs pack-objects),
  * so without a budget N parallel fetches mean N processes. Over budget the
  * request is answered 503 + Retry-After with the reason, and nothing is spawned.
@@ -222,14 +222,14 @@ export class GitHttpBackendService {
    * the lock-held cycle body can run afterwards.
    *
    * `signal` (optional) is the git-sync per-space lock's lost-lock abort signal.
-   * A receive-pack writes `main`'s working tree, so if the lock lapses mid-push
+   * A receive-pack writes `main`, so if the lock lapses mid-push
    * (heartbeat CAS miss / Redis outage) the signal fires and we kill the child —
-   * preventing it from continuing to write the working tree while another replica
-   * may have taken over the lock and started a cycle (warning #3).
+   * preventing it from continuing to write the vault while another replica
+   * may have taken over the lock and started a cycle.
    *
-   * The child is also killed when the client goes away before it finished
-   * (GH-4), and every child holds a slot of the concurrency budget for its whole
-   * life (over budget -> 503 with the reason, nothing spawned).
+   * The child is also killed when the client goes away before it finished, and
+   * every child holds a slot of the concurrency budget for its whole life (over
+   * budget -> 503 with the reason, nothing spawned).
    */
   async run(
     parsed: GitHttpBackendRequest,
@@ -297,7 +297,7 @@ export class GitHttpBackendService {
       };
 
       // Reject early if the lock was already lost before we even spawned: do not
-      // start writing the working tree after a possible lock takeover.
+      // start writing the vault after a possible lock takeover.
       if (signal?.aborted) {
         if (!rawRes.headersSent) this.send500(rawRes, 'lock-lost');
         else
@@ -319,7 +319,7 @@ export class GitHttpBackendService {
         return done();
       }
 
-      // Concurrency budget (GH-4): refuse with 503 + the reason when over it.
+      // Concurrency budget: refuse with 503 + the reason when over it.
       const refusal = this.tryAcquireSlot(parsed.spaceId);
       if (refusal) {
         this.send503(rawRes, parsed.spaceId, refusal);
@@ -340,7 +340,7 @@ export class GitHttpBackendService {
       }
 
       // Lost-lock abort: the per-space lock lapsed mid-request. Kill the child so
-      // a receive-pack stops writing `main`'s working tree before another replica
+      // a receive-pack stops writing `main` before another replica
       // (which may now hold the lock) starts a cycle. Same kill+finish path the
       // watchdog uses (extracted into terminateChild).
       onAbort = () => {
@@ -385,7 +385,7 @@ export class GitHttpBackendService {
       };
       armWatchdog();
 
-      // Client disconnect (GH-4): the response closing before it finished, or the
+      // Client disconnect: the response closing before it finished, or the
       // request body aborting before it completed, means nobody will read the
       // output — kill the child instead of letting it run to completion. A
       // normal finish ('close' after writableFinished, or the request 'close'
@@ -418,7 +418,7 @@ export class GitHttpBackendService {
       let headerParsed = false;
       let pending: Buffer = Buffer.alloc(0);
 
-      // Backpressure (GH-5): when the response buffer is full, pause the child's
+      // Backpressure: when the response buffer is full, pause the child's
       // stdout until the client drains it, so a slow reader never makes the pack
       // accumulate in this process's memory (the child blocks on its pipe
       // instead). Chunks for a response that already ended or whose client is
@@ -611,11 +611,11 @@ export class GitHttpBackendService {
   /**
    * Kill the child's whole process group (SIGTERM, then SIGKILL after a grace
    * period if it ignores the term) — not just `git http-backend`, whose
-   * receive-pack would otherwise keep writing the working tree after the space
-   * lock was released — and finish the HTTP response cleanly at once, then
-   * settle once the group is gone (`waitForGroupExit`), so run() does not
-   * resolve, and the space lock is not released, while a git process of it
-   * may still write the working tree. A group already gone (ESRCH on the
+   * receive-pack would otherwise keep updating `main` after the space lock was
+   * released — and finish the HTTP response cleanly at once, then settle once
+   * the group is gone (`waitForGroupExit`), so run() does not resolve, and the
+   * space lock is not released, while a git process of it may still update
+   * `main`. A group already gone (ESRCH on the
    * SIGTERM) settles at once. Shared by the
    * forced-termination paths — the watchdog timeout, the lost-lock abort, the
    * client disconnect, the CGI header cap and the body budget — which differ

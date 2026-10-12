@@ -59,7 +59,7 @@ export class AiSettingsController {
   }
 
   /**
-   * #599 (R1) — the embedding FINGERPRINT this workspace's config currently
+   * The embedding FINGERPRINT this workspace's config currently
    * resolves to, or null when no embedding provider resolves at all (no workspace
    * provider AND no global TEI sidecar). Never throws: it is only used to DECIDE
    * whether a reindex is needed, and an unexpected resolve failure must not fail
@@ -78,26 +78,23 @@ export class AiSettingsController {
   }
 
   /**
-   * #599 (R1) — changing the embedding config AUTOMATICALLY starts the reindex.
+   * Changing the embedding config AUTOMATICALLY starts the reindex.
    *
    * The fingerprint (model + revision + prefix scheme + dimensions) is what both
-   * readers filter by, and PR-2's D2 guard turns the vector arm OFF while the
-   * ACTIVE generation's model differs from the configured one. So without this,
-   * switching the embedding model silently killed semantic search in BOTH search and
-   * RAG — degraded to lexical-only — and left it that way INDEFINITELY, until some
-   * human happened to click "Reindex now". Nothing else enqueues it: the AI-Search
-   * toggle only fires on enable, and page events only reindex the edited page.
+   * readers filter by, and the vector arm is OFF while the ACTIVE generation's
+   * model differs from the configured one, so a model switch leaves search and
+   * RAG lexical-only until a reindex completes. Nothing else enqueues it: the
+   * AI-Search toggle only fires on enable, and page events only reindex the
+   * edited page.
    *
-   * So: resolve the fingerprint BEFORE and AFTER the write and enqueue a full
-   * reindex only when it actually MOVED. Which means an unrelated settings edit —
-   * rotating the provider API key, changing the chat model, the system prompt, the
-   * STT language — enqueues NOTHING: none of them touch the fingerprint, so the
-   * stored generation is still valid and a full re-embed of the workspace (an
-   * expensive, provider-billed operation) would be pure waste.
+   * The fingerprint is resolved BEFORE and AFTER the write and a full reindex is
+   * enqueued only when it MOVED, so an unrelated edit (API key, chat model,
+   * system prompt, STT language) does not trigger an expensive, provider-billed
+   * re-embed.
    *
    * It goes through AiSettingsService.reindex — the SAME path as the manual button,
    * hence the same per-workspace jobId — so a run already in flight is de-duplicated
-   * rather than doubled, and the job inherits the #599 retry policy.
+   * rather than doubled, and the job inherits the reindex retry policy.
    *
    * Why here and not inside AiSettingsService.update: the fingerprint can only be
    * resolved by AiService, and AiService already injects AiSettingsService — putting

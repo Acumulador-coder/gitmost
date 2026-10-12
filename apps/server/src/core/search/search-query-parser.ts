@@ -1,4 +1,4 @@
-// #529 Phase A — server-side query parser (the SINGLE source of query semantics).
+// Server-side query parser (the SINGLE source of query semantics).
 //
 // Clients (web-UI, MCP agent, public share) send a RAW query string plus flags
 // (`match`, `mode`); ALL query interpretation happens HERE, so every consumer
@@ -169,8 +169,8 @@ function branchForTerm(
     case 'auto':
     default:
       // Identifiers the tokenizer mangles go to substring; words get a prefix
-      // FTS match (so `печат` still finds `печатать`, but `печат` no longer drags
-      // in `впечатления` because the russian stemmer anchors the stem).
+      // FTS match (so `печат` still finds `печатать`, but does not drag in
+      // `впечатления`, because the russian stemmer anchors the stem).
       return isIdentifierLike(text) ? 'substring' : 'ftsPrefix';
   }
 }

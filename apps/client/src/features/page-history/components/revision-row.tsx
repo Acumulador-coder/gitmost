@@ -18,7 +18,7 @@ interface Props {
 }
 
 /**
- * #568 — one revision = one dense row: `glyph · time · author · [SAVED]`.
+ * One revision = one dense row: `glyph · time · author · [SAVED]`.
  *  - Agent identity (`row.isAgent`) → a SQUARE role glyph (emoji or initial) +
  *    "via <launcher>"; a human → the round CustomAvatar. (Multi-contributor
  *    stacks are deliberately dropped in the dense list — one glyph per row.)

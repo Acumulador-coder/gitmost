@@ -2,29 +2,23 @@ import { JSDOM } from 'jsdom';
 import { jsonToHtml } from '../../collaboration/collaboration.util';
 
 /**
- * Regression test for issue #298: page/space export (Markdown/HTML) crashes on
- * pages that contain inline comments.
+ * Page/space export (Markdown/HTML) of pages that contain inline comments.
  *
  * The in-process MCP module injects a jsdom `global.window` + `global.document`
- * into the Node server (see packages/mcp/src/lib/collaboration.ts). Before the
- * fix, the comment mark's `renderHTML` guard was only
- * `typeof window === "undefined" || typeof document === "undefined"`, so with
- * BOTH jsdom globals present it took the interactive browser branch and returned
- * a LIVE jsdom <span> node. The export path serializes via happy-dom's
- * DOMSerializer, and appending a foreign jsdom node crashed happy-dom
- * ("Cannot read properties of undefined (reading 'length')").
+ * into the Node server (see packages/mcp/src/lib/collaboration.ts). Without the
+ * `isNodeRuntime` check, the comment mark's `renderHTML` would take the
+ * interactive browser branch and return a LIVE jsdom <span> node, which
+ * happy-dom's DOMSerializer (the export path) cannot append ("Cannot read
+ * properties of undefined (reading 'length')").
  *
  * We reproduce the MCP-loaded server by injecting jsdom globals, then export a
  * doc containing a comment mark and assert the serialization SUCCEEDS and emits
  * the expected serializable <span data-comment-id=... class="comment-mark">.
  *
- * Non-vacuity: this test only exercises the buggy branch because BOTH jsdom
- * `window` AND `document` are set below. If the `isNodeRuntime` condition is
- * removed from the guard in packages/editor-ext/src/lib/comment/comment.ts,
- * `renderHTML` returns a live jsdom node and `jsonToHtml` throws — this test
- * then fails. (In a plain node env without the injected globals the guard's
- * `typeof window === "undefined"` clause already short-circuits, so it is the
- * injected globals that make this assertion meaningful.)
+ * BOTH jsdom `window` AND `document` are set below: in a plain node env the
+ * guard's `typeof window === "undefined"` clause already short-circuits, so it
+ * is the injected globals that exercise the `isNodeRuntime` condition in
+ * packages/editor-ext/src/lib/comment/comment.ts.
  */
 describe('export with inline comments (issue #298)', () => {
   const originalWindow = (global as any).window;

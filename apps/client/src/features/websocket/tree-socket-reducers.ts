@@ -76,7 +76,7 @@ export function applyMoveTreeNode(
   const oldParentId = (sourceBefore as SpaceTreeNode).parentPageId ?? null;
   const newParentId = payload.parentId as string | null;
 
-  // Cyclic / out-of-order move guard (#206 ui-state-races-1): if the
+  // Cyclic / out-of-order move guard: if the
   // authoritative new parent is currently INSIDE the moved node's own subtree on
   // this client (e.g. server moved X under Y then Y under X and the events
   // arrived such that Y is still nested in X here), re-parenting is impossible to

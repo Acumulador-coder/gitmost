@@ -81,8 +81,8 @@ describe('SpaceService', () => {
       return { svc, spaceRepo, auditService, gitSyncRestrictions };
     };
 
-    // git-sync cannot enforce page-level restrictions (GA-2/GA-3/GA-4), so a
-    // space holding a restricted page cannot have sync switched on.
+    // git-sync cannot enforce page-level restrictions, so a space holding a
+    // restricted page cannot have sync switched on.
     it('rejects enabling git sync on a space with restricted pages with a 400 naming the reason, and writes nothing', async () => {
       const { svc, spaceRepo, auditService, gitSyncRestrictions } =
         buildService({}, true, true);
@@ -127,24 +127,21 @@ describe('SpaceService', () => {
       );
     });
 
-    // GIT_SYNC_ENABLED off: a request carrying either git-sync field is rejected
+    // GIT_SYNC_ENABLED off: a request carrying the git-sync field is rejected
     // loudly before ANY write (no settings persist, no space update, no audit).
-    it.each([{ gitSyncEnabled: true }, { autoMergeConflicts: true }])(
-      'rejects %p with BadRequest and writes nothing when git-sync is disabled',
-      async (fields) => {
-        const { svc, spaceRepo, auditService } = buildService({}, false);
+    it('rejects gitSyncEnabled with BadRequest and writes nothing when git-sync is disabled', async () => {
+      const { svc, spaceRepo, auditService } = buildService({}, false);
 
-        await expect(
-          svc.updateSpace({ spaceId, ...fields } as any, workspaceId),
-        ).rejects.toThrow(
-          new BadRequestException('Git sync is disabled on this server'),
-        );
+      await expect(
+        svc.updateSpace({ spaceId, gitSyncEnabled: true } as any, workspaceId),
+      ).rejects.toThrow(
+        new BadRequestException('Git sync is disabled on this server'),
+      );
 
-        expect(spaceRepo.updateGitSyncSettings).not.toHaveBeenCalled();
-        expect(spaceRepo.updateSpace).not.toHaveBeenCalled();
-        expect(auditService.log).not.toHaveBeenCalled();
-      },
-    );
+      expect(spaceRepo.updateGitSyncSettings).not.toHaveBeenCalled();
+      expect(spaceRepo.updateSpace).not.toHaveBeenCalled();
+      expect(auditService.log).not.toHaveBeenCalled();
+    });
 
     it('persists gitSyncEnabled via updateGitSyncSettings(enabled)', async () => {
       const { svc, spaceRepo } = buildService({});
@@ -223,71 +220,6 @@ describe('SpaceService', () => {
 
       await svc.updateSpace(
         { spaceId, gitSyncEnabled: true } as any,
-        workspaceId,
-      );
-
-      expect(spaceRepo.updateGitSyncSettings).toHaveBeenCalledTimes(1);
-      expect(auditService.log).not.toHaveBeenCalled();
-    });
-
-    // --- autoMergeConflicts: a SECOND key in the SAME `gitSync` jsonb object,
-    // persisted the same way as `enabled` (the repo's jsonb-merge keeps siblings).
-    it('persists autoMergeConflicts via updateGitSyncSettings(autoMergeConflicts)', async () => {
-      const { svc, spaceRepo } = buildService({});
-
-      await svc.updateSpace(
-        { spaceId, autoMergeConflicts: true } as any,
-        workspaceId,
-      );
-
-      expect(spaceRepo.updateGitSyncSettings).toHaveBeenCalledWith(
-        spaceId,
-        workspaceId,
-        'autoMergeConflicts',
-        true,
-        expect.anything(),
-      );
-    });
-
-    it('does not call updateGitSyncSettings when autoMergeConflicts is undefined', async () => {
-      const { svc, spaceRepo } = buildService({});
-
-      await svc.updateSpace({ spaceId } as any, workspaceId);
-
-      expect(spaceRepo.updateGitSyncSettings).not.toHaveBeenCalled();
-    });
-
-    it('writes a SPACE_UPDATED audit delta on a REAL autoMergeConflicts change (false -> true)', async () => {
-      // Prior persisted state: gitSync.autoMergeConflicts = false; flip it on.
-      const { svc, auditService } = buildService({
-        gitSync: { autoMergeConflicts: false },
-      });
-
-      await svc.updateSpace(
-        { spaceId, autoMergeConflicts: true } as any,
-        workspaceId,
-      );
-
-      expect(auditService.log).toHaveBeenCalledTimes(1);
-      expect(auditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          resourceId: spaceId,
-          spaceId,
-          changes: {
-            before: expect.objectContaining({ autoMergeConflicts: false }),
-            after: expect.objectContaining({ autoMergeConflicts: true }),
-          },
-        }),
-      );
-    });
-
-    it('does NOT write an audit delta on a no-op autoMergeConflicts (same value true -> true)', async () => {
-      const { svc, spaceRepo, auditService } = buildService({
-        gitSync: { autoMergeConflicts: true },
-      });
-
-      await svc.updateSpace(
-        { spaceId, autoMergeConflicts: true } as any,
         workspaceId,
       );
 

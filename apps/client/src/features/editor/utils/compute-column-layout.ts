@@ -8,7 +8,7 @@ export interface ColumnLayout {
 /**
  * Pin the editor column's LEFT edge to its "panel-closed" centered position, so
  * opening the right aside narrows the column on the RIGHT instead of sliding the
- * whole column leftward (issue #570).
+ * whole column leftward.
  *
  * @param W           Main's CURRENT content-box width (px). When the aside is
  *                    open on desktop this is already narrowed by Main's

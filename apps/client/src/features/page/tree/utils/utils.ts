@@ -250,8 +250,7 @@ export function appendNodeChildren(
  *  - a root only in `incoming`: a new root, added as-is;
  *  - a root only in `prev`: it was DELETED or moved under another page while we
  *    were not receiving events (e.g. a socket reconnect after a sleep/wifi gap).
- *    It is DROPPED instead of lingering as a 404 "ghost" root (#159 #2). The old
- *    append-only merge kept it forever.
+ *    It is DROPPED instead of lingering as a 404 "ghost" root.
  */
 export function mergeRootTrees(
   prevRoots: SpaceTreeNode[],
@@ -271,8 +270,8 @@ export function mergeRootTrees(
 }
 
 /**
- * Ids of branches a socket-reconnect refresh should re-fetch and reconcile
- * (#159 #8): a node that is currently OPEN and whose children are LOADED
+ * Ids of branches a socket-reconnect refresh should re-fetch and reconcile:
+ * a node that is currently OPEN and whose children are LOADED
  * (`children` is an array — possibly empty). An unloaded branch (`children ===
  * undefined`) is skipped because lazy-load fetches it fresh on the next expand,
  * so there is nothing stale to reconcile. Walks the whole tree (a deep open
@@ -294,21 +293,17 @@ export function loadedOpenBranchIds(
 }
 
 /**
- * Boot-cache hygiene (#159 #8): the persisted tree keeps the children of EVERY
- * branch ever expanded — collapsing a branch never prunes them. So on reload a
- * COLLAPSED branch hydrates with its old cached children, and `handleToggle`
- * skips the lazy-load on first expand (children already present) → it shows
- * STALE children (renamed / moved / deleted while the user was offline) with no
- * reconcile. `refreshOpenBranches` only refreshes OPEN branches, so collapsed
- * ones slip through.
+ * Boot-cache hygiene: the persisted tree keeps the children of every branch ever
+ * expanded. On reload a COLLAPSED branch would hydrate with its old cached
+ * children, `handleToggle` would skip the lazy-load on first expand, and stale
+ * children (renamed / moved / deleted while offline) would show;
+ * `refreshOpenBranches` only refreshes OPEN branches.
  *
- * Fix: drop the cached children of every node NOT in the persisted open-set,
+ * So drop the cached children of every node NOT in the persisted open-set,
  * resetting it to the canonical UNLOADED shape (`children: []`, `hasChildren`
- * untouched — see pageToTreeNode). Its first expand then lazy-loads fresh, just
- * as it did before the tree was cached to localStorage. OPEN branches keep
- * their children (refreshOpenBranches reconciles those, so they must not be
- * dropped here) and are recursed into so a collapsed branch nested under an
- * open one is pruned too.
+ * untouched — see pageToTreeNode); its first expand lazy-loads fresh. OPEN
+ * branches keep their children (refreshOpenBranches reconciles them) and are
+ * recursed into so a collapsed branch nested under an open one is pruned too.
  */
 export function pruneCollapsedChildren(
   tree: SpaceTreeNode[],

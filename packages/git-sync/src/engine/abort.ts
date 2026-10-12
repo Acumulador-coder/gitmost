@@ -1,9 +1,11 @@
 /**
- * Cooperative cancellation of engine work (DESIGN.md §9). The caller hands a
- * cycle an AbortSignal (a lost space lock, the cycle's deadline); the engine
- * checks it between page operations and hands it to every conversion, and
- * stops with a `CycleAbortedError` that names where it stopped and why. A stop
- * leaves the vault in a state the next cycle's recovery repairs.
+ * Cooperative cancellation of engine work. The caller hands a cycle an
+ * AbortSignal (a lost space lock, the cycle's deadline); the engine checks it
+ * between page operations and hands it to every conversion, and stops with a
+ * `CycleAbortedError` that names where it stopped and why. A stop leaves
+ * nothing to undo: no ref moves before the export's compare-and-swap on
+ * `main`, and the next cycle, once `prepareVault` has repaired the refs,
+ * re-applies the same changes, which is idempotent.
  */
 
 /** Engine work stopped by the cycle's AbortSignal. `cause` is the signal's reason. */

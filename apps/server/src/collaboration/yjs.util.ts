@@ -261,15 +261,11 @@ export function replaceYjsMarkedText(
   const start = segments[0].offset;
   const len = segments.reduce((sum, s) => sum + s.length, 0);
 
-  // Carry the ORIGINAL run's formatting onto the replacement (#496): inserting
-  // with only the `comment` mark silently dropped bold/italic/code/link of the
-  // replaced text. Yjs applies one flat attribute set to the whole insert, so
-  // when the marked run mixes formatting we pick the DOMINANT segment (the one
-  // covering the most characters) and apply its attributes — a v1 that preserves
-  // the common single-format case exactly and, for a mixed run, keeps the
-  // prevailing style rather than losing all of it. `attributes` already carries
-  // the `comment` mark (every collected segment is filtered on it above), so the
-  // anchor is preserved by copying the run's attribute set verbatim.
+  // Carry the original run's formatting onto the replacement. Yjs applies one
+  // flat attribute set to the whole insert, so for a mixed-format run use the
+  // DOMINANT segment (most characters). `attributes` already carries the
+  // `comment` mark (every collected segment is filtered on it), so the anchor is
+  // preserved.
   const dominant = segments.reduce((a, b) => (b.length > a.length ? b : a));
   const insertAttrs = { ...dominant.attributes };
 

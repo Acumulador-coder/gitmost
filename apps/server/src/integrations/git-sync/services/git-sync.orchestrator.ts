@@ -5,14 +5,6 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
-import {
-  lstat,
-  mkdir,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
 import { InjectKysely } from 'nestjs-kysely';
 import { KyselyDB } from '@docmost/db/types/kysely.types';
 import { sql } from 'kysely';
@@ -45,10 +37,10 @@ interface EnabledSpace {
 
 /**
  * Wall-clock deadline of one locked space operation: a cycle, or a push's
- * receive-pack plus its cycle (GL-7). Generous on purpose — the first full
- * export or import of a large space must fit — because its job is to make every
- * cycle end, not to pace it. On expiry the cycle is aborted, logged at ERROR and
- * recorded as a failed cycle in the space's status.
+ * receive-pack plus its cycle. Generous on purpose — the first full export or
+ * import of a large space must fit — because its job is to make every cycle end,
+ * not to pace it. On expiry the cycle is aborted, logged at ERROR and recorded as
+ * a failed cycle in the space's status.
  */
 export const GIT_SYNC_CYCLE_DEADLINE_MS = 30 * 60_000;
 
@@ -62,7 +54,7 @@ const GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES = 2;
  * Thrown by `ingestExternalPush` when the per-space lock cannot be acquired (a
  * poll cycle is mid-flight on this or another replica). The /git HTTP handler
  * maps it to a 503 so the git client retries rather than racing a cycle's
- * working-tree checkout/merge.
+ * ref updates.
  */
 export class GitSyncLockHeldError extends Error {
   constructor(public readonly spaceId: string) {
@@ -79,23 +71,14 @@ export interface GitSyncRunStatus {
   skipped?:
     | 'lock-held'
     | 'in-progress'
-    | 'space-not-enabled'
-    | 'merge-in-progress';
+    | 'space-not-enabled';
   pull?: {
     written: number;
     deleted: number;
-    conflict: boolean;
     failures: number;
     firstFailure?: PullFailure;
   };
   push?: { mode: string; failures: number; firstFailure?: PushFailure };
-  /**
-   * True when the push REFUSED to fast-forward a divergent `docmost` mirror
-   * (invariant §5 broken — `docmost` no longer mirrors what Docmost contains).
-   * Surfaced here (not just logged) so /status can report it. No data is lost,
-   * but it signals an operator-visible drift that needs attention.
-   */
-  divergentDocmost?: boolean;
   error?: string;
 }
 
@@ -182,16 +165,16 @@ function emptyStatus(spaceId: string): GitSyncSpaceStatus {
 /**
  * The git-sync control plane. Drives the `@docmost/git-sync` engine in
  * process: under a Redis leader lock (single-writer across replicas) plus an
- * in-process per-space mutex (no overlapping cycles on one instance), it runs a
- * PULL (Docmost -> vault) then a PUSH (vault -> Docmost) for a space.
+ * in-process per-space mutex (no overlapping cycles on one instance), it runs
+ * the engine's cycle for a space: the user's commits are applied to Docmost,
+ * then Docmost is exported to the vault.
  *
  * Enumeration of enabled spaces: STRICT opt-in. Only spaces whose
- * per-space flag `space.settings.gitSync.enabled === true` (written by the Phase-C
- * UI) are reconciled. There is intentionally NO all-spaces fallback: when no space
- * carries the flag, git-sync does NOTHING (an empty list) — flagging every space
- * the moment GIT_SYNC_ENABLED flips on is a safety hazard (it could mass-sync large
- * spaces). The whole loop is still gated on the GIT_SYNC_ENABLED master switch
- * first; per-space opt-in is now REQUIRED on top of it.
+ * per-space flag `space.settings.gitSync.enabled === true` (written by the space
+ * settings UI) are reconciled. There is intentionally NO all-spaces fallback:
+ * syncing every space the moment GIT_SYNC_ENABLED flips on could mass-sync large
+ * spaces. The whole loop is gated on the GIT_SYNC_ENABLED master switch first;
+ * per-space opt-in is required on top of it.
  */
 @Injectable()
 export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
@@ -210,12 +193,6 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     string,
     { workspaceId: string; status: GitSyncSpaceStatus }
   >();
-  /**
-   * In-flight HEAD pins per space: concurrent read advertisements share one
-   * (two parallel `git checkout main` in one vault would collide on its index
-   * lock). At most one entry per space, removed when the pin settles.
-   */
-  private readonly headPins = new Map<string, Promise<boolean>>();
 
   constructor(
     private readonly environmentService: EnvironmentService,
@@ -231,8 +208,8 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Enumerate the spaces the poll loop should reconcile. STRICT opt-in: ONLY
-   * spaces carrying the Phase-C per-space flag (`settings->'gitSync'->>'enabled'
-   * = 'true'`, written by the Phase-C UI) are returned. There is intentionally NO
+   * spaces carrying the per-space flag (`settings->'gitSync'->>'enabled'
+   * = 'true'`) are returned. There is intentionally NO
    * fallback to "all live spaces" — when no space is flagged this returns an empty
    * list and git-sync does nothing (correct opt-in behavior). The GIT_SYNC_ENABLED
    * master switch gates whether the loop runs at all; this flag gates which spaces.
@@ -267,28 +244,14 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
   // --- one sync cycle for a space -------------------------------
 
   /**
-   * Build the engine `Settings` for a space. The engine reads exactly three
-   * fields: `vaultPath`, `docmostSpaceId` and `autoMergeConflicts` (the poll
-   * interval and debounce are the orchestrator's and the listener's own).
+   * Build the engine `Settings` for a space. The engine reads exactly two
+   * fields, `vaultPath` and `docmostSpaceId` (the poll interval and debounce are
+   * the orchestrator's and the listener's own).
    */
-  private async buildSettings(spaceId: string): Promise<Settings> {
-    // Per-space PUSH policy for still-conflicted page bodies (SPEC §9): read the
-    // `gitSync.autoMergeConflicts` flag from the space's jsonb settings. STRICT
-    // opt-in like `enabled` — anything other than the literal 'true' (absent, null,
-    // 'false') resolves to the SAFE default (skip a conflicted page, do not push).
-    const row = await this.db
-      .selectFrom('spaces')
-      .select(
-        sql<boolean>`settings->'gitSync'->>'autoMergeConflicts' = 'true'`.as(
-          'autoMergeConflicts',
-        ),
-      )
-      .where('id', '=', spaceId)
-      .executeTakeFirst();
+  private buildSettings(spaceId: string): Settings {
     return {
       docmostSpaceId: spaceId,
       vaultPath: this.vaultRegistry.vaultPath(spaceId),
-      autoMergeConflicts: row?.autoMergeConflicts ?? false,
     };
   }
 
@@ -533,21 +496,13 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * this throws a `GitSyncLockHeldError`. The HTTP handler converts that to a 503
    * so git surfaces a retryable error to the user (chosen over blocking the
    * request behind a potentially long cycle). The receive-pack is NOT run when
-   * the lock is held — we never write to the working tree concurrently with a
-   * cycle.
+   * the lock is held — we never move `main` concurrently with a cycle.
    *
    * `runReceivePack` receives the per-space lock's lost-lock `AbortSignal`: a
-   * receive-pack writes `main`'s working tree (receive.denyCurrentBranch=
-   * updateInstead), so if the lock is lost mid-push (a long Redis outage drops the
-   * heartbeat CAS) the signal fires and the receive-pack's `git http-backend`
-   * child is killed — closing the window where another replica could grab the lock
-   * and start a cycle while this child is still writing the working tree.
-   *
-   * The receive-pack runs under the `RECEIVE_REF` marker (DESIGN.md §8). It is
-   * deleted afterwards only when `main`'s working tree is clean; a receive-pack
-   * that was cut off (killed, or the process died) leaves it set over a dirty
-   * tree, and the next recovery discards that tree instead of committing a push
-   * the client never saw accepted.
+   * receive-pack moves `main`, so if the lock is lost mid-push (a long Redis
+   * outage drops the heartbeat CAS) the signal fires and the receive-pack's
+   * `git http-backend` child is killed — closing the window where another
+   * replica could grab the lock and start a cycle while this child still writes.
    *
    * The whole locked operation (receive-pack + cycle) is bounded by
    * GIT_SYNC_CYCLE_DEADLINE_MS: past it the signal is aborted, the failure is
@@ -565,40 +520,20 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
       result = await this.spaceLock.withSpaceLock(
         spaceId,
         async (signal) => {
-          // 0) Repair what an interrupted cycle left in the vault first:
-          // receive-pack (receive.denyCurrentBranch=updateInstead) rejects a
-          // push into a dirty `main` ("Working directory has unstaged changes").
-          const { recoverVault, DEFAULT_BRANCH, RECEIVE_REF } =
-            await loadGitSync();
+          // 0) Prepare the vault first (legacy upgrade, `main`, the last-export
+          // pointer), so the push lands on the layout the cycle runs on.
+          const { prepareVault } = await loadGitSync();
           const vault = await this.vaultRegistry.getVault(spaceId);
           if (
-            await recoverVault({ spaceId, vault, ...this.engineLog(spaceId) })
+            await prepareVault({ spaceId, vault, ...this.engineLog(spaceId) })
           ) {
             this.exportKeysFor(spaceId).clear();
           }
 
           // 1) Stream the receive-pack to the client (durable commits land on
           // main). Pass the lost-lock signal so the receive-pack child is killed
-          // if the lock lapses mid-write (no concurrent working-tree writer
-          // across replicas). RECEIVE_REF marks it while it runs (DESIGN.md
-          // §8): a receive-pack cut off after updating `main`'s working tree but
-          // before moving `main` leaves a dirty `main` the client never saw
-          // accepted, which recovery discards instead of committing as user
-          // work. runReceivePack resolves even when the child was killed, so
-          // the marker is deleted only when the tree is clean afterwards (a
-          // completed or refused receive-pack leaves it clean, and recovery
-          // made it clean before). A dirty tree, or a rejection, keeps it: the
-          // recovery of the cycle below, or of the next poll, discards it.
-          await vault.updateRef(RECEIVE_REF, DEFAULT_BRANCH);
+          // if the lock lapses mid-write (no concurrent writer across replicas).
           await runReceivePack(signal);
-          if (await vault.isWorkingTreeDirty()) {
-            this.logger.warn(
-              `git-sync: space ${spaceId}: the receive-pack was cut off with ` +
-                `main's working tree half-written; recovery discards it`,
-            );
-          } else {
-            await vault.deleteRef(RECEIVE_REF);
-          }
 
           // 2) Reconcile the new commits into Docmost.
           try {
@@ -662,82 +597,15 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Serve a git smart-HTTP READ ADVERTISEMENT (`GET info/refs?service=git-upload-pack`
-   * or a dumb `GET HEAD`) with the repo's symbolic `HEAD` deterministically pinned
-   * to `main` (bug #3). The advertised `HEAD` symref decides a clone's default
-   * branch; the engine transiently checks out the read-only `docmost` mirror during
-   * a cycle, so an unsynchronized advertisement could route a clone to `docmost`
-   * (~1/4 of clones under continuous syncing).
-   *
-   * The pin + the advertisement run under the space's READ lock: no cycle or push
-   * runs while we pin (HEAD cannot flap, and the pin never corrupts a cycle's
-   * checkout), but read advertisements do not exclude each other and a cycle
-   * waiting for the space goes first, so a stream of `ls-remote`s cannot stall
-   * the space's sync (OR-1). Concurrent advertisements share one pin. A bounded
-   * wait absorbs a brief overlap with a cycle; if the space is still busy (a long
-   * cycle), we fall back to serving WITHOUT the pin — the cycle's
-   * finally-restore leaves HEAD on `main` between cycles, so the advertisement is
-   * still almost always correct (degrades only under sustained contention).
-   */
-  async serveReadAdvertisement(
-    spaceId: string,
-    workspaceId: string,
-    serve: () => Promise<void>,
-  ): Promise<void> {
-    const result = await this.spaceLock.withSpaceReadLock(
-      spaceId,
-      async () => {
-        const vault = await this.vaultRegistry.getVault(spaceId);
-        if (!(await this.pinHeadToMain(spaceId, vault))) {
-          this.logger.warn(
-            `git-sync: space ${spaceId}: HEAD is off 'main' with uncommitted ` +
-              `changes left by an interrupted cycle — not pinned; a clone may ` +
-              `default to 'docmost' until the next cycle recovers the vault.`,
-          );
-        }
-        await serve();
-      },
-      {
-        acquireRetry: {
-          timeoutMs: GIT_SYNC_PUSH_LOCK_RETRY_TOTAL_MS,
-          baseMs: GIT_SYNC_PUSH_LOCK_RETRY_BASE_MS,
-          maxMs: GIT_SYNC_PUSH_LOCK_RETRY_MAX_MS,
-        },
-      },
-    );
-    // Space busy for the whole budget (a cycle here / the lock held elsewhere):
-    // serve anyway. `serve` (backend.run) never ran inside the lock in this case.
-    if (typeof result === 'object' && result !== null && 'skipped' in result) {
-      if (result.skipped === 'lock-held') {
-        this.recordLockHeldSkip(spaceId, workspaceId);
-      }
-      await serve();
-    }
-  }
-
-  /** Pin the vault's HEAD to `main`, sharing a pin already in flight. */
-  private pinHeadToMain(
-    spaceId: string,
-    vault: { pinHeadToMain(): Promise<boolean> },
-  ): Promise<boolean> {
-    let pin = this.headPins.get(spaceId);
-    if (!pin) {
-      pin = vault.pinHeadToMain().finally(() => this.headPins.delete(spaceId));
-      this.headPins.set(spaceId, pin);
-    }
-    return pin;
-  }
-
-  /**
-   * Drive ONE reconcile cycle for a space. The PULL->PUSH branch choreography
-   * lives in the engine's `runCycle` (so it can never drift from the engine it
-   * ships with); the orchestrator owns only the lock (its caller) and the
-   * service binding. There is no delete cap — deletes apply unconditionally (they
+   * Drive ONE reconcile cycle for a space. The apply/export choreography lives
+   * in the engine's `runCycle` (so it can never drift from the engine it ships
+   * with); the orchestrator owns only the lock (its caller) and the service
+   * binding. There is no delete cap — deletes apply unconditionally (they
    * are soft/reversible) and every cycle logs what it deleted via `log`.
    *
    * A space with page-level restricted pages is refused before anything is
-   * exported or written (GA-2/GA-3/GA-4): the throw is recorded as a failed
-   * cycle, so the reason shows in the space's status and is logged at ERROR.
+   * exported or written: the throw is recorded as a failed cycle, so the reason
+   * shows in the space's status and is logged at ERROR.
    */
   private async driveCycle(
     spaceId: string,
@@ -755,7 +623,7 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     }
     this.recordCycleStart(spaceId, workspaceId);
     const { runCycle } = await loadGitSync();
-    const settings = await this.buildSettings(spaceId);
+    const settings = this.buildSettings(spaceId);
     const vault = await this.vaultRegistry.getVault(spaceId);
     const client = this.dataSource.bind({
       workspaceId,
@@ -774,33 +642,6 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
       client,
       vault,
       settings,
-      // ABSOLUTE-path fs primitives the engine cycle injects (it stays IO-free).
-      // `lstat`/`realpath` back the engine's symlink guard: both MUST yield
-      // `null` on ENOENT (a not-yet-created file is the normal write case) so the
-      // guard can tell "absent" (safe to create) from "is a symlink" (refuse).
-      // `lstat` does NOT follow the final link; `realpath` resolves it.
-      fs: {
-        readFile: (absPath) => readFile(absPath, 'utf8'),
-        writeFile: (absPath, text) => writeFile(absPath, text, 'utf8'),
-        mkdir: (absDir) => mkdir(absDir, { recursive: true }).then(() => undefined),
-        rm: (absPath) => rm(absPath, { force: true }),
-        lstat: (absPath) =>
-          lstat(absPath).then(
-            (st) => ({ isSymbolicLink: st.isSymbolicLink() }),
-            (err: NodeJS.ErrnoException) => {
-              if (err && err.code === 'ENOENT') return null;
-              throw err;
-            },
-          ),
-        realpath: (absPath) =>
-          realpath(absPath).then(
-            (p) => p,
-            (err: NodeJS.ErrnoException) => {
-              if (err && err.code === 'ENOENT') return null;
-              throw err;
-            },
-          ),
-      },
       // Every cycle logs its full push plan + per-action lines + completion
       // counts (created/updated/deleted/skipped/failures) through this `log`, so
       // what was deleted (and what was not) is always recorded. There is no
@@ -808,22 +649,10 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
       // only got in the way of legitimate deletes; engine correctness (covered by
       // the reconcile/layout tests) is what prevents phantom deletions.
       ...this.engineLog(spaceId),
-      // This space's export-key map: the pull skips pages unchanged since their
-      // last successful export (the engine rebuilds/clears it).
+      // This space's export-key map: the export skips pages unchanged since
+      // their last successful export (the engine rebuilds/clears it).
       exportKeys: this.exportKeysFor(spaceId),
     });
-
-    // §5 invariant breach: the push refused to fast-forward a divergent `docmost`
-    // mirror. No data is lost (the refusal is the safety), but the mirror no
-    // longer reflects Docmost and the next push will keep refusing until an
-    // operator reconciles it — so escalate from the engine's info `log` to a
-    // WARN with the spaceId, and surface the flag in the returned status (/status).
-    if (result.divergentDocmost) {
-      this.logger.warn(
-        `git-sync[${spaceId}] push refused to fast-forward a DIVERGENT 'docmost' ` +
-          `mirror (invariant §5 broken); manual reconciliation required`,
-      );
-    }
 
     return { spaceId, ...result };
   }
@@ -869,18 +698,13 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * GitSyncModule imports the plain ScheduleModule so SchedulerRegistry is
    * injectable without a duplicate forRoot.
    *
-   * KNOWN MULTI-REPLICA LIMITATION (deferred — do not silently lose this):
-   * This is an IN-PROCESS `setInterval` running on EVERY replica. Cross-replica
-   * single-writer safety currently rests on the per-space Redis lock
-   * (SpaceLockService) plus best-effort abort-on-failed-heartbeat — NOT on true
-   * fencing. Under an adversarial schedule (lock TTL lapse during a GC/IO pause)
-   * two replicas could still briefly believe they hold a space's lock. The
-   * intended future direction is to move this orchestration to a BullMQ queue
-   * (one durable, deduplicated job per space instead of N independent interval
-   * timers) and add FENCING TOKENS so a stale writer's writes are rejected by the
-   * store. The author deferred fencing tokens; this comment is the breadcrumb so
-   * the gap is tracked rather than forgotten. See the KNOWN MULTI-REPLICA GAP note
-   * on SpaceLockService.
+   * KNOWN MULTI-REPLICA LIMITATION: this is an IN-PROCESS `setInterval` running
+   * on EVERY replica. Cross-replica single-writer safety rests on the per-space
+   * Redis lock (SpaceLockService) plus best-effort abort-on-failed-heartbeat —
+   * NOT on fencing. Under an adversarial schedule (lock TTL lapse during a GC/IO
+   * pause) two replicas could briefly both believe they hold a space's lock.
+   * Closing it needs fencing tokens (and a BullMQ job per space instead of N
+   * interval timers). See the KNOWN MULTI-REPLICA GAP note on SpaceLockService.
    */
   onModuleInit(): void {
     const ms = this.environmentService.getGitSyncPollIntervalMs();
@@ -932,10 +756,10 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * downtime. Each enabled space runs under its own lock (overlaps skipped).
    * Never throws.
    *
-   * GL-7: the tick does not wait for one space before starting the next. It
-   * hands free slots (GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES) to the spaces that
-   * have waited longest and are not still running from an earlier tick; a hung
-   * cycle holds one slot until its deadline while the other spaces keep being
+   * The tick does not wait for one space before starting the next. It hands
+   * free slots (GIT_SYNC_POLL_MAX_CONCURRENT_CYCLES) to the spaces that have
+   * waited longest and are not still running from an earlier tick; a hung cycle
+   * holds one slot until its deadline while the other spaces keep being
    * reconciled. The returned promise settles when this tick's cycles have.
    *
    * Re-entrancy guard: the `polling` flag skips a tick while another is still

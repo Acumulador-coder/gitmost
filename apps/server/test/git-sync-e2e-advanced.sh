@@ -4,7 +4,7 @@
 # and structural sync (rename / reparent / delete-cap), driven against a LIVE
 # stand. Companion to git-sync-e2e.sh (the basic two-way flows). These cases
 # need deeper hooks than a plain clone:
-#   - the vault working repo on the host ($VAULT_DIR/<spaceId>) for ref/SHA asserts,
+#   - the bare vault repo on the host ($VAULT_DIR/<spaceId>) for ref/SHA asserts,
 #   - the Redis container ($REDIS_CONTAINER) to inject a held lock (503 path),
 #   - DB-created fixture users / a second space (auto-created + torn down).
 #
@@ -183,11 +183,11 @@ docker exec "$REDIS_CONTAINER" redis-cli del "${LOCK_PREFIX}${SPACE_ID}" >/dev/n
 # ===========================================================================
 say "idempotent re-sync: nothing changes when nothing changed (no churn)"
 sync_now
-m1=$(vault_sha main); d1=$(vault_sha docmost)
+m1=$(vault_sha main); lp1=$(vault_sha refs/docmost/last-export)
 sync_now; sync_now
-m2=$(vault_sha main); d2=$(vault_sha docmost)
-[ "$m1" = "$m2" ] && [ "$d1" = "$d2" ] && ok "main + docmost SHAs stable across idle cycles" \
-  || bad "idle cycles churned refs (main $m1->$m2, docmost $d1->$d2)"
+m2=$(vault_sha main); lp2=$(vault_sha refs/docmost/last-export)
+[ "$m1" = "$m2" ] && [ "$lp1" = "$lp2" ] && ok "main + last-export SHAs stable across idle cycles" \
+  || bad "idle cycles churned refs (main $m1->$m2, last-export $lp1->$lp2)"
 
 # (Structural rename/move on the live stand is deliberately NOT scripted here: a
 # freshly-API-created page has a meta-only body, so git's rename-similarity

@@ -11,11 +11,10 @@ import type { KyselyDB } from '../../types/kysely.types';
 
 /**
  * SQL-builder unit test for the jsonb-merge invariant of
- * SpaceRepo.updateGitSyncSettings (review comment #694 / test-strategy item #6).
+ * SpaceRepo.updateGitSyncSettings.
  *
- * The merge is RAW SQL, so a behavioural test would need a live Postgres — which
- * is intentionally out of scope here (the reviewer's own §13.3 was deferred for
- * the same reason). Instead we follow the existing repo-spec convention
+ * The merge is RAW SQL, so a behavioural test would need a live Postgres, which
+ * is out of scope here. Instead we follow the existing repo-spec convention
  * (ai-agent-roles.repo.spec.ts) of NOT executing: we compile the query with a
  * DummyDriver Postgres dialect and assert the generated SQL preserves sibling
  * keys. The structural invariant the SQL must encode:
@@ -27,7 +26,7 @@ import type { KyselyDB } from '../../types/kysely.types';
  * top-level key (e.g. `sharing`) is preserved. The INNER COALESCE merges into
  * the existing `gitSync` object, so a sibling key inside gitSync (e.g. `other`)
  * is preserved. A naive `set settings = jsonb_build_object('gitSync', ...)`
- * would clobber both — this test guards exactly that regression.
+ * would clobber both.
  */
 describe('SpaceRepo.updateGitSyncSettings — jsonb merge SQL', () => {
   // A real Kysely on the Postgres dialect, but with a DummyDriver: it compiles

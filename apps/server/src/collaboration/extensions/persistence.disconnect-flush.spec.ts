@@ -1,11 +1,10 @@
 import { PersistenceExtension } from './persistence.extension';
 
 /**
- * Regression for the QA #119 "loss-on-fast-close" data loss: editing a page then
- * closing the tab within the collab debounce window (~3-18s) lost the edit
- * because, with `unloadImmediately: false`, Hocuspocus does NOT flush the
- * debounced onStoreDocument on a last-client disconnect. PersistenceExtension
- * now flushes the pending store on the LAST disconnect (and only then).
+ * Editing a page then closing the tab within the collab debounce window must not
+ * lose the edit: with `unloadImmediately: false` Hocuspocus does not flush the
+ * debounced onStoreDocument on a last-client disconnect, so PersistenceExtension
+ * flushes the pending store on the LAST disconnect (and only then).
  */
 describe('PersistenceExtension.onDisconnect flush (loss-on-fast-close)', () => {
   function makeExt(gitSyncEnabled = true): PersistenceExtension {

@@ -243,18 +243,15 @@ export class ShareService {
   }
 
   /**
-   * THE share access boundary in ONE place.
+   * The share access boundary: does this (shareId, pageId) pair resolve to a
+   * usable, non-restricted, live page within this share? Returns
+   * `{ share, page }`, or `null` on any failure (share not found / wrong
+   * workspace / out-of-tree page / share-id mismatch / missing / soft-deleted /
+   * restricted ancestor).
    *
-   * Answers exactly: "does this (shareId, pageId) pair resolve to a usable,
-   * non-restricted, live page WITHIN this share?" Returns the resolved
-   * `{ share, page }` on success, or `null` on ANY failure (share not found /
-   * wrong workspace / out-of-tree page / share-id mismatch / missing /
-   * soft-deleted / restricted ancestor).
-   *
-   * This is the single canonical sequence that every public-share read path
-   * must funnel through, so no path can skip a check (most importantly the
-   * restricted-ancestor gate, which `getShareForPage` does NOT perform on its
-   * own). The checks run in this fixed order:
+   * Every public-share read path goes through here so none can skip a check,
+   * in particular the restricted-ancestor gate that `getShareForPage` does not
+   * perform. The checks run in this order:
    *   1. getShareForPage(pageId, workspaceId)   — page reachable in this ws?
    *   2. share.id === shareId                   — and it is THIS share?
    *      (pass `null`/`undefined` shareId to skip the match when the caller has
@@ -265,10 +262,10 @@ export class ShareService {
    *      getShareForPage already excludes deleted anchors)
    *   5. !hasRestrictedAncestor(page.id)        — not a restricted descendant
    *
-   * `isSharingAllowed` is intentionally NOT part of this boundary: it is an
-   * orthogonal workspace/space toggle that each call-site layers separately
+   * `isSharingAllowed` is not part of this boundary: it is an orthogonal
+   * workspace/space toggle that each call site checks separately
    * (share.controller after getSharedPage; the assistant funnel as its own
-   * gate). Folding it in here would silently change those call-sites' grading.
+   * gate).
    */
   async resolveReadableSharePage(
     shareId: string | null | undefined,
@@ -299,19 +296,15 @@ export class ShareService {
       return null;
     }
 
-    // #370 Stage B — "approved" publication freezes what public readers see to
-    // the LAST manually-saved version (page_history.kind='manual'), not the live
-    // draft. This is the SINGLE canonical resolver every public read funnels
-    // through (the shared-page view, the SEO controller, AND the share
-    // assistant's page-read tool), so the swap here freezes ALL of them
-    // consistently — a public visitor and the assistant see the same bytes.
+    // "Approved" publication serves the last manually-saved version
+    // (page_history.kind='manual') instead of the live draft. Every public read
+    // (shared-page view, SEO controller, share assistant's page-read tool) goes
+    // through here, so they all see the same frozen bytes.
     //
-    // Swap ONLY content + title. page.id and page.workspaceId stay LIVE on
-    // purpose: downstream updatePublicAttachments mints per-attachment tokens
-    // off page.id/workspaceId, so freezing those would mint tokens for the
-    // wrong owner. The SEO controller reads resolved.page.title, so the frozen
-    // title flows through automatically. If no manual version exists yet (rare —
-    // enabling an approved share auto-creates a baseline), fall back to live.
+    // Only content + title are swapped. page.id and page.workspaceId stay live:
+    // updatePublicAttachments mints per-attachment tokens off them. With no
+    // manual version yet (enabling an approved share creates a baseline), the
+    // live page is served.
     if (share.publishedMode === 'approved') {
       const hist = await this.pageHistoryRepo.findLatestByPageIdAndKind(
         page.id,
@@ -343,14 +336,13 @@ export class ShareService {
 
     const { share, page } = resolved;
 
-    // Bind content to the requested share (#218). When the caller supplies a
-    // shareId/key (the `/share/:shareId/p/:slug` route now forwards it), the
-    // page must be reachable THROUGH that exact share — a forged or mismatched
+    // Bind content to the requested share. When the caller supplies a
+    // shareId/key (the `/share/:shareId/p/:slug` route forwards it), the page
+    // must be reachable THROUGH that exact share — a forged or mismatched
     // shareId must 404 instead of rendering the page off its slug alone, and it
-    // must not be answerable with the page's real (canonical) share key. A
-    // request with no shareId keeps the legacy slug-capability behavior (the
-    // `/share/p/:slug` route + internal title look-ups); the slug nanoid stays
-    // the access secret there — an inherited Docmost design we don't widen.
+    // must not be answerable with the page's real (canonical) share key. Without
+    // a shareId (the `/share/p/:slug` route + internal title look-ups) the slug
+    // nanoid is the access secret, as in upstream Docmost.
     // FUTURE: this ancestor-aware match could fold INTO resolveReadableSharePage
     // (so the boundary's narrow `share.id === shareId` gate isn't effectively
     // dead). Deferred — it widens the contract for the 3 other callers that pass

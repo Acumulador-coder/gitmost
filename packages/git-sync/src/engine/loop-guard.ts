@@ -1,5 +1,5 @@
 /**
- * Loop-guard primitives (DESIGN.md §11). The sync engine must never re-pull its OWN
+ * Loop-guard primitives (SPEC §10). The sync engine must never re-pull its OWN
  * write as if it were a remote edit: after a push, the next poll will see the
  * page it just wrote with a fresh `updatedAt`. To suppress that, we key on two
  * signals — the body HASH of what we pushed (this module) and the `updatedAt`
@@ -13,12 +13,12 @@
 import { createHash } from "node:crypto";
 
 /**
- * Stable hash of a page's markdown BODY (DESIGN.md §11). Deterministic:
+ * Stable hash of a page's markdown BODY (SPEC §10 "body hash"). Deterministic:
  * the same input string always yields the same digest, a different input a
  * different one. Used to recognize our own write later (loop suppression).
  *
  * We hash the body STRING as-is (UTF-8) with SHA-256 and return lowercase hex.
- * The loop guard keys on the body hash rather than file bytes; callers decide WHAT
+ * SPEC §10 keys on the body hash rather than file bytes; callers decide WHAT
  * counts as "the body" (here it is the exact string passed in — typically the
  * self-contained markdown that was pushed). No normalization is applied: the
  * caller is responsible for passing a canonical/stable representation if it

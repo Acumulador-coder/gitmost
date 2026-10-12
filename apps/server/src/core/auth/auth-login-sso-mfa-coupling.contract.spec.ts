@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as ts from 'typescript';
 
 /**
- * Coupling / drift-guard contract for the pre-token SSO/MFA gate (Gitea #91).
+ * Coupling / drift-guard contract for the pre-token SSO/MFA gate.
  *
  * `AuthController.login` (core/auth/auth.controller.ts) — the normal
  * /api/auth/login password path — must run the SSO/MFA gate BEFORE any token is
@@ -13,11 +13,8 @@ import * as ts from 'typescript';
  *   -> lazy require('./../../ee/mfa/services/mfa.service')
  *   -> mfaService.checkMfaRequirements(...)
  *
- * Historically a SECOND path re-implemented the same pre-token sequence: the
- * /mcp HTTP-Basic password path in the MCP service. That twin was REMOVED in
- * #558 (/mcp now accepts only a Bearer api_key — no password path, no gate to
- * mirror), so this guard now covers the ONE remaining password-login path. If a
- * future edit drops the SSO check or the MFA check from `login`, that re-opens an
+ * This is the only password-login path (/mcp accepts only a Bearer api_key). If
+ * an edit drops the SSO check or the MFA check from `login`, that opens an
  * SSO/MFA bypass; this test asserts the method body still contains BOTH gate
  * calls so such a regression fails the build.
  *

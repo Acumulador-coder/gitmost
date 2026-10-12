@@ -146,7 +146,7 @@ export class PublicShareWorkspaceLimiter {
  * of thousands of tokens PER step while `maxOutputTokens` only caps the output.
  * The request cap is also hourly with no daily ceiling, so a steady stream at
  * the hourly cap sustains ~24x its count per day. Counting requests therefore
- * does not bound the owner's actual LLM bill (issue #159, finding #5).
+ * does not bound the owner's actual LLM bill.
  *
  * This contour caps the SPEND directly: the actual tokens consumed (input +
  * output, summed across all steps of every accepted turn) over the trailing

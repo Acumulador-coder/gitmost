@@ -1,10 +1,10 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * Agent-edit provenance backbone (§5.2 / §6.6 / §15 C2,H2).
+ * Agent-edit provenance.
  *
  * Additive provenance markers so an edit "by the agent" is recorded on the page
- * and its history snapshot, plus analogous comment columns for a later unit.
+ * and its history snapshot, plus analogous comment columns.
  * `last_updated_by_id` still names the responsible human author; these columns
  * only annotate the source. `'user' | 'agent'` is stored as a short varchar to
  * stay forward-compatible without an enum migration.

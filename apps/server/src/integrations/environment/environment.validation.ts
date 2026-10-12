@@ -140,7 +140,7 @@ export class EnvironmentVariables {
   )
   CLICKHOUSE_URL: string;
 
-  // --- git-sync (issue #194 §7.2) — all OPTIONAL. The master switch defaults off; a
+  // --- git-sync — all OPTIONAL. The master switch defaults off; a
   // required-if-enabled service user id is validated only when sync is on. ---
 
   @IsOptional()
@@ -176,8 +176,9 @@ export class EnvironmentVariables {
 
 
   // Required when git-sync is enabled: the service user create/move/rename/delete
-  // are attributed to (issue #194 §7.2). Optional otherwise.
-  @ValidateIf((obj) => obj.GIT_SYNC_ENABLED === 'true')
+  // are attributed to. Optional otherwise.
+  // Same reading of the flag as GitSyncModule and isGitSyncEnabled().
+  @ValidateIf((obj) => (obj.GIT_SYNC_ENABLED ?? '').toLowerCase() === 'true')
   @IsNotEmpty()
   @IsString()
   GIT_SYNC_SERVICE_USER_ID: string;

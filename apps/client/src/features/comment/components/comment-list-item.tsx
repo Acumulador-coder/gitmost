@@ -33,14 +33,12 @@ interface CommentListItemProps {
   userSpaceRole?: string;
 }
 
-// Type B — the thread ROW. Renders a single human OR agent-without-edit comment
-// in the redesigned visual: provenance avatar, author + timeago, hover-revealed
-// resolve + edit/delete menu, the anchored selection quote, and the body through
-// the static CommentContentView (or the inline TipTap editor while editing). It
-// is used for both a top-level thread comment and, recursively, each reply row.
-// ALL wiring (update/delete/resolve mutations, owner/admin gate, anchor nav) is
-// the same logic the old row carried — only the presentation changed, and the
-// agent suggested-edit block was lifted out into AgentEditCard.
+// Type B — the thread ROW. Renders a single human OR agent-without-edit comment:
+// provenance avatar, author + timeago, hover-revealed resolve + edit/delete menu,
+// the anchored selection quote, and the body through the static
+// CommentContentView (or the inline TipTap editor while editing). Used for both a
+// top-level thread comment and, recursively, each reply row. The agent
+// suggested-edit block lives in AgentEditCard.
 function CommentListItem({
   comment,
   pageId,

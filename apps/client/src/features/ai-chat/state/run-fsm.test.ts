@@ -275,7 +275,7 @@ describe("run-fsm — stop (I4: exit by data)", () => {
   });
 
   it("stopping exits on the aborted stream's finish carrying the PRE-STOP epoch", () => {
-    // MEDIUM (#488 re-review): STOP_REQUESTED is a command that BUMPS the epoch, but
+    // STOP_REQUESTED is a command that BUMPS the epoch, but
     // the runtime stamps the aborted stream's onFinish with the stream's START (pre-
     // stop) generation — exactly what the component sends. `stopping` must HONOR
     // that finish regardless of generation (no idle-cap covers `stopping`).

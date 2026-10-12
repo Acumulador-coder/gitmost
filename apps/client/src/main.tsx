@@ -41,7 +41,7 @@ export const queryClient = new QueryClient({
   },
 });
 
-// #564 — destroy a page's LOCAL YDOC (its body, on disk in IndexedDB) as soon as
+// Destroy a page's LOCAL YDOC (its body, on disk in IndexedDB) as soon as
 // ANY page query fails with 403/404. Installed at APP level and BEFORE the
 // page-meta eviction below, for two load-bearing reasons:
 //  - the case this guard exists for (a revoked page opened in a fresh session)
@@ -114,9 +114,7 @@ function renderApp() {
 
 async function initAnalytics() {
   // posthog-js is only pulled in for cloud deployments with analytics enabled, so
-  // self-hosted builds never download it. The gate is kept identical to the
-  // previous eager code so cloud analytics behavior is unchanged; the import is
-  // simply deferred behind it.
+  // self-hosted builds never download it.
   //
   // Crucially this runs AFTER the immediate first render below, so first paint is
   // never gated on the analytics chunk. Any failure (network, stale 404, or an
@@ -144,8 +142,7 @@ async function initAnalytics() {
   }
 }
 
-// Paint immediately for everyone (self-hosted stays exactly as instant as before,
-// cloud no longer blocks on the analytics import). The posthog singleton is
-// initialized after, without re-rendering the tree.
+// Paint immediately; the posthog singleton is initialized after, without
+// re-rendering the tree.
 renderApp();
 void initAnalytics();

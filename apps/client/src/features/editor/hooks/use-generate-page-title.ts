@@ -22,8 +22,8 @@ import localEmitter from "@/lib/local-emitter.ts";
 const MAX_CONTENT_CHARS = 20000;
 
 /**
- * Generate a title for the given page from the LIVE editor content (#199),
- * including unsaved edits, then apply it IMMEDIATELY (per product decision). The
+ * Generate a title for the given page from the LIVE editor content,
+ * including unsaved edits, then apply it IMMEDIATELY. The
  * server endpoint only summarizes the supplied markdown — it never writes the
  * page; the actual title write goes through the existing /pages/update mutation
  * (which enforces edit permission), and is mirrored to the title field + other
@@ -50,7 +50,7 @@ export function useGeneratePageTitle(pageId: string) {
       if (!pageEditor || pageEditor.isDestroyed) return;
 
       // Serialize the live editor content to markdown through the canonical
-      // converter (issue #347), matching the on-disk/export markdown form.
+      // converter, matching the on-disk/export markdown form.
       const markdown = convertProseMirrorToMarkdown(pageEditor.getJSON()).trim();
       if (!markdown) {
         notifications.show({ message: t("The note is empty"), color: "yellow" });

@@ -21,10 +21,10 @@ import {
 } from 'kysely';
 
 /**
- * #599 — the embedding fingerprint lifecycle: coverage state (off/stale/full with
+ * The embedding fingerprint lifecycle: coverage state (off/stale/full with
  * the gap-corrected denominator), the atomic pointer flip and its config-changed
- * guard, the generational GC cap, the same-dimension MODEL-change guard (D2) and
- * the per-workspace run lock (D4).
+ * guard, the generational GC cap, the same-dimension MODEL-change guard and
+ * the per-workspace run lock.
  *
  * The service only stores its deps in the constructor, so it is unit-built with
  * plain mocks — no Nest module graph, no DB (the run-lock tests stub the two raw
@@ -365,24 +365,15 @@ describe('computeCoverage (#599) — the gap-corrected denominator', () => {
   // --- review F2: the frozen gap may only be spent on the pages it MEASURED -----
 
   /**
-   * The reviewer's counterexample. Run: 10 embeddable, 6 produced a chunk -> gap 4.
-   * The 4 chunk-less pages are then DELETED (embeddable 6) and 3 REAL pages are
-   * created (embeddable 9) that no one has embedded yet.
+   * Run: 10 embeddable, 6 produced a chunk -> gap 4. The 4 chunk-less pages are
+   * then DELETED (embeddable 6) and 3 REAL pages are created (embeddable 9) that
+   * no one has embedded yet.
    *
-   * The frozen gap of 4 used to be subtracted from the LIVE count — `total =
-   * max(0, 9 - 4) = 5`, clamped up to `indexed` 6 — so the state read `full` while
-   * three pages held no vectors at all: the indicator lied in exactly the direction
-   * the whole PR exists to prevent, and the settings panel showed a green "Indexed
-   * 6 of 6".
-   *
-   * NOTE the 4 numbers of the old signature CANNOT decide this case: they are
-   * identical to the legitimately-full corpus in the next test. What breaks the tie
-   * is `changedSince` — the 3 pages are NEW, so the run's gap (measured over pages
-   * that no longer exist) cannot excuse them.
-   *
-   * NON-VACUITY: drop the `changedSince` split (spend the gap over the whole live
-   * count, i.e. the pre-fix `total = max(0, embeddable - gap)`) and this reddens —
-   * it goes back to reporting `full`.
+   * Subtracting the frozen gap from the LIVE count would give `total =
+   * max(0, 9 - 4) = 5`, clamped up to `indexed` 6 — `full` while three pages hold
+   * no vectors. (indexed, embeddable, completed) alone are identical to the
+   * legitimately-full corpus in the next test; `changedSince` breaks the tie: the
+   * 3 pages are NEW, so the run's gap cannot excuse them.
    */
   it('review F2 — a shrunken corpus cannot leave stale slack: 3 un-embedded new pages => stale', () => {
     const cov = computeCoverage({
@@ -400,8 +391,8 @@ describe('computeCoverage (#599) — the gap-corrected denominator', () => {
   it('review F2 — the twin corpus (a chunk-less page merely DELETED) stays honestly full', () => {
     // Same run (10 embeddable / 6 produced), but here ONE chunk-less page was
     // deleted and nothing was added: 6 producers + 3 surviving chunk-less pages.
-    // Numerically identical to the case above on the old 4-input signature
-    // (indexed 6, embeddable 9, completed 6/10) — yet the truth is the opposite.
+    // Identical to the case above on (indexed 6, embeddable 9, completed 6/10) —
+    // yet the truth is the opposite.
     // `changedSince: 0` (nothing was created/edited since the run) is what says so,
     // and the run's measured gap still legitimately excuses the 3 chunk-less pages.
     const cov = computeCoverage({
@@ -726,16 +717,10 @@ describe('EmbeddingGenerationService.completeRun — the ATOMIC flip + its guard
   });
 
   /**
-   * #599 review F1 — the config moved on WHILE this run was building fp-B, so the
-   * pointer must not be flipped onto it. The old behaviour returned false, the job
-   * COMPLETED successfully and was dropped by removeOnComplete — and because the
-   * config change's own `aiQueue.add()` had been de-duplicated against this very
-   * job, NOTHING was left to build fp-C: no rows, no job, no reconciler. On a model
-   * change that meant permanently lexical-only search behind a green "Indexed N of
-   * N" panel.
-   *
-   * The flip is still refused; the difference is that the run now FAILS, so BullMQ
-   * retries it and the retry rebuilds the current target.
+   * The config moved on WHILE this run was building fp-B, so the pointer must not
+   * be flipped onto it. The config change's own `aiQueue.add()` was de-duplicated
+   * against this job, so the run must FAIL (not complete quietly): BullMQ retries
+   * it and the retry rebuilds the current target fp-C.
    */
   it('review F1 — THROWS a retryable error when the config changed DURING the run (never a silent skip)', async () => {
     const { service, workspaceRepo, stored } = makeService({

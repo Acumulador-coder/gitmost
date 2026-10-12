@@ -376,16 +376,13 @@ describe('AiChatRunService run lifecycle', () => {
   });
 
   it('CONCURRENCY: two simultaneous finalizeRun on the same run write the terminal row EXACTLY ONCE (the 2nd caller exits synchronously at the atomic claim)', async () => {
-    // The CRITICAL race: AiChatService.stream's safety-net catch settles the turn
-    // to 'error' while a streamText terminal callback also settles it — both call
-    // finalizeRun for the SAME runId. The once-gate must close ATOMICALLY: a
-    // `settled.has` check alone is read BEFORE the awaited UPDATE, so both callers
-    // would pass it and BOTH write the row (last-write-wins clobber + double
-    // write). The fix claims the run with a SYNCHRONOUS `active.delete` before any
-    // await, so the second caller returns in the same tick, before the UPDATE.
+    // Race: AiChatService.stream's safety-net catch and a streamText terminal
+    // callback both call finalizeRun for the SAME runId. A `settled.has` check
+    // alone is read before the awaited UPDATE, so both would write; the claim is
+    // a synchronous `active.delete` before any await.
     //
-    // We force the two calls to overlap by making `update` return a promise we
-    // resolve only AFTER both finalizeRun calls have run their synchronous bodies.
+    // Force the overlap: `update` returns a promise resolved only after both
+    // finalizeRun calls have run their synchronous bodies.
     let resolveUpdate!: (v: unknown) => void;
     const updateGate = new Promise((res) => {
       resolveUpdate = res;
@@ -425,11 +422,9 @@ describe('AiChatRunService run lifecycle', () => {
   });
 
   it('F6: a TRANSIENT terminal-write failure is ridden out by the bounded retry — the run is settled, not stranded', async () => {
-    // The bug: finalizeRun used to DROP the in-memory entry BEFORE the terminal
-    // UPDATE, then only warn-log a failure. A single transient blip (pool
-    // exhaustion / deadlock / connection hiccup) on that PK UPDATE left the row
-    // 'running' with nothing left to recover it -> every later turn in that chat
-    // 409s until a restart. The fix updates FIRST and retries.
+    // A transient failure of the terminal UPDATE must not leave the row
+    // 'running' with nothing to recover it (every later turn would 409):
+    // finalizeRun updates FIRST and retries.
     let calls = 0;
     const repo = makeRepo({
       finalizeIfActive: jest.fn(async () => {
@@ -772,14 +767,11 @@ describe('#487 AiChatRunService.supersede (CAS)', () => {
   });
 
   it('S5 micro-race: a periodic reconcile re-drives the zombie between awaitSettled and settleZombie -> supersede reports the freed slot as READY, NOT a false SUPERSEDE_TIMEOUT', async () => {
-    // The scenario (self-healing today; this guard removes the transient false
-    // timeout): finalizeRun gives up -> a zombie is recorded and the settle
-    // notifier resolves terminalWriteFailed:true. supersede's awaitSettled reads
-    // that (terminalWriteFailed:true) and moves to settleZombie. In the tiny
-    // window BEFORE settleZombie runs, the periodic zombie reconcile WINS the
-    // re-drive: it applies the intended status (row now TERMINAL) and clears the
-    // zombie. So supersede's settleZombie finds no zombie -> returns false, yet
-    // the slot is genuinely FREE. The guard re-reads the row and returns `ready`.
+    // finalizeRun gives up -> a zombie is recorded and the settle notifier
+    // resolves terminalWriteFailed:true, so supersede moves to settleZombie. In
+    // the window before that, the periodic zombie reconcile applies the intended
+    // status and clears the zombie, so settleZombie returns false although the
+    // slot is free. The guard re-reads the row and returns `ready`.
     let rowTerminal = false;
     const repo = makeRepo({
       // getRun / rowIsTerminal read the row: it flips to TERMINAL the moment the
@@ -833,15 +825,11 @@ describe('#487 AiChatRunService.supersede (CAS)', () => {
   });
 
   it('S5 fail-safe (row NOT terminal): terminalWriteFailed + settleZombie fails AND the re-read row is still non-terminal -> a REAL SUPERSEDE_TIMEOUT (the give-up branch of the S5 guard)', async () => {
-    // Mirror of the S5 micro-race, but on the GIVE-UP side (documented case 1): the
-    // DB stays down for THIS replica, so finalizeRun gives up AND our OWN
-    // settleZombie re-drive also throws -> returns false, and the row is never
-    // flipped terminal. The S5 guard must NOT launder that into `ready`: it
-    // re-reads the row (still 'running' -> non-terminal) and reports a genuine
-    // timeout. This locks the fail-safe so a stuck 'running' row is never reported
-    // as `ready` (which the caller would surface as the wrong RunAlreadyActiveError
-    // instead of a clean SUPERSEDE_TIMEOUT). Reverting the S5 guard, or mutating
-    // rowIsTerminal to `return true`, reds this.
+    // Give-up side of the same race: the DB stays down, finalizeRun gives up and
+    // our own settleZombie re-drive also throws, so the row stays 'running'. The
+    // guard must re-read the row and report a genuine timeout, never `ready`
+    // (which the caller would surface as RunAlreadyActiveError instead of
+    // SUPERSEDE_TIMEOUT).
     const repo = makeRepo({
       // The row is stranded non-terminal for the whole call: getRun (target
       // validation) and the S5 rowIsTerminal re-read both see 'running'.

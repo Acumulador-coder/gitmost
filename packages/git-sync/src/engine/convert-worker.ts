@@ -26,7 +26,7 @@ async function run(request: ConvertRequest): Promise<string> {
       await markdownToProseMirror(request.markdown, request.options),
     );
   }
-  // The normalize-on-write fixpoint (DESIGN.md §11), export -> import -> export:
+  // The normalize-on-write fixpoint, export -> import -> export:
   // idempotent for already-stable content, and where the converter's known
   // one-pass asymmetries converge. git-sync is the LOSSLESS mirror, so the
   // serializer runs in strict mode: a node or mark it has no case for throws a

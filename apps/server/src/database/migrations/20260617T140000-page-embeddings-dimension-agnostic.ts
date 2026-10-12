@@ -3,23 +3,15 @@ import { type Kysely, sql } from 'kysely';
 /**
  * Make `page_embeddings.embedding` dimension-agnostic.
  *
- * The original column was `vector(1536)` — a FIXED dimension. On deployments
- * whose embedding model emits a different dimension (e.g. OpenAI
- * `text-embedding-3-large` = 3072, Gemini `text-embedding-004` = 768) every
- * vector failed the indexer's dimension guard and every page was SKIPPED, so
- * RAG / semanticSearch was never populated.
- *
- * pgvector's bare `vector` type (no `(N)`) accepts vectors of ANY dimension,
- * so this migration drops the fixed dimension. The dimension is still recorded
+ * A fixed `vector(1536)` rejects every embedding from a model with another
+ * dimension (e.g. `text-embedding-3-large` = 3072, Gemini = 768). pgvector's
+ * bare `vector` type accepts any dimension. The dimension is still recorded
  * PER ROW in `model_dimensions`, and search filters on it so the `<=>` cosine
  * operator only ever compares same-dimension vectors (pgvector errors on a
  * dimension mismatch — possible when rows from a previous model linger).
  *
- * TRADE-OFF: an HNSW / ivfflat ANN index REQUIRES a fixed dimension, so a
- * dimension-agnostic column cannot carry one. We therefore DROP the HNSW index
- * and rely on a sequential scan with `<=>`. That is fine at wiki scale; if a
- * single embedding dimension is ever pinned per deployment, an HNSW index can
- * be re-added in a follow-up migration.
+ * An HNSW / ivfflat ANN index requires a fixed dimension, so the HNSW index is
+ * dropped and search uses a sequential scan with `<=>` (fine at wiki scale).
  */
 export async function up(db: Kysely<any>): Promise<void> {
   // The HNSW ANN index requires a fixed dimension; drop it before relaxing the

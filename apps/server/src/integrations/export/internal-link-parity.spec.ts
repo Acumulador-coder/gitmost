@@ -2,7 +2,7 @@ import { INTERNAL_LINK_REGEX } from './utils';
 import { isInternalPagePath } from '@docmost/prosemirror-markdown';
 
 /**
- * Cross-package DRIFT GUARD for the internal-link subset invariant (#522).
+ * Cross-package DRIFT GUARD for the internal-link subset invariant.
  *
  * The client-side `isInternalPagePath`
  * (`packages/prosemirror-markdown/src/lib/internal-links.ts`) promotes a markdown
@@ -11,14 +11,13 @@ import { isInternalPagePath } from '@docmost/prosemirror-markdown';
  * a STRICT SUBSET of the server's canonical `INTERNAL_LINK_REGEX`
  * (`./utils.ts`). If the client ever accepts a path the server rejects, that link
  * is stored internal but silently dropped from the backlink graph and broken on
- * export — the exact bug #522 fixed.
+ * export.
  *
- * This spec is the load-bearing guard: it imports the LIVE server regex AND the
+ * This spec imports the LIVE server regex AND the
  * LIVE `isInternalPagePath` (no hand-copied regex on either side). A narrowing of
  * EITHER — most dangerously the server regex — reddens here. The in-package
  * accept/reject test documents the client's behaviour but cannot see the server
- * regex; this top-layer spec is what makes the subset relation mechanical
- * (AGENTS.md rule #7: a CI test that fails on drift of the source of truth).
+ * regex; this top-layer spec is what makes the subset relation mechanical.
  */
 describe('internal-link subset parity (client isInternalPagePath ⊆ server INTERNAL_LINK_REGEX)', () => {
   // Every path the CLIENT accepts. Kept deliberately broad across the risky

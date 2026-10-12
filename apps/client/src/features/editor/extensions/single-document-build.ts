@@ -23,7 +23,7 @@ import { ReactRenderer } from "@tiptap/react";
  *    mounted, so React node views are real from the first build. Their
  *    renderers report to the stand-in instead of rendering.
  * 3. When EditorContent mounts and calls `createNodeViews()`, renders those
- *    renderers into its real store, which the discarded rebuild used to do.
+ *    renderers into its real store (the work stock tiptap's discarded rebuild does).
  *
  * This leans on library internals (@tiptap/react 3.20.4, @tiptap/core 3.20.4,
  * prosemirror-view 1.40): the untyped `editor.contentComponent`, the store

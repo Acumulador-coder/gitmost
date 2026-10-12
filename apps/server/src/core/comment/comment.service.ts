@@ -280,10 +280,9 @@ export class CommentService {
     // new content/timestamps, so this single-row read reflects the edit AND
     // carries the same {agent,launcher} avatar stack (via includeCreator) as the
     // other two broadcasts. This deliberately does NOT reuse the caller's
-    // pre-loaded `comment`: relying on the controller happening to load it with
-    // includeCreator:true is exactly the fragile coupling that let the agent
-    // stack silently vanish on edit once already (#300/#304) — a future caller
-    // dropping that flag must not regress the broadcast.
+    // pre-loaded `comment`: relying on the controller loading it with
+    // includeCreator:true is a fragile coupling, and a caller dropping that flag
+    // must not drop the agent stack from the broadcast.
     const updatedComment = await this.commentRepo.findById(comment.id, {
       includeCreator: true,
       includeResolvedBy: true,
@@ -381,7 +380,7 @@ export class CommentService {
 
   /**
    * Re-sync a suggestion's stored `selection` (== apply-time expectedText) to the
-   * RAW substring the inline mark actually covers in the LIVE document (#496).
+   * RAW substring the inline mark actually covers in the LIVE document.
    *
    * The MCP client creates the comment from a DEBOUNCED REST snapshot, then
    * anchors the mark in the live collab doc. When the two disagree (the doc moved
@@ -477,8 +476,8 @@ export class CommentService {
     // State guards. Order matters — the already-applied check precedes the
     // resolved check because an applied comment is normally also resolved.
     //
-    // Already applied → IDEMPOTENT SUCCESS (issue #315 DoD: double-click /
-    // two-user race → idempotent "already applied", NOT a 409). The suggestion
+    // Already applied → IDEMPOTENT SUCCESS (double-click / two-user race →
+    // idempotent "already applied", NOT a 409). The suggestion
     // is already in the document, so do NOT call the collab gateway again.
     // finalizeAppliedSuggestion re-fetches/broadcasts the same success shape as
     // the applied branch and, when the thread is still open (the rare "applied
@@ -556,7 +555,7 @@ export class CommentService {
 
   /**
    * Dismiss ("Не применять") a suggested edit without touching the page text:
-   * the suggestion disappears. Ephemeral rule (#329) — a top-level suggestion
+   * the suggestion disappears. Ephemeral rule — a top-level suggestion
    * comment is transient UI, so dismissing it hard-deletes the comment AND strips
    * its inline anchor mark UNLESS the thread has replies, in which case the
    * discussion is preserved by resolving it instead.
@@ -636,11 +635,11 @@ export class CommentService {
 
   /**
    * Persist the applied stamps (idempotently), then settle the suggestion under
-   * the ephemeral rule (#329): a suggestion whose thread has NO replies
+   * the ephemeral rule: a suggestion whose thread has NO replies
    * DISAPPEARS after apply (hard-delete + strip the inline anchor mark), since
    * the suggested text is now in the document and a stand-alone resolved thread
    * would only pile up an orphan anchor. A thread WITH replies is preserved by
-   * auto-resolving it (the historical behaviour). Shared by the applied and the
+   * auto-resolving it. Shared by the applied and the
    * idempotent "already-applied" branches of applySuggestion.
    *
    * Returns the comment augmented with `outcome` so the client can pick the
@@ -731,31 +730,29 @@ export class CommentService {
   /**
    * Settle an ephemeral suggestion whose thread looked childless: remove its
    * inline `comment` anchor mark, then ATOMICALLY hard-delete the row only if it
-   * is still childless. Shared by the apply/dismiss no-replies branches (#329).
+   * is still childless. Shared by the apply/dismiss no-replies branches.
    *
-   * ORDER MATTERS (updated #399 → #496): what runs FIRST and FATALLY here is the
-   * mark-removal ENQUEUE (a fast, durable Redis add), NOT the mark op itself.
-   * deleteCommentMark awaits only the enqueue, so a failed add throws BEFORE the
-   * irreversible row delete — the row + mark stay consistent and the operation is
-   * repeatable. The actual anchor strip then runs off the HTTP path in the worker
-   * (idempotent, 3 retries). Only an EXHAUSTED-retries job could leave the doc
-   * with an orphan anchor pointing at a hard-deleted comment (the data-integrity
-   * bug #329 targets); that residual divergence is now self-healed by the
-   * resolve/unresolve mark worker, which strips an orphan mark whenever its
-   * comment row is gone (#496), and it is meanwhile VISIBLE via BullMQ failed-job
-   * metrics rather than a silently-swallowed warn.
+   * ORDER MATTERS: what runs FIRST and FATALLY here is the mark-removal ENQUEUE
+   * (a fast, durable Redis add), NOT the mark op itself. deleteCommentMark awaits
+   * only the enqueue, so a failed add throws BEFORE the irreversible row delete —
+   * the row + mark stay consistent and the operation is repeatable. The actual
+   * anchor strip then runs off the HTTP path in the worker (idempotent, 3
+   * retries). Only an EXHAUSTED-retries job could leave the doc with an orphan
+   * anchor pointing at a hard-deleted comment; the resolve/unresolve mark worker
+   * strips an orphan mark whenever its comment row is gone, and the failure is
+   * VISIBLE via BullMQ failed-job metrics meanwhile.
    *
-   * RACE (#338 F4): the caller read `hasChildren` BEFORE the (slow) mark
-   * removal, so a reply can land in that window. `comments.parent_comment_id` is
-   * ON DELETE CASCADE, so an unconditional delete here would cascade-destroy the
-   * just-added reply forever. Instead we use `deleteCommentIfChildless`, which
-   * re-checks childlessness under a FOR UPDATE lock inside a transaction (a plain
-   * anti-join DELETE is NOT race-safe under READ COMMITTED — see the repo method
+   * RACE: the caller read `hasChildren` BEFORE the (slow) mark removal, so a
+   * reply can land in that window. `comments.parent_comment_id` is ON DELETE
+   * CASCADE, so an unconditional delete here would cascade-destroy the just-added
+   * reply forever. Instead we use `deleteCommentIfChildless`, which re-checks
+   * childlessness under a FOR UPDATE lock inside a transaction (a plain anti-join
+   * DELETE is NOT race-safe under READ COMMITTED — see the repo method
    * docstring). If it removes the row (outcome 'deleted') we broadcast the
-   * deletion as before. If it removes 0 rows (a reply interleaved) we do NOT
-   * hard-delete — we resolve the thread instead (outcome 'resolved'), preserving
-   * the discussion and the new reply. The anchor mark is already gone by then, an
-   * accepted degradation: the thread lands in the resolved tab without its inline
+   * deletion. If it removes 0 rows (a reply interleaved) we do NOT hard-delete —
+   * we resolve the thread instead (outcome 'resolved'), preserving the discussion
+   * and the new reply. The anchor mark is already gone by then, an accepted
+   * degradation: the thread lands in the resolved tab without its inline
    * highlight — far better than losing a reply.
    */
   private async deleteEphemeralSuggestion(
@@ -794,18 +791,17 @@ export class CommentService {
 
   /**
    * Schedule removal of the inline `comment` anchor mark from the collaborative
-   * document (ephemeral suggestion #329), OFF the HTTP critical path (#399).
+   * document (ephemeral suggestion), OFF the HTTP critical path.
    *
-   * ORDERING PRESERVED: we `await` the ENQUEUE (a fast Redis add), not the mark
-   * op, and the caller only proceeds to the irreversible row hard-delete after
-   * this resolves. So the anchor-removal job is DURABLY queued before the row
-   * vanishes — a queue-add failure throws here and aborts the delete (row + mark
-   * stay consistent), preserving the invariant the old FATAL sync call gave. The
-   * mark op itself now runs async in the worker: it is idempotent and retried
-   * (3 attempts), so a transient collab failure self-heals; only an exhausted-
-   * retries job leaves a DB↔mark divergence, now VISIBLE via BullMQ failed-job
-   * metrics (was a hard 5xx before). Delete carries no state guard — the row is
-   * being removed, and stripping an absent mark is a no-op.
+   * We `await` the ENQUEUE (a fast Redis add), not the mark op, and the caller
+   * only proceeds to the irreversible row hard-delete after this resolves. So the
+   * anchor-removal job is DURABLY queued before the row vanishes — a queue-add
+   * failure throws here and aborts the delete (row + mark stay consistent). The
+   * mark op runs async in the worker: it is idempotent and retried (3 attempts),
+   * so a transient collab failure self-heals; only an exhausted-retries job leaves
+   * a DB↔mark divergence, VISIBLE via BullMQ failed-job metrics. Delete carries no
+   * state guard — the row is being removed, and stripping an absent mark is a
+   * no-op.
    */
   private async deleteCommentMark(comment: Comment, user: User): Promise<void> {
     const documentName = `page.${comment.pageId}`;
@@ -842,7 +838,7 @@ export class CommentService {
   }
 
   /**
-   * Build the audit metadata for a suggestion apply/dismiss decision (#496).
+   * Build the audit metadata for a suggestion apply/dismiss decision.
    * The subject comment is HARD-DELETED on the childless path, so the audit row
    * is the only surviving record — capture the decision's substance (what was
    * suggested, the anchored text it replaced, who authored it, who decided)

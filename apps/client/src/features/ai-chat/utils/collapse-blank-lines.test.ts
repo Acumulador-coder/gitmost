@@ -34,13 +34,12 @@ describe("collapseBlankLines", () => {
 });
 
 describe("collapseBlankLines + renderChatMarkdown (canonical converter)", () => {
-  // Chat markdown now renders through @docmost/prosemirror-markdown (issue #347):
-  // the SAME converter the editor/import use. Its list items are schema-shaped —
-  // each <li>'s content is wrapped in a <p> (listItem content is `paragraph+`) —
-  // so the HTML always carries `<li><p>…</p></li>` regardless of blank-line
-  // looseness in the source (the converter has no tight/loose distinction). The
-  // visual tightness that `collapseBlankLines` used to buy is now provided by
-  // CSS (`.markdown li p { margin: 0 }`), not the HTML shape.
+  // Chat markdown renders through @docmost/prosemirror-markdown, the SAME
+  // converter the editor/import use. Its list items are schema-shaped — each
+  // <li>'s content is wrapped in a <p> (listItem content is `paragraph+`) — so the
+  // HTML always carries `<li><p>…</p></li>` regardless of blank-line looseness in
+  // the source (the converter has no tight/loose distinction). Visual tightness
+  // comes from CSS (`.markdown li p { margin: 0 }`), not the HTML shape.
   it("renders a blank-line-separated bullet list as a real <ul> list", () => {
     const loose =
       "Intro paragraph.\n\n- item one\n\n- item two\n\n- item three";

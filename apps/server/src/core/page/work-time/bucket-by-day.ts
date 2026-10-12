@@ -123,7 +123,7 @@ function clip(
 }
 
 /**
- * #395 §6.3 — bucket sessions into calendar days of `tz` for the punch-card.
+ * §6.3 — bucket sessions into calendar days of `tz` for the punch-card.
  * Pure and deterministic. `work` and `agent_only` are unioned SEPARATELY (else
  * agent windows would swallow work windows on overlap), then each union is split
  * at tz midnight boundaries (`startOf('day')` in tz, NOT "+24h" — DST-safe §9#14)

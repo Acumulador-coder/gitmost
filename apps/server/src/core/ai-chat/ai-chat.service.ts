@@ -99,17 +99,10 @@ const MAX_AGENT_STEPS = 50;
 // prepareAgentStep).
 const STEP_BUDGET_WARNING_LEAD = 6;
 
-// Wall-clock ceiling for building the external MCP toolset during the per-turn
-// setup phase (before streamText owns the lifecycle). Defense-in-depth ABOVE the
-// per-server connect bound in mcp-clients.service (CONNECT_TIMEOUT_MS): even if
-// that per-server timeout regressed, this outer deadline — together with the run's
-// abort signal — guarantees the setup phase can never wedge a turn at step 0 (the
-// production hang) and the run always finalizes. It stays a TRUE backstop because
-// buildEntry connects to the servers CONCURRENTLY, so the total build time is
-// bounded by the SLOWEST single server (~2×CONNECT_TIMEOUT_MS), not the SUM across
-// them — the per-server bound fires first no matter how many servers are enabled,
-// and this outer deadline only catches a total build stall the per-server bound
-// somehow missed.
+// Wall-clock ceiling for building the external MCP toolset in the per-turn setup
+// phase (before streamText owns the lifecycle). A backstop above the per-server
+// CONNECT_TIMEOUT_MS in mcp-clients.service: servers connect concurrently, so the
+// per-server bound normally fires first; this only catches a total build stall.
 const MCP_TOOLSET_BUILD_DEADLINE_MS = 60_000;
 
 // Deadline for the turn-end writes (open-page snapshot + activated tools). The
@@ -129,26 +122,19 @@ const FINAL_STEP_INSTRUCTION =
   'language. If the information is incomplete, say so explicitly: summarize ' +
   'what you found, what is still missing, and give your best partial conclusion.';
 
-// SOFT final-step nudge (#444), used when the final-step lockdown toggle is OFF
-// (the new default). Unlike FINAL_STEP_INSTRUCTION it does NOT strip tools
-// (toolChoice stays untouched), so the model is never forced into a tool-less
-// state mid-work — that tool-stripping is what triggered the 255KB token-loop
-// degeneration incident. It only asks the model to finish with a text summary.
+// Soft final-step nudge, used when the final-step lockdown toggle is OFF (the
+// default). Unlike FINAL_STEP_INSTRUCTION it leaves toolChoice untouched, so the
+// model is never forced into a tool-less state mid-work; it only asks for a final
+// text summary.
 const FINAL_STEP_NUDGE =
   'This is the LAST step of this turn. Write your final answer to the user now.\n' +
   'You may still call tools, but the turn ends after this step either way —\n' +
   'prefer finishing with a clear text summary of what was done and what remains.';
 
-// Synthetic marker text appended in onFinish when a step-exhausted turn produced
-// NO text at all (#444, mitigates the "empty turn" the lockdown used to prevent
-// when the toggle is OFF). Makes the exhausted-without-answer state explicit to
-// the user and, on replay, to the model on the next turn.
-// This is a HARDCODED English sentence and is NOT localized: it is appended
-// verbatim into the assistant row's `content` and rendered/replayed as-is — the
-// client does NOT run it through `t()`, and there is no i18n key for it. English
-// replaced an earlier hardcoded Russian string (which rendered Russian for every
-// locale and fed Russian back to the model on replay). Keep it a plain,
-// model-readable English sentence so the next turn's replay reads cleanly.
+// Synthetic marker appended in onFinish when a step-exhausted turn produced no
+// text at all, so the exhausted-without-answer state is explicit to the user and,
+// on replay, to the model. Not localized: it is stored verbatim in the assistant
+// row's `content` and replayed as-is, so it stays a plain English sentence.
 const STEP_LIMIT_NO_ANSWER_MARKER =
   '(Step limit reached — no final answer was produced; the work may be ' +
   'unfinished. Reply "continue" to let the agent carry on.)';
@@ -170,13 +156,11 @@ export const CONTEXT_OVERFLOW_ERROR_PREFIX =
   'сокращена на следующем ходу.';
 
 /**
- * Compute the step-budget warning text (#444), or '' when this step is outside
- * the warning band. The warning fires on steps
- * MAX_AGENT_STEPS-STEP_BUDGET_WARNING_LEAD .. MAX_AGENT_STEPS-2 (NOT the last
- * step, which has its own final nudge/lockdown), telling the model to stop
- * exploring and start acting. `N` is the number of tool-use steps still
- * remaining (`MAX_AGENT_STEPS - 1 - stepNumber`), so it decreases toward the
- * end. Pure.
+ * Compute the step-budget warning text, or '' when this step is outside the
+ * warning band. The warning fires on steps
+ * MAX_AGENT_STEPS-STEP_BUDGET_WARNING_LEAD .. MAX_AGENT_STEPS-2 (not the last
+ * step, which has its own final nudge/lockdown). `N` is the number of tool-use
+ * steps still remaining (`MAX_AGENT_STEPS - 1 - stepNumber`). Pure.
  */
 export function stepBudgetWarning(stepNumber: number): string {
   const isLastStep = stepNumber >= MAX_AGENT_STEPS - 1;
@@ -190,35 +174,25 @@ export function stepBudgetWarning(stepNumber: number): string {
   );
 }
 
-// Pure, unit-testable: decide per-step overrides. Responsibilities:
-//   1. Final-step handling. Two modes, chosen by `finalStepLockdownEnabled`:
-//      - toggle ON (legacy): on the final allowed step force a text-only
-//        synthesis answer (toolChoice 'none' + FINAL_STEP_INSTRUCTION). This WINS
-//        — it takes precedence over the deferred-tool narrowing below.
-//      - toggle OFF (new default, #444): do NOT touch toolChoice — tools stay
-//        available on every step incl. the last, so the model is never stripped
-//        of its tools mid-work (the cause of the token-loop degeneration
-//        incident). A SOFT nudge (FINAL_STEP_NUDGE) is appended to `system`, and
-//        the deferred-tool `activeTools` narrowing still applies to the last step
-//        (both `activeTools` and `system` are returned together).
-//   2. Step-budget warning (#444): on steps in the warning band (but not the
-//      last, which has its own nudge/lockdown) append stepBudgetWarning(...) to
-//      `system` so the model starts acting before it runs out of steps.
-//   3. Deferred tool visibility (#332): when `deferredEnabled`, expose only the
-//      CORE tools + loadTools + whatever loadTools has activated so far this turn
-//      (`activatedTools`), via `activeTools`. Deferred tools stay in the
-//      <tool_catalog> until the model loads them.
+// Pure: decide per-step overrides.
+//   1. Final step, by `finalStepLockdownEnabled`:
+//      - ON: force a text-only answer (toolChoice 'none' + FINAL_STEP_INSTRUCTION);
+//        this takes precedence over the deferred-tool narrowing below.
+//      - OFF (default): toolChoice is untouched, tools stay available on the last
+//        step; FINAL_STEP_NUDGE is appended to `system` and the `activeTools`
+//        narrowing still applies.
+//   2. Step-budget warning: on steps in the warning band (not the last) append
+//      stepBudgetWarning(...) to `system`.
+//   3. Deferred tool visibility: when `deferredEnabled`, expose only the CORE
+//      tools + loadTools + whatever loadTools has activated (`activatedTools`) via
+//      `activeTools`. Deferred tools stay in the <tool_catalog> until loaded.
 //
-// `system` is the in-scope system prompt; we CONCATENATE so the original
-// persona/context is preserved — a bare `system` override would REPLACE the
-// whole system prompt for the step. `activatedTools` is a closure Set grown by
-// loadTools and owned by the streaming loop; the caller seeds it from and
-// persists it to the chat's metadata across turns (#490), but this function only
-// READS the Set it is handed, so it stays a pure function of its arguments (not
-// module-global).
+// `system` is concatenated, because a bare per-step `system` override replaces the
+// whole system prompt. `activatedTools` is a Set grown by loadTools and owned by
+// the streaming loop; this function only reads it.
 //
-// NOTE: at AI SDK v7 the per-step `system` field is renamed to `instructions`.
-// On v6 (`^6.0.134`) `system` is the correct field — adjust when bumping.
+// At AI SDK v7 the per-step `system` field is renamed to `instructions`; on v6
+// (`^6.0.134`) `system` is correct.
 export function prepareAgentStep(
   stepNumber: number,
   system: string,
@@ -279,11 +253,10 @@ const VIEW_IMAGE_INJECT_TEXT =
 
 /**
  * Build the ephemeral user-role message that carries a viewImage image to the
- * model (#588). v6 image-part shape is `{ type:'image', image:<base64>,
- * mediaType }` (the field is `mediaType`, NOT `mimeType`). Returned as a plain
- * ModelMessage; it is injected via prepareStep's `messages` override for the
- * CURRENT step only and is NEVER persisted (buildStepParts reads step.toolResults,
- * not `messages`), so it stays ephemeral. Exported for unit testing.
+ * model. v6 image-part shape is `{ type:'image', image:<base64>, mediaType }`
+ * (the field is `mediaType`, NOT `mimeType`). It is injected via prepareStep's
+ * `messages` override for the current step only and never persisted
+ * (buildStepParts reads step.toolResults, not `messages`).
  */
 export function userImageMessage(img: ViewImageCacheEntry): ModelMessage {
   return {
@@ -296,17 +269,11 @@ export function userImageMessage(img: ViewImageCacheEntry): ModelMessage {
 }
 
 /**
- * #588: has the model produced assistant TEXT on a step that comes AFTER the step
- * containing `toolCallId`? Deterministic function of the finished-steps array the
- * SDK hands prepareStep (`opts.steps`). Used to decide when to EVICT a viewImage
- * cache entry: once the model has "spoken about" the image (any later step with
- * non-empty assistant text), the image no longer needs re-injecting on every
- * subsequent step, so we stop re-billing it.
- *
- * Locate the step whose toolCalls/content references the id, then scan strictly
- * LATER steps for non-empty `text`. Returns false when the call is not yet among
- * the finished steps (it was just issued on the step being prepared), so the image
- * keeps getting injected until a genuine text step follows. Pure.
+ * Has the model produced assistant text on a step AFTER the step containing
+ * `toolCallId`? Used to evict a viewImage cache entry: once the model has spoken
+ * about the image it is no longer re-injected (and re-billed) on every step.
+ * Returns false while the call is not yet among the finished steps, so the image
+ * keeps being injected until a genuine text step follows. Pure.
  */
 export function modelSpokeAboutItAfter(
   toolCallId: string,
@@ -337,17 +304,12 @@ export function modelSpokeAboutItAfter(
 }
 
 /**
- * #588: given the current prepareStep options and the live viewImage cache, build
- * the per-step `messages` override that injects every still-live cached image as
- * an ephemeral trailing user message, and EVICT any entry the model has already
- * spoken about (see modelSpokeAboutItAfter). Returns the merged step result:
- * `base` (prepareAgentStep's disjoint {activeTools|toolChoice|system} keys) with
- * `messages` appended — the merge preserves base's keys so a toolChoice:'none'
- * lockdown step still carries the injected image to the synthesis step. Returns
- * `base` unchanged when there is nothing to inject. Mutates `cache` (eviction).
- *
- * Exported + pure w.r.t. its inputs (aside from the intended cache eviction) so
- * the injection/eviction/merge semantics are unit-testable without streamText.
+ * Build the per-step `messages` override that injects every still-live cached
+ * viewImage image as an ephemeral trailing user message, and evict any entry the
+ * model has already spoken about (see modelSpokeAboutItAfter). Returns `base`
+ * (prepareAgentStep's {activeTools|toolChoice|system}) with `messages` added, so a
+ * toolChoice:'none' lockdown step still carries the image; returns `base`
+ * unchanged when there is nothing to inject. Mutates `cache` (eviction).
  */
 export function injectViewImages(
   base: ReturnType<typeof prepareAgentStep>,
@@ -386,18 +348,14 @@ export function cleanGeneratedTitle(text: string): string {
 }
 
 /**
- * Pure, unit-testable (#198): decide whether THIS turn is an interrupt-resume,
- * i.e. it directly follows a user interruption of the previous (still-partial)
- * assistant turn. The client "send now" flag is only a HINT — confirm it against
- * the just-loaded history so a spoofed/stale flag cannot inject the interrupt
- * note onto an ordinary turn.
+ * Pure: is THIS turn an interrupt-resume, i.e. does it directly follow a user
+ * interruption of the previous assistant turn? The client "send now" flag is only
+ * a hint, confirmed against history so a spoofed/stale flag cannot inject the
+ * interrupt note onto an ordinary turn.
  *
- * `history` is the model history oldest -> newest, with the just-inserted user
- * row as its tail; the turn before it is `history[len-2]`. We treat the new turn
- * as an interrupt-resume only when the client said so AND the preceding assistant
- * turn really ended unfinished: 'aborted' (onAbort already finalized it), or
- * still 'streaming' (onAbort has not finalized yet — the abort/resend race; the
- * partial output is already in history thanks to the step-granular write path).
+ * `history` is oldest -> newest with the just-inserted user row as its tail. True
+ * only when the client said so AND the preceding assistant turn ended unfinished:
+ * 'aborted', or still 'streaming' (onAbort has not finalized it yet).
  */
 export function isInterruptResume(
   history: Array<{
@@ -528,9 +486,8 @@ export interface AiChatStreamBody {
   // CASL-enforced page tools, which 403 on a page the user cannot access.
   //
   // `selection` is the user's editor selection snapshotted client-side at send
-  // time (#388). It is CLIENT-controlled and UNTRUSTED — a loose `unknown` here
-  // (the body is parsed off req.body without a DTO) that is type-checked and
-  // capped by `sanitizeSelection` before it is ever surfaced to the model.
+  // time. It is CLIENT-controlled and UNTRUSTED (the body is parsed without a DTO);
+  // `sanitizeSelection` type-checks and caps it before the model sees it.
   openPage?: { id?: string; title?: string; selection?: unknown } | null;
   // Set by the client "send now" action (#198): this turn immediately follows a
   // user interruption of the previous turn. A hint only — the server re-confirms
@@ -550,10 +507,9 @@ export interface AiChatStreamBody {
 }
 
 /**
- * Run-lifecycle hooks (#184 phase 1). Every turn is a first-class server-side
- * RUN: `begin` is called once the chat id is known and returns the run's
- * AbortSignal (decoupled from the HTTP socket — a browser disconnect does not
- * govern the abort), and the lifecycle callbacks persist the run's progress and
+ * Run-lifecycle hooks. Every turn is a server-side RUN: `begin` is called once
+ * the chat id is known and returns the run's AbortSignal (decoupled from the
+ * HTTP socket), and the lifecycle callbacks persist the run's progress and
  * terminal status.
  */
 export interface AiChatRunHooks {
@@ -599,7 +555,7 @@ export interface AiChatStreamArgs {
 }
 
 /**
- * Per-user AI chat orchestration (§6.1/§6.5/§6.7 stage 1).
+ * Per-user AI chat orchestration.
  *
  * Message persistence shape (ai_chat_messages):
  *  - `role`        : 'user' | 'assistant'
@@ -638,11 +594,9 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
     // constructions compile unchanged; Nest always injects the real singleton, so
     // reconcile sees the SAME in-memory active/zombie maps the runner mutates.
     private readonly aiChatRunService?: AiChatRunService,
-    // #492 append-persist: per-step INSERT into the lightweight steps table (the
-    // O(Σ steps) replacement for the O(n²) full-row `metadata.parts` rewrite).
-    // OPTIONAL so existing positional constructions (int-specs) compile unchanged;
-    // Nest injects the real singleton. When ABSENT the per-step path falls back to
-    // the pre-#492 full-row flush (no regression, only no WAL win).
+    // Per-step INSERT into the steps table. Optional so positional constructions
+    // in int-specs compile; when absent the per-step path falls back to the
+    // full-row `metadata.parts` flush.
     private readonly aiChatRunStepRepo?: AiChatRunStepRepo,
     // #665: the mutable page->chat binding repo. The server is the BIRTH writer —
     // it upserts the binding right after the FIRST user message of a chat sent from
@@ -657,12 +611,9 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
   private reconcileTimer?: ReturnType<typeof setInterval>;
 
   /**
-   * Crash-recovery sweep on server start (#183): any assistant row left in the
-   * 'streaming' state is the relic of a turn whose process died before it
-   * reached a terminal status. Flip those to 'aborted' so history/export show
-   * them settled (with whatever finished steps were already persisted) instead
-   * of perpetually "streaming". Best-effort: a sweep failure is logged but must
-   * never block server startup.
+   * Startup sweep: any assistant row left 'streaming' belongs to a turn whose
+   * process died. Flip it to 'aborted' (keeping the steps already persisted).
+   * Best-effort: a sweep failure is logged and never blocks startup.
    */
   async onModuleInit(): Promise<void> {
     try {
@@ -734,9 +685,9 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * #487: the periodic BIDIRECTIONAL reconcile. Runs the clauses IN ORDER; each is
-   * best-effort (a failure of one never blocks the others). Single-process phase 1
-   * — the run service's in-memory maps are authoritative for "live entry".
+   * Periodic bidirectional reconcile. Runs the clauses in order; each is
+   * best-effort. Single-process: the run service's in-memory maps are
+   * authoritative for "live entry".
    *
    *  (a) re-drive ZOMBIE runs (a terminal write that gave up) — apply the intended
    *      status via the conditional UPDATE;
@@ -920,15 +871,12 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       }
       return null;
     }
-    // updatedAt is the page's last-modified instant, used by the #274 per-turn
-    // page-change detection as a cheap fast path (unchanged instant => skip the
-    // render + diff). The system-prompt / tool consumers ignore the extra field.
+    // updatedAt feeds the per-turn page-change fast path (unchanged instant =>
+    // skip the render + diff).
     //
-    // The sanitized editor selection (#388) is attached ONLY here, on a
-    // successful page resolve: the fail-closed branches above return null for the
-    // WHOLE context, so a selection can never outlive a foreign/missing/deleted
-    // page (decision 3). Downstream consumers that don't care (detectPageChange,
-    // snapshotOpenPage) ignore the extra field, same as updatedAt.
+    // The sanitized selection is attached only on a successful resolve: the
+    // fail-closed branches above return null for the whole context, so a selection
+    // never outlives a foreign/missing/deleted page.
     return {
       id: page.id,
       title: page.title ?? '',
@@ -938,18 +886,14 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Per-turn page-change detection (#274). The agent rebuilds its context from the
-   * DB each turn and otherwise cannot tell that the user hand-edited the open page
-   * since it last spoke — so it can silently overwrite those edits. This compares
-   * the page's CURRENT Markdown against the snapshot taken at the END of the
-   * agent's previous turn (see `snapshotOpenPage`) and, when a human changed
-   * something in between, returns a `{ title, diff }` the caller feeds to
-   * `buildSystemPrompt` as an ephemeral note.
+   * Per-turn page-change detection. The agent rebuilds its context from the DB
+   * each turn and cannot otherwise tell that the user hand-edited the open page,
+   * so it could overwrite those edits. Compares the page's current Markdown with
+   * the snapshot taken at the end of the previous turn (`snapshotOpenPage`) and
+   * returns `{ title, diff }` for `buildSystemPrompt` as an ephemeral note.
    *
-   * Edge cases: page not open / no snapshot (first turn) / page untouched since
-   * the snapshot (updatedAt fast path) / empty-after-normalization diff => null
-   * (no note). Best-effort: any fault is logged and downgraded to "no note" so it
-   * never breaks the turn.
+   * Returns null for: no open page, no snapshot, updatedAt unchanged, or an empty
+   * diff after normalization. Any fault is logged and downgraded to null.
    */
   private async detectPageChange(
     chatId: string,
@@ -999,30 +943,15 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Write the end-of-turn snapshot for the open page (#274): the page's current
-   * Markdown after ALL of the agent's edits this turn, plus the page's
-   * updated_at. The agent's own edits are therefore baked into the snapshot, so
-   * the next turn's diff isolates exactly what a HUMAN changed in between. Also
-   * seeds the snapshot on the first turn. Best-effort — a deleted/foreign page or
-   * any fault simply skips the write (no snapshot, no note next turn).
+   * Write the end-of-turn snapshot for the open page: its Markdown after all of
+   * the agent's edits this turn, plus updated_at. The agent's own edits are baked
+   * in, so the next turn's diff isolates what a human changed. Best-effort — any
+   * fault skips the write.
    *
-   * Ordering note (deliberate): read updated_at BEFORE exporting, and store that
-   * earlier value. This keeps the stored updated_at <= the true version of the
-   * stored content, which is the SAFE direction for the fast path: it can only
-   * ever be too conservative (force an extra diff), never falsely skip. Concretely
-   * — if a user edit lands in the tiny window between the read and the export, the
-   * export captures the NEW content while we store the OLDER updated_at; next turn
-   * the two updated_ats differ, so the fast path is bypassed and we diff — which
-   * resolves to "no change" because that edit is already baked into the stored
-   * content. The only cost is not emitting a page_changed note for that specific
-   * window edit, which is safe: the snapshot already contains it, so it can never
-   * be silently overwritten later.
-   *
-   * The OPPOSITE order (read updated_at AFTER the export) is what would be unsafe:
-   * a concurrent edit's NEWER updated_at would be stored alongside the OLDER
-   * exported content, and next turn's fast path would then match on updated_at and
-   * SKIP detection while the content genuinely diverged — a real missed edit. So
-   * we intentionally do NOT re-read updated_at after the export.
+   * updated_at is read BEFORE exporting, so the stored updated_at is never newer
+   * than the stored content: the fast path can only be too conservative (an extra
+   * diff), never falsely skip. Reading it after the export could pair a newer
+   * updated_at with older content and skip a real edit.
    */
   private async snapshotOpenPage(
     chatId: string,
@@ -1101,14 +1030,11 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
           | undefined;
       }
     }
-    // The open page the client sent is attacker-controllable — BOTH its id and
-    // its title. Resolve it ONCE against the DB (workspace-scoped + access-
-    // checked) and use the AUTHORITATIVE identity everywhere below: the system
-    // prompt context, the getCurrentPage tool, and the new-chat history origin.
-    // Previously the client title was echoed verbatim, so a navigation / two-tab
-    // desync (openPage.id -> page B, title -> "Page A") made the model report
-    // "updated Page A" while it edited page B (#159). Null when no page is open
-    // or the page is foreign / inaccessible / missing.
+    // The open page the client sent is attacker-controllable — both its id and
+    // its title. Resolve it once against the DB (workspace-scoped + access-checked)
+    // and use that identity everywhere below: the system prompt, getCurrentPage,
+    // and the new-chat history origin. Null when no page is open or it is foreign
+    // / inaccessible / missing.
     const openPageContext = await this.resolveOpenPageContext(
       body.openPage,
       workspace,
@@ -1141,10 +1067,9 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       isNewChat = true;
     }
 
-    // Start the durable RUN now that the chat id is known (#184 phase 1). The
-    // returned `runId` + `signal` make the turn a first-class server-side object
-    // whose abort is governed by the run (an explicit user stop), NOT by the HTTP
-    // socket — so a browser disconnect never ends the turn.
+    // Start the durable RUN now that the chat id is known. Its `signal` is the
+    // user's explicit stop, not the HTTP socket, so a browser disconnect does not
+    // end the turn.
     let run: RunHandle;
     try {
       run = await runHooks.begin(chatId);
@@ -1161,15 +1086,11 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
           code: 'A_RUN_ALREADY_ACTIVE',
         });
       }
-      // Any OTHER run-start failure (e.g. a DB-pool blip) must FAIL THE TURN,
-      // not silently stream without a run-row. The old fallback let the turn
-      // continue untracked: nobody could then abort it —
-      // /stop can't see a run that doesn't exist, a client disconnect doesn't
-      // abort it, and the one-run-per-chat gate would let a SECOND run in. That
-      // is an unstoppable, invisible run until process restart. Reject NOW,
-      // BEFORE the first byte (nothing is written yet, no user row inserted, no
-      // MCP lease taken), so the controller's post-hijack catch turns this
-      // HttpException into an honest 503 on the raw socket.
+      // Any other run-start failure must fail the turn: a turn without a run-row
+      // cannot be stopped (/stop can't see it, disconnect doesn't abort it) and
+      // the one-run-per-chat gate would admit a second run. Reject before the
+      // first byte (no user row, no MCP lease yet) so the controller's
+      // post-hijack catch turns this HttpException into a 503.
       this.logger.error(
         `Failed to begin agent run (chat ${chatId}); failing the turn`,
         err as Error,
@@ -1208,47 +1129,33 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       const incoming = lastUserMessage(body.messages);
       const incomingText = uiMessageText(incoming);
 
-      // #489: sanitize client-supplied parts ON RECEIPT. The client only ever
-      // sends `sendMessage({ text })` (a single text part); there is no
-      // file/attachment path. Any other part — most dangerously a tool-part in
-      // `input-available` state — is untrusted data that, once persisted to
-      // `metadata.parts` verbatim, is REPLAYED through convertToModelMessages on
-      // every later turn. A malformed tool-part makes that conversion throw,
-      // 500-ing every future turn of the chat forever ("bricked"). Drop any
-      // non-whitelisted part with a warn.
+      // Sanitize client-supplied parts on receipt. The client only sends a single
+      // text part; any other part (most dangerously a tool-part in
+      // `input-available` state) would be persisted and replayed through
+      // convertToModelMessages on every later turn, and a malformed one makes
+      // that throw on every turn. Drop non-whitelisted parts with a warn.
       const sanitizedParts = sanitizeUserParts(incoming?.parts, (type) =>
         this.logger.warn(
           `Dropping unsupported user message part '${type}' on chat ${chatId}`,
         ),
       );
 
-      // #489: rebuild the conversation from persisted history (not the client
-      // payload) and CONVERT it to model messages BEFORE persisting the user row.
-      // Load the OLD history (WITHOUT the new row) and append the incoming turn in
-      // memory for the conversion. This makes the insert happen only after a
-      // successful conversion, so a conversion failure cannot leave a DUPLICATE
-      // user row behind on the client's retry (the "bricked chat" that accreted a
-      // dup on every 500). `findAllByChat` returns chronological order (oldest ->
-      // newest) and keeps a 5000-row memory-safety backstop (on overflow it keeps
-      // the NEWEST rows and logs a warning); that is a safety net far above any
-      // realistic chat, not a conversational limit.
+      // Rebuild the conversation from persisted history (not the client payload)
+      // and convert it to model messages BEFORE persisting the user row, so a
+      // conversion failure cannot leave a duplicate user row behind on retry.
+      // `findAllByChat` returns oldest -> newest with a 5000-row memory backstop
+      // (on overflow it keeps the newest rows and warns).
       const oldHistory = await this.aiChatMessageRepo.findAllByChat(
         chatId,
         workspace.id,
       );
-      // #492: HYDRATE needy assistant rows from the steps table BEFORE the replay
-      // map. A #492 mid-run assistant row carries only a step marker
-      // (metadata.parts:[]); its real per-step parts live in `ai_chat_run_steps`.
-      // The graceful terminal callbacks (onFinish/onError/onAbort -> flushAssistant)
-      // assemble the full inline parts, so a normally-ended turn already has them.
-      // But a HARD crash mid-run (SIGKILL/OOM) fires NO terminal callback, so the
-      // row stays parts:[]; without this, rowToUiMessage falls back to an empty
-      // text part and the partial tool-calls/results/text — durable in the steps
-      // table — would DROP OUT of the model's replay context (regressing #183
-      // step-granular durability for the model consumer). Mirrors the controller's
-      // withReconstructedParts EXACTLY (same needy predicate + hydration helper).
-      // Guarded on the optional repo: absent (positional test builds) degrades to
-      // the current behavior rather than crashing.
+      // Hydrate assistant rows from the steps table before the replay map. A
+      // mid-run row carries only a step marker (metadata.parts:[]) with its parts
+      // in `ai_chat_run_steps`; the terminal callbacks assemble inline parts, but
+      // a hard crash (SIGKILL/OOM) fires none, and without this the partial
+      // tool calls/results/text would drop out of the model's replay. Mirrors the
+      // controller's withReconstructedParts (same predicate + helper). Skipped when
+      // the optional repo is absent.
       let replayHistory = oldHistory;
       if (this.aiChatRunStepRepo) {
         const needy = oldHistory.filter(
@@ -1298,15 +1205,11 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         metadata: (sanitizedParts ? { parts: sanitizedParts } : null) as never,
       });
 
-      // #665 BIRTH BIND: on the FIRST saved user message of this chat sent FROM a
-      // page, point that page's binding at this chat. The gate is a FACT, not a
-      // code path — `oldHistory.length === 0` (loaded above, WITHOUT the row just
-      // inserted) means "this is the first user message this chat ever persisted".
-      // It deliberately is NOT `isNewChat`: a chat orphaned when runHooks.begin
-      // failed has isNewChat=false on its retry but still oldHistory.length===0, and
-      // must bind then (else its page never rebinds). Later turns (oldHistory>0)
-      // never rebind — which preserves the agent-badge deeplink and "navigation
-      // doesn't bind" decisions.
+      // Birth bind: on the FIRST saved user message of this chat sent from a page,
+      // point that page's binding at this chat. The gate is
+      // `oldHistory.length === 0` (loaded without the row just inserted), not
+      // `isNewChat`: a chat orphaned when runHooks.begin failed has isNewChat=false
+      // on its retry but must still bind. Later turns never rebind.
       //
       // The bound page is `openPageContext.id` — the VALIDATED page the message was
       // sent from (not `ai_chats.page_id`): on an orphan retry from another page Y
@@ -1338,13 +1241,9 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Interrupt-resume detection (#198): the client "send now" flag is only a
-      // hint — confirm it against the persisted history (the preceding assistant
-      // turn must really be aborted/streaming) so a spoofed flag cannot inject the
-      // interrupt note onto an ordinary turn. The partial output the model needs is
-      // already in `messages`: a #492 mid-run row's per-step parts live only in the
-      // `ai_chat_run_steps` table and were hydrated into the replay history above,
-      // so the aborted assistant turn replays WITH its partial parts intact.
+      // Interrupt-resume detection: confirm the client "send now" hint against the
+      // persisted history. The aborted turn's partial parts are already in
+      // `messages` (hydrated from the steps table above).
       // Append the new user turn (shape-only) so index -2 is the prior assistant.
       const interrupted = isInterruptResume(
         [...oldHistory, { role: 'user', status: null, metadata: null }],
@@ -1444,13 +1343,10 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       }
 
       // Build the external MCP toolset FIRST so the system prompt can carry each
-      // connected server's admin-authored guidance (#180). Merge in admin-
-      // configured external MCP tools (web search, etc.; §6.8). A down/slow
-      // external server never crashes the turn — toolsFor skips it and records the
-      // outcome. The returned client handles MUST be closed in the streamText
-      // lifecycle (onFinish/onError/onAbort) — leaking them is a bug. Docmost
-      // tools take precedence on a name clash (external are namespaced, so a clash
-      // is not expected; the spread order makes intent explicit).
+      // connected server's admin-authored guidance. A down/slow external server
+      // never crashes the turn — toolsFor skips it and records the outcome. The
+      // returned client handles MUST be closed in onFinish/onError/onAbort. Docmost
+      // tools take precedence on a name clash (external ones are namespaced).
       let external: Awaited<ReturnType<McpClientsService['toolsFor']>> = {
         tools: {},
         clients: [],
@@ -1463,17 +1359,12 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       // build, or a single synthetic record when the whole build fails below.
       let mcpFailures: McpFailureRecord[] = [];
       try {
-        // Bound the external-MCP toolset build by BOTH the run's abort signal and
-        // a generous wall-clock deadline. This is the pre-streamText setup phase,
-        // which streamText's terminal callbacks do NOT yet govern — so without this
-        // a hung build would hang the turn at step 0 forever (the production hang),
-        // unobservant of an explicit Stop. The deadline is defense-in-depth ABOVE
-        // the per-server connect bound in mcp-clients.service. On a LATE resolve
-        // (the race was already lost) RELEASE the abandoned toolset's leases —
-        // c.close() here is the lease handle, so it decrements the cache entry's
-        // refcount; it does NOT force-close the transports (the cache OWNS the
-        // clients and closes them on TTL/evict). This just prevents the lease
-        // refcount from being pinned >=1 forever by a toolset nobody will consume.
+        // Bound the toolset build by the run's abort signal and a wall-clock
+        // deadline: streamText's terminal callbacks do not govern this setup phase,
+        // so a hung build would otherwise hang the turn at step 0 and ignore Stop.
+        // On a late resolve, release the abandoned toolset's leases — c.close()
+        // decrements the cache entry's refcount (the cache owns and closes the
+        // transports on TTL/evict).
         external = await raceAgainstAbortAndTimeout(
           // #686: the toolset is per-user — admin servers ∪ THIS user's personal
           // servers. `user.id` is REQUIRED (the cache is always keyed per-user).
@@ -1489,9 +1380,8 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         // Surface per-server connect failures (ok:false outcomes), capped.
         mcpFailures = buildMcpFailures(external.outcomes);
       } catch (err) {
-        // An explicit Stop reached the RUN's signal DURING setup: re-throw so the
-        // outer catch finalizes the run as aborted — never swallow a Stop (from
-        // /ai-chat/stop or a supersede).
+        // An explicit Stop reached the run's signal during setup: re-throw so the
+        // outer catch finalizes the run as aborted.
         if (runSignal.aborted) {
           throw err;
         }
@@ -1517,14 +1407,11 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         ];
       }
 
-      // Close every external client EXACTLY ONCE across the turn's terminal
-      // callbacks (onFinish/onError/onAbort all fire at most once collectively,
-      // but guard anyway). DEFINED HERE — before the prompt/toolset are built — so
-      // that if buildSystemPrompt or forUser throws AFTER the external lease was
-      // taken (toolsFor above), the lease is still released. Otherwise its refCount
-      // stays >= 1 forever and the external undici sockets leak until restart
-      // (#180 reorder moved toolsFor ahead of these; #185 review). Close errors are
-      // swallowed so they never break the response.
+      // Close every external client exactly once across the terminal callbacks.
+      // Defined before the prompt/toolset are built so that if buildSystemPrompt
+      // or forUser throws after toolsFor took the lease, the lease is still
+      // released (otherwise its refCount stays >= 1 and sockets leak). Close
+      // errors are swallowed.
       let clientsClosed = false;
       const closeExternalClients = async (): Promise<void> => {
         if (clientsClosed) return;
@@ -1542,16 +1429,11 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         );
       };
 
-      // Turn-end snapshot of the open page (#274), run EXACTLY ONCE across the
-      // terminal callbacks. This MUST run on onError/onAbort too, not only on the
-      // successful onFinish: the write tools commit page edits to the DB
-      // synchronously during a step, so an agent edit followed by an abort/error
-      // (client disconnect, stop(), provider failure) still persists and bumps
-      // page.updatedAt. If the snapshot did not advance on those paths, the NEXT
-      // turn would diff the agent's OWN committed edit against the stale previous
-      // snapshot and mis-report it as a user edit — breaking the "own edits excluded
-      // by construction" guarantee. Best-effort (snapshotOpenPage swallows + logs);
-      // skipped when no page is open.
+      // Turn-end snapshot of the open page, run exactly once across the terminal
+      // callbacks — including onError/onAbort: write tools commit edits during a
+      // step, so an edit followed by an abort still bumps page.updatedAt, and a
+      // stale snapshot would make the next turn report the agent's own edit as a
+      // user edit. Best-effort; skipped when no page is open.
       let snapshotWritten = false;
       const snapshotTurnEnd = async (): Promise<void> => {
         if (snapshotWritten) return;
@@ -1581,14 +1463,12 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       const finalStepLockdownEnabled =
         this.environment.isAiChatFinalStepLockdownEnabled();
 
-      // viewImage vision tool (#588). Default OFF (fail-closed). The SAME flag
-      // gates BOTH the tool registration (forUser below) AND the prepareStep image
-      // injection: when off, neither exists and the turn is byte-identical to
-      // before. `viewImageCache` is a per-run closure Map shared BY REFERENCE with
-      // viewImage.execute (which writes the delivered image bytes keyed by
-      // toolCallId) — NOT experimental_context (the SDK marks that immutable inside
-      // a tool execute). prepareStep reads it to inject the image as an ephemeral
-      // user-role message on every step after the call, until the model has spoken.
+      // viewImage vision tool. Default OFF. The same flag gates both the tool
+      // registration (forUser) and the prepareStep image injection. `viewImageCache`
+      // is a per-run Map shared by reference with viewImage.execute (which stores
+      // the image keyed by toolCallId) — not experimental_context, which the SDK
+      // treats as immutable inside execute. prepareStep injects each image as an
+      // ephemeral user message on every later step until the model has spoken.
       const viewImageEnabled = this.environment.isAiChatViewImageEnabled();
       const viewImageCache: ViewImageCache = new Map();
 
@@ -1656,24 +1536,18 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       // name clash — external are namespaced, so no clash is expected).
       const baseTools = { ...external.tools, ...docmostTools };
 
-      // Deferred tool loading state (#332), scoped to THIS streaming loop:
-      //  - `activatedTools` is a fresh closure Set per streamText call (not
-      //    module-global), SEEDED from the chat's persisted metadata.activatedTools
-      //    (#490, just below) so activation carries across turns. loadTools.execute
-      //    adds to it; prepareAgentStep reads it to widen `activeTools` on the NEXT
-      //    step; turn end persists it back.
-      //  - `validDeferredNames` = every tool that is NOT core (the in-app deferred
-      //    tools + ALL external MCP tools), computed from the ACTUAL toolset so an
-      //    external tool is loadable by its namespaced name. loadTools rejects any
-      //    name outside this set.
+      // Deferred tool loading state, scoped to this streaming loop:
+      //  - `activatedTools`: a per-call Set seeded from the chat's persisted
+      //    metadata.activatedTools; loadTools.execute adds to it, prepareAgentStep
+      //    reads it, turn end persists it back.
+      //  - `validDeferredNames`: every non-core tool (in-app deferred + all external
+      //    MCP tools, by namespaced name). loadTools rejects any name outside it.
       const validDeferredNames = new Set<string>(
         Object.keys(baseTools).filter((k) => !CORE_TOOL_SET.has(k)),
       );
-      // #490: seed the activation set from the chat's PERSISTED set so the model
-      // does not re-run loadTools every turn to re-activate the same tools. Only
-      // when deferred loading is enabled, and ALWAYS intersected with the CURRENT
-      // valid deferred names — an allowlist/role change must never resurrect a tool
-      // that no longer exists (prepareAgentStep would get a phantom active name).
+      // Seed from the persisted set (only when deferred loading is enabled),
+      // intersected with the current valid names so an allowlist/role change never
+      // resurrects a tool that no longer exists.
       const activatedTools = new Set<string>(
         deferredEnabled
           ? seedActivatedTools(chatMetadata, validDeferredNames)
@@ -1768,24 +1642,20 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       // not re-stringified on every subsequent onStepFinish flush (was O(N²)).
       const partsCache: StepPartsCache = new WeakMap();
 
-      // Token-degeneration guard (#444). When the final-step lockdown is OFF, a
-      // runaway repetition loop (the 255KB "loadTools." incident) is aborted via
-      // this internal controller, unioned with the run signal below. The
-      // detector runs on `inProgressText` in onChunk, throttled by growth so the
-      // pure rules only fire every ~DEGENERATION_CHECK_STEP bytes.
+      // Token-degeneration guard: when the final-step lockdown is OFF, a runaway
+      // repetition loop is aborted via this controller, unioned with the run
+      // signal below. The detector runs on `inProgressText` in onChunk, every
+      // ~DEGENERATION_CHECK_STEP bytes of growth.
       const degenerationController = new AbortController();
       let degenerationDetected = false;
       let lastDegenerationCheckLen = 0;
 
-      // Step-granular durability (#183): create the assistant row UPFRONT in the
-      // 'streaming' state (before any token), then UPDATE it as each step finishes
-      // and finalize it once on the terminal callback. If the process dies
-      // mid-turn the row survives with every finished step already persisted; the
-      // startup sweep (sweepStreaming) later flips a dangling 'streaming' row to
-      // 'aborted'. The DB is now the single source of truth for the turn — the
-      // socket is never required for the write path. A failed upfront insert is
-      // logged and leaves assistantId undefined; the per-step/terminal updates then
-      // no-op (guarded below) so the turn still streams to the user.
+      // Step-granular durability: create the assistant row upfront as 'streaming',
+      // UPDATE it as each step finishes and finalize it on the terminal callback.
+      // If the process dies mid-turn the finished steps survive and the startup
+      // sweep flips the row to 'aborted'. A failed upfront insert leaves
+      // assistantId undefined; the per-step/terminal updates then no-op and the
+      // turn still streams.
       let assistantId: string | undefined;
       try {
         const seed = flushAssistant([], '', 'streaming', { pageChanged });
@@ -1822,15 +1692,11 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Per-step (non-terminal) update: persist the finished steps the moment a
-      // step ends. Tolerant — a failed update is logged and swallowed so it never
-      // throws into the stream. Keeps status 'streaming'.
-      //
-      // #491: it now SIGNALS its outcome — the persisted `stepsPersisted` count on
-      // a CONFIRMED write, or null when it was skipped/failed. The caller rotates
-      // the run-stream registry ring ONLY on a non-null return (a confirmed
-      // persist), so a failed persist never rotates away a step nobody has (the
-      // classic inversion bug); a failure just makes the ring cover more.
+      // Per-step (non-terminal) update: persist the finished steps when a step
+      // ends; keeps status 'streaming'. A failed update is logged and swallowed.
+      // Returns `stepsPersisted` on a confirmed write, else null; the caller
+      // rotates the run-stream registry ring only on non-null, so a failed persist
+      // never rotates away a step nobody has.
       const updateStreaming = async (): Promise<number | null> => {
         if (!assistantId) return null;
         // Cheap short-circuit once the turn is finalized (see `finalized` below).
@@ -1909,16 +1775,13 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
       let stepUpdateChain: Promise<void> = Promise.resolve();
 
       // The terminal callbacks are NOT mutually exclusive in the SDK: a Stop after
-      // the first finished step fires onAbort (synchronously, not awaited) and
-      // THEN onFinish (the stream's flush still sees the finished steps, and hands
-      // them over with an empty usage and finishReason 'other'); a mid-stream
-      // provider error fires onError and then onFinish the same way. Whichever
-      // callback fires FIRST owns the turn's terminal handling — one terminal row
-      // write, one run settle, one title — and every later one returns without
-      // touching anything (otherwise a Stop could race a 'completed' write and
-      // settle the run as succeeded, and a stopped new chat still got a title).
-      // Claimed synchronously, before any await, so two callbacks can never both
-      // pass it.
+      // a finished step fires onAbort (synchronously, not awaited) and then
+      // onFinish (with the finished steps, an empty usage and finishReason
+      // 'other'); a mid-stream provider error fires onError and then onFinish the
+      // same way. The callback that fires first owns the terminal handling (one
+      // row write, one run settle, one title); every later one returns without
+      // touching anything. Claimed synchronously, before any await, so two
+      // callbacks cannot both pass it.
       let terminalClaimed = false;
       const claimTerminal = (): boolean => {
         if (terminalClaimed) return false;
@@ -1926,18 +1789,12 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
         return true;
       };
 
-      // Terminal finalize: write the completed/error/aborted row exactly once —
-      // called only by the callback that claimed the terminal above, mirroring the
-      // pre-#183 persist-at-most-once guard for the TERMINAL status (the row may be
-      // updated many times with 'streaming' before this fires once).
-      // #487: the once-gate closes ONLY AFTER a successful write, and the write is
-      // BOUNDED-RETRIED. Previously `finalized` was set BEFORE the write and never
-      // retried, so a single failed UPDATE stranded the row 'streaming' forever
-      // (the boot-only sweep was the only recovery). Now a transient blip is ridden
-      // out in place; a total give-up leaves the gate OPEN and logs, and the
-      // periodic reconcile (clauses b/d) later settles the row. Returns whether the
-      // terminal write LANDED, so the caller can error-mark the RUN on a message
-      // failure (the run is finalized regardless — never gated on the message).
+      // Terminal finalize: write the completed/error/aborted row exactly once,
+      // from the callback that claimed the terminal above. The once-gate closes
+      // only after a successful write, which is retried a bounded number of times;
+      // on give-up the gate stays open and the periodic reconcile settles the row.
+      // Returns whether the write landed, so the caller can error-mark the run
+      // (the run is finalized regardless).
       let finalized = false;
       const FINALIZE_MSG_MAX_ATTEMPTS = 3;
       const finalizeAssistant = async (
@@ -2081,15 +1938,11 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
             // text re-grows past the old offset — a whole degenerate step could slip
             // through undetected. Zeroing it re-arms the check from the next byte.
             lastDegenerationCheckLen = 0;
-            // Step-granular durability (#183): persist this finished step (its text +
-            // tool calls + tool RESULTS) the moment it ends, so a process death after
-            // this point still recovers the step. Not awaited here (never block the
-            // stream), but SERIALIZED via stepUpdateChain so the writes commit in
-            // step order; updateStreaming is error-tolerant (logs + swallows).
-            // #491: on a CONFIRMED persist, rotate the run-stream registry ring to
-            // drop the now-on-disk steps (stamp < stepsPersisted). Identity-checked
-            // in the registry; a null return (skipped/failed) rotates NOTHING
-            // (auto-safe).
+            // Persist this finished step (text + tool calls + results) when it
+            // ends. Not awaited, but serialized via stepUpdateChain so writes commit
+            // in step order. On a confirmed persist, rotate the run-stream registry
+            // ring to drop the on-disk steps (stamp < stepsPersisted); a null
+            // return rotates nothing.
             stepUpdateChain = stepUpdateChain.then(async () => {
               const persisted = await updateStreaming();
               if (persisted != null) {
@@ -2108,32 +1961,18 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
             // A Stop or a mid-stream error already claimed the terminal (see
             // claimTerminal): this late onFinish must not write 'completed' over it.
             if (!claimTerminal()) return;
-            // Finalize the assistant row (#183): the upfront 'streaming' row is
-            // UPDATEd to 'completed' with the turn's final text, cumulative usage and
-            // full UIMessage parts. We pass the SDK `steps` (which carry the final
-            // step's text) as the captured steps so metadata.parts matches the
-            // pre-#183 onFinish record exactly; `inProgressText` is '' here (the last
-            // step already finished). Final-step usage (usage.input+output) ≈ the
-            // conversation's CURRENT context size, distinct from totalUsage.
+            // Finalize the upfront row to 'completed' with the final text,
+            // cumulative usage and full UIMessage parts. `inProgressText` is '' here
+            // (the last step already finished). Final-step usage
+            // (usage.input+output) ≈ the conversation's current context size,
+            // distinct from totalUsage. `content` concatenates every step's text;
+            // the UI and export render from `metadata.parts`.
             //
-            // COLUMN-SEMANTICS NOTE (#183): `content` is built by flushAssistant as
-            // the CONCATENATION of every step's text (stepsText), whereas pre-#183
-            // it stored only the FINAL step's text. This is a deliberate, harmless
-            // change: the UI and the Markdown export render from `metadata.parts`
-            // (per-step text + tool parts), not from `content`; `content` is the
-            // plain-text projection (full-text search / fallback). A multi-step
-            // turn's `content` therefore now holds all steps' prose, not just the
-            // last block.
-            // Empty-turn mitigation (#444, toggle OFF). If the turn burned all its
-            // steps WITHOUT ever producing text (every step's text is empty) and
-            // the model stopped because it hit the step cap, there is no answer to
-            // show — the lockdown used to force one. Append a synthetic marker as
-            // the trailing text so the exhausted-without-answer state is explicit
-            // to the user and, on replay, to the model next turn. `flushAssistant`
-            // takes this as the `inProgressText` trailing text arg (empty here
-            // otherwise). `stepCountIs(MAX_AGENT_STEPS)` surfaces as
-            // finishReason === 'tool-calls' (or a length/other cap), so we key off
-            // "no text produced" rather than a single finishReason string.
+            // Empty-turn mitigation (lockdown OFF): if the turn used all its steps
+            // without producing any text, append STEP_LIMIT_NO_ANSWER_MARKER as the
+            // trailing text. `stepCountIs(MAX_AGENT_STEPS)` surfaces as
+            // finishReason 'tool-calls' (or another cap), so this keys off "no text
+            // produced" rather than a finishReason.
             const producedText = (steps as StepLike[]).some((s) => s.text?.trim());
             const stepExhausted = steps.length >= MAX_AGENT_STEPS;
             const emptyTurnMarker =
@@ -2193,11 +2032,10 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
                 : 'Assistant message could not be persisted (finalize failed).',
             );
 
-            // Lifecycle: release the external MCP clients leased for this turn.
-            // The lease release is the last per-turn action an observer (the
-            // turn-lifecycle integration test's barrier, an operator watching
-            // connections) treats as "turn finished" — so it runs after the
-            // turn-end writes and the settle, never before.
+            // Release the external MCP clients leased for this turn. Runs after
+            // the turn-end writes and the settle: observers (the turn-lifecycle
+            // integration test, operators) treat the lease release as "turn
+            // finished".
             await closeExternalClients();
 
             // Generate the chat title for a freshly created chat AFTER the stream's
@@ -2336,38 +2174,24 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
-        // Drain the stream independently of the client socket so the turn always
-        // runs to completion (or to its abort) and the terminal callbacks
-        // (onFinish/onError/onAbort) fire — releasing the per-turn object graph
-        // (history, the per-request toolset closures, captured steps, SDK buffers)
-        // and closing leased MCP clients. WITHOUT this, a client disconnect leaves
-        // the pipe's dead socket as the only reader; backpressure stalls the stream,
-        // the callbacks never run, and every dropped turn stays rooted in memory —
-        // the heap-OOM leak. consumeStream removes that backpressure (AI SDK v6
-        // "Handling client disconnects"). NOT awaited (fire-and-forget); the stream
-        // errors are already logged by the streamText `onError` callback above, so
-        // swallow here to avoid an unhandledRejection.
+        // Drain the stream independently of the client socket so the turn runs to
+        // completion (or abort) and the terminal callbacks fire, releasing the
+        // per-turn object graph and leased MCP clients. Without it a disconnect
+        // leaves a dead socket as the only reader, backpressure stalls the stream
+        // and the turn stays in memory (AI SDK v6 "Handling client disconnects").
+        // Fire-and-forget; errors are already logged by streamText's onError.
         void result.consumeStream({ onError: () => undefined });
 
         // Stream the UI-message protocol straight to the hijacked Node response.
-        // Without onError the AI SDK masks the cause ('An error occurred.') and the
-        // UI shows a generic failure. Surface the real provider message instead.
-        // AI SDK error messages / 4xx bodies never contain the API key, so this is
-        // safe; we never dump the resolved config/apiKey.
+        // Without onError the AI SDK masks the cause ('An error occurred.'); surface
+        // the real provider message (it never contains the API key).
         //
-        // SSE buffering / proxy note: pipeUIMessageStreamToResponse writes the
-        // headers immediately (res.writeHead) and each chunk incrementally, and the
-        // SDK's default UI_MESSAGE_STREAM_HEADERS already include
-        // `x-accel-buffering: no` (disables nginx response buffering) plus
-        // `content-type: text/event-stream` and `cache-control: no-cache`. We pass
-        // `headers` explicitly anyway so the intent is visible here and survives any
-        // future change to the SDK defaults (prepareHeaders only fills a header when
-        // absent, so this never clobbers the SDK's content-type). DEPLOYMENT: the
-        // reverse proxy in front of this server MUST NOT buffer this route, or the
-        // whole response is released at once and nothing streams. nginx honours the
-        // `x-accel-buffering: no` header we send (and additionally set
-        // `proxy_buffering off; proxy_cache off;` for /api/ai-chat/stream); traefik
-        // does not buffer responses by default.
+        // The SDK's default headers already include `x-accel-buffering: no`,
+        // `content-type: text/event-stream` and `cache-control: no-cache`;
+        // `headers` is passed explicitly anyway (prepareHeaders only fills absent
+        // headers). DEPLOYMENT: the reverse proxy MUST NOT buffer this route
+        // (nginx honours x-accel-buffering; also set `proxy_buffering off;
+        // proxy_cache off;` for /api/ai-chat/stream; traefik does not buffer).
         // Scrub the SDK's hop-by-hop Connection header before it writes the head (Safari/HTTP2).
         stripStreamingHopByHopHeaders(res.raw);
         // Running sum of per-step usage (v6 `finish-step.usage` is per-step). Sent
@@ -2383,21 +2207,14 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
           // Seeding is best-effort: when it failed, let the client generate the id.
           ...(assistantId ? { generateMessageId: () => assistantId } : {}),
           headers: { 'X-Accel-Buffering': 'no' },
-          // Surface the authoritative chatId on the streamed assistant UI message so
-          // the client adopts the REAL id of the row we created, instead of guessing
-          // the newest chat in its list. `messageMetadata` is invoked by the AI SDK
-          // on the `start`, `finish-step` and `finish` stream parts (ai@6 — note the
-          // `finish-step` trigger relies on it being delivered as its own
-          // message-metadata chunk); we attach `chatId` on the `start` part so it
-          // reaches the client (as message.metadata.chatId) at the very first chunk —
-          // before any second tab can race a newer chat into the list. This fixes the
-          // two-tab "adoption race" (#137).
+          // Attach the authoritative chatId on the `start` part so the client adopts
+          // the real chat id at the first chunk instead of guessing the newest chat
+          // in its list. `messageMetadata` runs on `start`, `finish-step` and
+          // `finish` (ai@6).
           //
-          // `finish-step.usage` is PER-STEP (not cumulative) in v6, and the client
-          // merges each metadata.usage by replacement — so on a multi-step agent turn
-          // (up to MAX_AGENT_STEPS) the naive per-step value would make the live
-          // counter jump DOWN at each boundary. We keep a running sum here and send
-          // the CUMULATIVE usage, which converges to `finish.totalUsage` (#151).
+          // `finish-step.usage` is per-step in v6 and the client replaces
+          // metadata.usage, so send the running cumulative sum (it converges to
+          // `finish.totalUsage`) instead of letting the counter jump down.
           messageMetadata: ({ part }) => {
             const p = part as StreamMetadataPart;
             if (p.type === 'finish-step') {
@@ -2472,12 +2289,11 @@ export class AiChatService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * One-shot page-title generation from a note's content (#199). No tools, no
-   * streaming — mirrors generateTitle() but for an arbitrary note body supplied
-   * by the client, and RETURNS the title instead of writing it (the client
-   * applies it via the existing /pages/update route, which enforces edit
-   * permission). The content is truncated to keep the prompt cheap and within
-   * context limits. Throws AiNotConfiguredException (503) if AI is unconfigured.
+   * One-shot page-title generation from a note's content. No tools, no
+   * streaming; returns the title instead of writing it (the client applies it via
+   * /pages/update, which enforces edit permission). The content is truncated to
+   * keep the prompt cheap. Throws AiNotConfiguredException (503) if AI is
+   * unconfigured.
    */
   async generatePageTitle(
     workspaceId: string,
@@ -2589,22 +2405,9 @@ export function accumulateStepUsage(
 }
 
 /**
- * Pure metadata builder for the streamed assistant UI message. The AI SDK calls
- * `messageMetadata` on the `start`, `finish-step` and `finish` stream parts; we
- * attach (as `message.metadata`):
- *  - `start`        -> `{ chatId }` so the client adopts the real created chat id
- *                      at the first chunk (see adopt-chat-id.ts / #137).
- *  - `finish-step`  -> `{ usage }` the CUMULATIVE authoritative usage so far
- *                      (incl. reasoning tokens) — the caller passes the running
- *                      sum (`cumulativeStepUsage`), since v6 per-step usage is not
- *                      cumulative; the client snaps to exact without jumping down.
- *  - `finish`       -> `{ usage }` from the turn's `totalUsage` (final reconcile).
- * Any other part type contributes no metadata. Pure + unit-testable.
- */
-/**
- * One external-MCP connection failure surfaced to the client + persisted (#686
- * P4). `name` is the server's display name (or `(external toolset)` for a total
- * build failure); `reason` is a short, non-sensitive cause (never a URL/header).
+ * One external-MCP connection failure surfaced to the client and persisted.
+ * `name` is the server's display name (or `(external toolset)` for a total build
+ * failure); `reason` is a short, non-sensitive cause (never a URL/header).
  */
 export interface McpFailureRecord {
   name: string;
@@ -2644,6 +2447,16 @@ export function buildMcpFailures(
   return out;
 }
 
+/**
+ * Metadata for the streamed assistant UI message. The AI SDK calls
+ * `messageMetadata` on the `start`, `finish-step` and `finish` parts:
+ *  - `start`        -> `{ chatId }` so the client adopts the real chat id at the
+ *                      first chunk (see adopt-chat-id.ts).
+ *  - `finish-step`  -> `{ usage }`, the cumulative usage so far (the caller passes
+ *                      the running sum, since v6 per-step usage is not cumulative).
+ *  - `finish`       -> `{ usage }` from the turn's `totalUsage`.
+ * Any other part type contributes no metadata. Pure.
+ */
 export function chatStreamMetadata(
   part: StreamMetadataPart,
   chatId: string,
@@ -2697,12 +2510,10 @@ export function lastAssistantContextTokens(
 }
 
 /**
- * Seed the per-turn deferred-tool activation set from a chat's persisted metadata
- * (#490), INTERSECTED with the current valid deferred names. Persisting the set
- * across turns saves the model re-running loadTools every turn to re-activate the
- * same tools; intersecting on load means a changed allowlist / role can never
- * resurrect a tool that no longer exists (which would hand prepareAgentStep a
- * phantom active name). Tolerant of any stored shape — a non-array is ignored.
+ * Seed the per-turn deferred-tool activation set from a chat's persisted
+ * metadata, intersected with the current valid deferred names so a changed
+ * allowlist / role never resurrects a tool that no longer exists. A non-array
+ * stored value is ignored.
  */
 export function seedActivatedTools(
   metadata: Record<string, unknown> | undefined,
@@ -2722,18 +2533,13 @@ export function seedActivatedTools(
 }
 
 /**
- * How many CONSECUTIVE recent turns were rejected for CONTEXT OVERFLOW (#490/#520):
- * `k`, read from the most recent assistant row's `metadata.replayOverflowCount`
- * (stamped by the stream's onError, incremented each consecutive overflow and reset
- * to 0 on any clean finalize). The next turn's budgeter feeds this to
- * {@link resolveEffectiveReplayThreshold} to trim with ESCALATING aggression — the
- * reactive recovery. Only the LAST assistant turn matters (its count already carries
- * the consecutive streak; an older overflow followed by a clean turn was recovered),
- * so we stop at the first assistant row scanning backwards.
+ * How many consecutive recent turns were rejected for context overflow: `k`, read
+ * from the most recent assistant row's `metadata.replayOverflowCount` (incremented
+ * by onError on each consecutive overflow, reset to 0 on a clean finalize). The
+ * next turn feeds it to {@link resolveEffectiveReplayThreshold} to trim with
+ * escalating aggression. Only the last assistant row matters.
  *
- * BACK-COMPAT: a row written by the pre-#520 boolean stamp (`replayOverflow: true`,
- * no count) is read as k=1 — the old single 0.5× behavior — so in-flight chats do
- * not regress across the deploy.
+ * A row with the boolean stamp (`replayOverflow: true`, no count) reads as k=1.
  */
 export function lastAssistantReplayOverflowCount(
   history: ReadonlyArray<AiChatMessage>,
@@ -2783,12 +2589,10 @@ function textPart(text: string): Array<{ type: 'text'; text: string }> {
 }
 
 /**
- * Part types accepted on an INCOMING user turn (#489). The client only ever
- * sends `sendMessage({ text })` (a single text part); there is no file/attachment
- * path. Everything else on a client-supplied user message — most dangerously a
- * tool-part in `input-available` state — is untrusted data that would be
- * persisted to `metadata.parts` verbatim and replayed through
- * `convertToModelMessages` on every later turn, potentially bricking the chat.
+ * Part types accepted on an incoming user turn. The client only sends a single
+ * text part; anything else (most dangerously a tool-part in `input-available`
+ * state) would be persisted and replayed through `convertToModelMessages` on
+ * every later turn.
  */
 const ALLOWED_USER_PART_TYPES: ReadonlySet<string> = new Set(['text']);
 
@@ -2829,15 +2633,12 @@ export const TOOL_CALL_INCOMPLETE_TEXT = 'Tool call did not complete.';
 
 /**
  * Convert persisted UI history to model messages, tolerating a single poisoned
- * row (#489). `convertToModelMessages` over the WHOLE array throws if ANY row is
- * malformed (e.g. a tool-part left unbalanced / in `input-available` state),
- * which would otherwise 500 every turn of the chat forever. On a batch failure we
- * fall back to per-row conversion so the bad row is isolated: it is degraded to
- * plain text carrying its readable text plus a `[tool context omitted]` marker
- * (the model MUST see that its tool context was truncated — silent loss is not
- * acceptable), while every healthy row converts normally. Because AI SDK v6
- * carries a tool call and its result inside the SAME assistant UIMessage's parts,
- * per-row conversion preserves call/result pairing.
+ * row. `convertToModelMessages` throws if ANY row is malformed, which would fail
+ * every turn of the chat. On a batch failure, convert per row: a bad row is
+ * degraded to its readable text plus a `[tool context omitted]` marker (the model
+ * must see that its tool context was truncated). AI SDK v6 keeps a tool call and
+ * its result in the same assistant UIMessage, so per-row conversion preserves
+ * call/result pairing.
  */
 export async function convertHistoryResilient(
   uiMessages: Array<Omit<UIMessage, 'id'> & { id: string }>,
@@ -2899,23 +2700,15 @@ type StepLike = {
 };
 
 /**
- * Compaction tunables for persisted tool OUTPUTS. Read tools (getPage,
- * getPageJson, getNode, diffPageVersions, exportPageMarkdown, ...) return whole
- * pages. Their outputs are stored in `metadata.parts` and RE-SENT to the
- * provider on every later turn via convertToModelMessages. We deliberately keep
- * these outputs FULL up to a high safety cap (MAX_TOOL_OUTPUT_BYTES) so the
- * model never sees a shortened copy of content it already fetched: an earlier
- * 4000-byte cap shrank normal page reads (often tens of KB) to a tiny preview,
- * and the model — seeing a truncation marker in its OWN history — re-read the
- * same page, wasting tokens. Only a single output LARGER than the cap is
- * compacted at all, purely as a backstop against a pathological payload; even
- * then we preserve the object's shape and its small scalar fields
- * (id/title/pageId) that the client reads to render citations.
+ * Compaction tunables for persisted tool outputs. Read tools return whole pages;
+ * their outputs live in `metadata.parts` and are re-sent to the provider on every
+ * later turn. Outputs are kept FULL up to MAX_TOOL_OUTPUT_BYTES: a model that
+ * sees a truncation marker in its own history re-reads the page. Only an output
+ * above the cap is compacted, preserving its shape and the small scalar fields
+ * (id/title/pageId) the client reads to render citations.
  */
-// HIGH safety backstop: only an output whose JSON serialization EXCEEDS this is
-// compacted at all. Normal reads (whole pages, tens of KB) stay well under it
-// and are stored + replayed VERBATIM (fast path: returned unchanged, by
-// identity). Only a single pathologically huge output (> 200 KB) is compacted.
+// Only an output whose JSON serialization exceeds this is compacted; anything
+// smaller is stored and replayed verbatim (returned unchanged, by identity).
 const MAX_TOOL_OUTPUT_BYTES = 200_000;
 // Inside the backstop path only (i.e. once the whole output already exceeded
 // MAX_TOOL_OUTPUT_BYTES), a string longer than this is reduced to a leading
@@ -2930,14 +2723,10 @@ const TOOL_OUTPUT_ARRAY_LIMIT = 50;
 const TOOL_OUTPUT_MAX_DEPTH = 8;
 
 /**
- * Recursively compact a single tool output before it is persisted (and thus
- * re-sent to the provider on later turns). Preserves the value's KIND and its
- * keys/scalars (so the client can still extract id/title/pageId citations from
- * `part.output`); only the large payloads (long strings, long arrays, very deep
- * subtrees) are shrunk. Returns a plain JSON-serializable value.
- *
- * Exported only so the unit test can import the pure helper; exporting it does
- * not change runtime behavior.
+ * Recursively compact a single tool output before it is persisted. Preserves the
+ * value's kind and its keys/scalars (so the client can still extract
+ * id/title/pageId citations from `part.output`); only long strings, long arrays
+ * and very deep subtrees are shrunk. Returns a plain JSON-serializable value.
  */
 export function compactToolOutput(output: unknown): unknown {
   // Fast path: nothing to do for null/undefined or non-serializable values.
@@ -3019,29 +2808,11 @@ function normalizeToolError(error: unknown): string {
 }
 
 /**
- * Rebuild the FULL UIMessage `parts` for an assistant turn from the SDK steps,
- * so multi-turn history replays prior tool-calls/results to the model (not just
- * the final text). Per step we emit the step's text part (if any) followed by a
- * static `tool-${name}` UI part per tool call — `output-available` when the
- * tool returned, or a synthetic `output-error` when it did not (so the call is
- * never persisted unpaired). Both shapes `convertToModelMessages` consumes on
- * the next turn map to a balanced assistant `tool-call` + tool-message
- * `tool-result`; a bare `input-available` would instead replay as an unpaired
- * call and throw MissingToolResultsError. Tools here are statically named, so
- * `tool-${name}` (not `dynamic-tool`) is faithful and `getStaticToolName`
- * recovers the name. Falls back to a single `text` part built from
- * `fallbackText` when the steps carry no text.
- */
-// Exported only so the unit tests can import these pure helpers; exporting
-// them does not change runtime behavior.
-/**
  * Per-turn memo for {@link assistantParts}: a step's rebuilt parts keyed by the
- * step OBJECT's identity (#490). A finished step in `capturedSteps` keeps a stable
- * reference across every mid-stream flush, and `compactToolOutput` inside it does a
- * `JSON.stringify` of the whole (often 50–200 KB) output — so without a memo each
- * `onStepFinish` re-stringifies EVERY prior step's output (O(N²) stringify over a
- * turn). Keyed by step identity => one stringify per step per turn. WeakMap so a
- * turn's steps are GC'd with the turn.
+ * step object's identity. Finished steps keep a stable reference across flushes,
+ * and `compactToolOutput` stringifies each (often 50–200 KB) output, so without
+ * the memo every flush re-stringifies every prior step. WeakMap so a turn's steps
+ * are GC'd with the turn.
  */
 export type StepPartsCache = WeakMap<object, Array<Record<string, unknown>>>;
 
@@ -3107,6 +2878,15 @@ function buildStepParts(step: StepLike): Array<Record<string, unknown>> {
   return parts;
 }
 
+/**
+ * Rebuild the full UIMessage `parts` for an assistant turn from the SDK steps, so
+ * multi-turn history replays prior tool calls/results to the model. Per step:
+ * the step's text part (if any), then a static `tool-${name}` part per tool call —
+ * `output-available` when the tool returned, or a synthetic `output-error` when it
+ * did not, so the call is never persisted unpaired (a bare `input-available`
+ * replays as an unpaired call and throws MissingToolResultsError). Falls back to a
+ * single `text` part from `fallbackText` when the steps carry no text.
+ */
 export function assistantParts(
   steps: ReadonlyArray<StepLike> | undefined,
   fallbackText: string,
@@ -3151,12 +2931,11 @@ export function rowToUiMessage(row: AiChatMessage): Omit<UIMessage, 'id'> & {
 }
 
 /**
- * Cheap step-marker metadata for the #492 per-step UPDATE. Advances
- * `stepsPersisted` (the resume attach frontier) and keeps the `toolTraceVersion`
- * era marker, WITHOUT the growing `parts` blob (those live in the steps table
- * now; the full `metadata.parts` is assembled once at finalize by flushAssistant).
- * `parts: []` is kept for shape stability — it reads as an empty inline-parts row,
- * which is exactly the discriminator that routes reconstruction to the steps table.
+ * Cheap step-marker metadata for the per-step UPDATE. Advances `stepsPersisted`
+ * (the resume attach frontier) and keeps `toolTraceVersion`, without the `parts`
+ * blob (parts live in the steps table; the full `metadata.parts` is assembled at
+ * finalize by flushAssistant). `parts: []` is the discriminator that routes
+ * reconstruction to the steps table.
  */
 export function stepMarkerMetadata(
   stepsPersisted: number,
@@ -3165,12 +2944,10 @@ export function stepMarkerMetadata(
 }
 
 /**
- * Whether an assistant row already carries its full UI parts INLINE on the row
- * (`metadata.parts`). TRUE for every FINISHED row — old-era rows AND #492 rows,
- * whose full parts are assembled once at finalize — and for old-era streaming
- * snapshots (the pre-#492 per-step full-row flush). FALSE for a #492 MID-RUN
- * record, whose per-step parts live in the `ai_chat_run_steps` table. This is the
- * era discriminator the reconstruct seam branches on — no schema flag needed.
+ * Whether an assistant row carries its full UI parts inline (`metadata.parts`).
+ * True for every finished row and for old full-row streaming snapshots; false
+ * for a mid-run row whose per-step parts live in `ai_chat_run_steps`. The
+ * reconstruct seam branches on this.
  */
 export function rowHasInlineParts(row: { metadata?: unknown }): boolean {
   const meta = (row.metadata ?? {}) as { parts?: unknown };
@@ -3179,7 +2956,7 @@ export function rowHasInlineParts(row: { metadata?: unknown }): boolean {
 
 /**
  * Concatenate persisted per-step parts (in `stepIndex` order) into the turn's UI
- * parts (#492). Reproduces EXACTLY what flushAssistant → assistantParts would have
+ * parts. Reproduces EXACTLY what flushAssistant → assistantParts would have
  * written to `metadata.parts` for those finished steps, since each step row stored
  * `assistantParts([step])` at persist time.
  */
@@ -3196,13 +2973,11 @@ export function assembleStepParts(
 }
 
 /**
- * reconstructRunParts (#492) — the single backend-switch seam. Given an assistant
- * ROW and its persisted step rows, return the turn's UI `parts` + the persisted
- * step count, reading from the ROW when it already carries inline parts (old-era
- * records AND every finished record) and from the STEPS TABLE otherwise (a #492
- * mid-run record). The higher-level consumers (attach seed, delta poll, export)
- * route their row→parts through this / {@link hydrateAssistantParts}, so old and
- * new records reconstruct identically WITHOUT the consumers branching on the era.
+ * The single backend-switch seam: given an assistant row and its step rows,
+ * return the turn's UI `parts` + persisted step count, reading from the row when
+ * it carries inline parts and from the steps table otherwise. The consumers
+ * (attach seed, delta poll, export) go through this / {@link hydrateAssistantParts}
+ * so they never branch on the storage shape.
  */
 export function reconstructRunParts(
   row: { metadata?: unknown; content?: string | null },
@@ -3236,12 +3011,11 @@ export function reconstructRunParts(
 }
 
 /**
- * Fill each assistant row's `metadata.parts` from its step rows when the row does
- * not already carry them inline (a #492 mid-run record), so a consumer that reads
- * `metadata.parts` off the RAW row (the client seed/poll, the Markdown export)
- * sees the reconstructed parts with NO change to itself. Rows that already have
- * inline parts (old-era + finished) and non-assistant rows pass through untouched.
- * Pure: returns new row objects, never mutates the inputs.
+ * Fill each assistant row's `metadata.parts` from its step rows when the row
+ * does not carry them inline (a mid-run row), so consumers that read
+ * `metadata.parts` off the raw row (client seed/poll, Markdown export) see the
+ * reconstructed parts. Other rows pass through untouched. Pure: returns new row
+ * objects, never mutates the inputs.
  */
 export function hydrateAssistantParts<
   T extends { id: string; role?: string; metadata?: unknown },
@@ -3279,13 +3053,9 @@ export interface AssistantFlush {
 }
 
 /**
- * Pure decision for the terminal finalize (#183): given whether the upfront
- * assistant row exists (`assistantId`), choose whether the terminal payload is
- * written by UPDATEing that row or — when the upfront insert failed and there is
- * no id — by INSERTing a fresh terminal row so the turn is not lost entirely.
- * Returns `{ kind: 'update', id }` or `{ kind: 'insert' }`. Extracted so the
- * fallback-insert branch (the only safety against losing a turn whose upfront
- * insert failed) is unit-testable without seaming streamText.
+ * Pure decision for the terminal finalize: UPDATE the upfront row when
+ * `assistantId` exists, else INSERT a fresh terminal row so the turn is not lost.
+ * Returns `{ kind: 'update', id }` or `{ kind: 'insert' }`.
  */
 export function planFinalizeAssistant(
   assistantId: string | undefined,
@@ -3308,12 +3078,10 @@ export interface FinalizeRepo {
 }
 
 /**
- * Apply a finalize `plan` to the repo with the terminal `flushed` payload (#183):
- * conditionally UPDATE the upfront row (owner-write priority, #487), or INSERT a
- * fresh terminal row as the fallback when the upfront insert failed. The SINGLE
- * dispatch shared by the service's finalizeAssistant and its test, so the test
- * exercises the real path instead of a copy (#186 review). Pure of error
- * handling — the caller wraps it (and RETRIES it, #487).
+ * Apply a finalize `plan` with the terminal `flushed` payload: conditionally
+ * UPDATE the upfront row (owner-write priority), or INSERT a fresh terminal row.
+ * Shared by finalizeAssistant and its test. No error handling — the caller wraps
+ * and retries it.
  */
 export async function applyFinalize(
   repo: FinalizeRepo,
@@ -3377,20 +3145,14 @@ export function stripNulChars<T>(value: T): T {
 }
 
 /**
- * PURE assistant-row builder (#183 step-granular durability). Given the turn's
- * accumulated steps + the in-progress (not-yet-finished) text + the lifecycle
- * status, it returns the row patch to persist. The SAME path runs for the
- * upfront insert (empty steps, status 'streaming'), every per-step update, and
- * the terminal finalize (completed/error/aborted) — and a future background
- * worker can call it identically, so it must stay a pure function of its inputs
- * (NO `this`, no IO).
+ * Pure assistant-row builder. Given the turn's finished steps, the in-progress
+ * text and the lifecycle status, returns the row patch to persist. The same path
+ * runs for the upfront insert (empty steps, 'streaming'), every per-step update
+ * and the terminal finalize, so it must stay a pure function (no `this`, no IO).
  *
- * `metadata.parts` is built by assistantParts over the finished steps, then the
- * in-progress text appended as a trailing text part, so rowToUiMessage /
- * findAllByChat keep replaying the turn unchanged. `metadata.finishReason`,
- * `metadata.error`, `metadata.usage`, `metadata.contextTokens` and
- * `metadata.maxContextTokens` are attached only when provided/relevant, matching
- * the pre-#183 onFinish/onError records.
+ * `metadata.parts` is assistantParts over the finished steps plus the in-progress
+ * text as a trailing text part. `finishReason`, `error`, `usage`, `contextTokens`
+ * and `maxContextTokens` are attached only when provided.
  */
 export function flushAssistant(
   capturedSteps: ReadonlyArray<StepLike> | undefined,
@@ -3447,17 +3209,12 @@ export function flushAssistant(
     // `parts`). Old rows have no marker and the legacy { output } shape; a
     // dual-shape query branches on this. Old rows are deliberately NOT migrated.
     toolTraceVersion: 2,
-    // #491 STEP MARKER: the number of FINISHED steps whose parts are in THIS row,
-    // written by the SAME flush that builds `parts` (atomically — they are both
-    // derived from `finished`, so the marker can NEVER disagree with the persisted
-    // parts). This is the step-alignment anchor the resume stack builds on:
-    // - the registry rotates its retention ring only on a CONFIRMED persist of
-    //   step N (commit 3);
-    // - attach slices the tail at "step > N" from the client's persisted seed.
-    // It is NOT `run.stepCount`: recordStep is fire-and-forget and NOT atomic with
-    // the parts write, so stepCount could race ahead of the persisted parts
-    // (seed↔marker drift). The in-progress trailing text (an error/abort partial,
-    // or a mid-stream flush) is NOT a finished step and is excluded from the count.
+    // Step marker: the number of FINISHED steps whose parts are in this row,
+    // derived from `finished` in the same flush, so it can never disagree with the
+    // persisted parts. The registry rotates its ring only on a confirmed persist
+    // of step N, and attach slices the tail at "step > N". Not `run.stepCount`:
+    // recordStep is fire-and-forget and can race ahead of the parts write. The
+    // in-progress trailing text is not a finished step and is not counted.
     stepsPersisted: finished.length,
   };
   // finishReason: prefer an explicit one; else derive a sensible value from the
@@ -3509,31 +3266,23 @@ export function flushAssistant(
 
 /**
  * Reduce SDK step objects to a compact, JSON-serializable trace for the
- * `tool_calls` column — trace format **v2** (#490).
- *
- * v2 stores, per call, ONLY the metadata a queryable trace needs — never the
- * tool OUTPUT. Before #490 each output was persisted TWICE: once here (compacted)
- * and once in `metadata.parts` (via `assistantParts`), so a 50-step run with
- * 50–200 KB outputs wrote hundreds of MB per turn (each `onStepFinish` rewrote
- * the whole row). The parts copy is the one the model replays and the UI/Markdown
- * export render, so the trace copy of the output was pure duplication. v2 keeps
- * the output ONLY in parts and reduces the trace to outcome flags.
+ * `tool_calls` column — trace format **v2**. Per call it stores only metadata,
+ * never the tool OUTPUT: the output lives once, in `metadata.parts`, which is
+ * what the model replays and the UI/export render.
  *
  * Element shapes (paired per call, in order):
  *  - `{ toolName, input }`                       — the call
  *  - `{ toolName, ok: true }`                     — it returned a result (success)
  *  - `{ toolName, error, kind: 'thrown' }`        — it threw a `tool-error`
  *  - `{ toolName, error, kind: 'interrupted' }`   — no result and no throw (an
- *      abort / server restart mid-step). `kind` is MANDATORY: without it a
- *      synthetic "Tool call did not complete." is indistinguishable from a real
- *      hard-fail and pollutes any error-rate scan. The distinction is STRUCTURAL
- *      (an `errorsById` hit vs the synthetic fallback branch), NOT a per-tool
- *      classifier — soft failures stay OUT of the trace (they live in
- *      `metadata.parts` outputs; a per-tool mirror would persist its own bugs).
+ *      abort / server restart mid-step). `kind` keeps the synthetic
+ *      "Tool call did not complete." distinguishable from a real hard-fail. The
+ *      distinction is structural (an `errorsById` hit vs the synthetic fallback),
+ *      not a per-tool classifier — soft failures stay in `metadata.parts` outputs.
  *
  * Rows carry `metadata.toolTraceVersion: 2` (set by {@link flushAssistant}) so a
- * dual-shape query can branch on the era. Old rows are NOT migrated (rewriting
- * giant jsonb is the very WAL churn this removes); see docs/reading-ai-logs.md.
+ * query can branch on the trace shape; v1 rows are not migrated. See
+ * docs/reading-ai-logs.md.
  */
 export function serializeSteps(
   steps: ReadonlyArray<{

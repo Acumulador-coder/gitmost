@@ -8,22 +8,19 @@ import {
 } from './yjs-body-merge';
 
 /**
- * Regression for the BUG CLASS behind the runaway whole-body duplication: a
- * block must key the same whether an attribute carries its editor-ext schema
+ * A block must key the same whether an attribute carries its editor-ext schema
  * default (the live Yjs doc materializes `indent: 0`, `image.align: "center"`,
  * link `internal: false`) or nothing at all (a raw Y fragment, or a body from
- * git where the converter defaults pdf/youtube sizes to null and
- * `y-prosemirror` drops null attrs). Element attrs and MARK attrs are both
- * covered — marks are serialized raw in the XmlText delta.
+ * git where the converter defaults pdf/youtube sizes to null and `y-prosemirror`
+ * drops null attrs). Element attrs and MARK attrs are both covered — marks are
+ * serialized raw in the XmlText delta.
  *
  * `highlight.colorName` defaults to null, so it is normalized for free; the
  * schema-derived normalization stays idempotent.
  *
  * The block comparison key is the block's markdown projection (`blockKey`),
- * which no materialized default reaches — so a live block compares equal to
- * its git-round-tripped twin and an unchanged resync applies 0 ops. RED while
- * the key carried raw attributes (keys diverge -> ops > 0 / growth), GREEN
- * after.
+ * which no materialized default reaches, so a live block compares equal to its
+ * git-round-tripped twin and an unchanged resync applies 0 ops.
  */
 
 type Attrs = Record<string, unknown>;

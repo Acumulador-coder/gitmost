@@ -53,7 +53,7 @@ function ChangePasswordForm({ onClose }: ChangePasswordFormProps) {
   const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(false);
 
-  // Build the schema with friendly, translated validation messages (issue #130)
+  // Build the schema with friendly, translated validation messages
   const formSchema = z.object({
     oldPassword: z
       .string()

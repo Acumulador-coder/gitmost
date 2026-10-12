@@ -193,7 +193,7 @@ describe("SpaceTree boot-cache prune (#159 #8 stale collapsed children)", () => 
     );
 
     // Boot-prune ran at mount: the COLLAPSED branch's cached children were
-    // dropped to the unloaded shape ([]), so the stale child is no longer there.
+    // dropped to the unloaded shape ([]), so the stale child is gone.
     const branchAfterBoot = docTree.data.find(
       (n) => (n as SpaceTreeNode).id === "branch",
     ) as SpaceTreeNode;

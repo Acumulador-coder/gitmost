@@ -2,7 +2,7 @@ import { type Tool } from 'ai';
 import { McpClientsService } from './mcp-clients.service';
 
 /**
- * Tests for the per-server prompt guidance (#180) assembled by buildEntry and
+ * Tests for the per-server prompt guidance assembled by buildEntry and
  * surfaced via toolsFor().instructions.
  *
  * REACHABILITY NOTE: buildEntry is a PRIVATE method; the smallest reachable

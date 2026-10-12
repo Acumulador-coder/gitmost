@@ -4,13 +4,11 @@ import { renderHook } from "@testing-library/react";
 import { useEditorScroll } from "./use-editor-scroll";
 
 /**
- * `waitForState` inside this hook used to be an unbounded `setInterval`: if the
- * `canScroll` predicate never turned true, the interval polled for the life of
- * the tab, and a fresh one leaked on every editor construction (the hook is
- * driven from the editor's `onCreate`, and `handleScrollTo` recurses up to ten
- * times). It is now a two-timer FSM — a poll interval plus its own deadline —
- * and these tests pin the observable contract of that FSM: every exit path
- * clears BOTH timers, a give-up is announced once and does not recurse.
+ * `waitForState` is a two-timer FSM — a poll interval plus its own deadline —
+ * so a `canScroll` predicate that never turns true cannot poll for the life of
+ * the tab (the hook runs from the editor's `onCreate`, and `handleScrollTo`
+ * recurses up to ten times). These tests pin its observable contract: every
+ * exit path clears BOTH timers, a give-up is announced once and does not recurse.
  *
  * Assertions are on observable effects only: how often the predicate is polled,
  * whether the DOM lookup happened, the warn spy, and the live timer count.

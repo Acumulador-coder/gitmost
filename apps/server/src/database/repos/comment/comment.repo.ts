@@ -15,7 +15,7 @@ import { jsonObjectFrom } from 'kysely/helpers/postgres';
 import { resolveAgentProvenance } from '../agent-provenance';
 
 /**
- * Role-resolution subquery for a comment's bound AI chat (#300). Joins
+ * Role-resolution subquery for a comment's bound AI chat. Joins
  * comments.aiChatId -> ai_chats.role_id -> ai_agent_roles and selects the role's
  * name + emoji. NO enabled/deletedAt filter: historical agent content must keep
  * its signature even after the role is later disabled or soft-deleted — the same
@@ -32,7 +32,7 @@ export function commentAgentRoleQuery(eb: ExpressionBuilder<DB, 'comments'>) {
 }
 
 /**
- * External-MCP key-name subquery for a comment (#559). Resolves
+ * External-MCP key-name subquery for a comment. Resolves
  * comments.createdApiKeyId -> api_keys.name so a comment authored by an external
  * MCP agent is displayed with the human-assigned key name (the persona). NO
  * deletedAt filter — mirroring the agent-role join above: the historical
@@ -62,7 +62,7 @@ export class CommentRepo {
       .selectAll('comments')
       .$if(opts?.includeCreator, (qb) => qb.select(this.withCreator))
       .$if(opts?.includeResolvedBy, (qb) => qb.select(this.withResolvedBy))
-      // #300: enrich the single-row read with the agent-role subquery so the
+      // Enrich the single-row read with the agent-role subquery so the
       // {agent,launcher} avatar stack is attached here too — the live websocket
       // broadcasts (commentCreated/Updated/Resolved) return a comment loaded via
       // findById, and must carry the SAME provenance as the list query
@@ -74,7 +74,7 @@ export class CommentRepo {
       // so the resolver needs it, and every broadcast caller passes
       // includeCreator: true. Non-includeCreator callers keep the plain shape.
       .$if(opts?.includeCreator, (qb) => qb.select(this.withAgentRole))
-      // #559 — resolve the external-MCP persona name alongside the agent role,
+      // Resolve the external-MCP persona name alongside the agent role,
       // on the SAME gate, so a broadcast api-key comment carries the key name.
       .$if(opts?.includeCreator, (qb) => qb.select(this.withApiKeyName))
       .where('id', '=', commentId)
@@ -169,7 +169,7 @@ export class CommentRepo {
   /**
    * Delete an ephemeral suggestion row ONLY if it is still childless, returning
    * the number of rows removed (0 or 1). Closes the data-loss race in
-   * dismiss/apply (#338 F4): the service reads `hasChildren`, then removes the
+   * dismiss/apply: the service reads `hasChildren`, then removes the
    * anchor mark (a collab round-trip of tens-to-hundreds of ms), then calls this.
    * `comments.parent_comment_id` is ON DELETE CASCADE, so a reply landing in that
    * window would be cascade-destroyed by a blind delete.

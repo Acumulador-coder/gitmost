@@ -1,5 +1,5 @@
 /**
- * Normalize-on-write helper (DESIGN.md §11).
+ * Normalize-on-write helper (SPEC §11 "Resolution").
  *
  * git diffs byte-for-byte, so writing a page in a NON-fixpoint markdown form
  * would make the next pull re-export it to a slightly different (but stable)
@@ -19,7 +19,7 @@ import {
 import { converterPool } from "./convert-pool.js";
 
 /**
- * Meta object as `exportPageBody` builds it (DESIGN.md §4). Kept byte-for-byte
+ * Meta object as `exportPageBody` builds it (SPEC §4). Kept byte-for-byte
  * compatible so files produced here match `exportPageBody`'s output exactly.
  */
 export interface PageMeta {
@@ -40,7 +40,7 @@ export interface PageMeta {
  *   stableBody = convertProseMirrorToMarkdown(doc2)    // ...and re-export
  *   file       = serializeDocmostMarkdownBody(meta, stableBody)
  *
- * The single export->import->export pass is the verified fixpoint (DESIGN.md §11):
+ * The single export->import->export pass is the verified fixpoint (SPEC §11):
  * idempotent for already-stable content, and the convergence point for the
  * known converter asymmetries.
  */
@@ -64,7 +64,7 @@ export async function stabilizePageFile(
  *   doc2       = markdownToProseMirror(md1)              // ...import...
  *   stableBody = convertProseMirrorToMarkdown(doc2)      // ...re-export
  *
- * The single export->import->export pass is the verified fixpoint (DESIGN.md §11):
+ * The single export->import->export pass is the verified fixpoint (SPEC §11):
  * idempotent for already-stable content, and the convergence point for the known
  * converter asymmetries. The native-Obsidian writer (`serializePageFile`) wraps
  * this body with a minimal `gitmost_id` frontmatter; determinism here is what
@@ -77,11 +77,11 @@ export async function stabilizePageBody(
   // The pass runs on the converter worker pool (./convert-worker.ts), within
   // its input budget and deadline, and stops when `signal` aborts: a big page
   // would otherwise block the event loop for seconds. git-sync is the LOSSLESS
-  // mirror path, so the serializer
-  // runs in `strict` mode there: a node/mark type the converter has no case for
-  // (e.g. one added to the schema without a matching serializer arm) rejects
-  // with a ConverterLossError rather than silently degrading — surfacing the
-  // loss loudly at write time instead of committing a lossy file. Valid content
-  // (every current schema type has a case) is unaffected.
+  // mirror path, so the serializer runs in `strict` mode there: a node/mark
+  // type the converter has no case for (e.g. one added to the schema without a
+  // matching serializer arm) rejects with a ConverterLossError rather than
+  // silently degrading — surfacing the loss loudly at write time instead of
+  // committing a lossy file. Valid content (every current schema type has a
+  // case) is unaffected.
   return converterPool.stabilizePageBody(content, signal);
 }

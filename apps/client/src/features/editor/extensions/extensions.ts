@@ -164,9 +164,9 @@ export const mainExtensions = [
     code: false,
   }),
   // The shared `Code` mark from @docmost/editor-ext (single source of the
-  // `excludes: "code"` policy — #515: inline code must be able to carry bold /
-  // italic / … like CommonMark) re-extended here with the CLIENT-only input
-  // rule and keyboard shortcut.
+  // `excludes: "code"` policy: inline code must be able to carry bold / italic /
+  // … like CommonMark) re-extended here with the CLIENT-only input rule and
+  // keyboard shortcut.
   //
   // Override TipTap's Code extension to fix the inline code input rule.
   // The upstream regex /(^|[^`])`([^`]+)`(?!`)$/ captures the character
@@ -378,8 +378,8 @@ export const mainExtensions = [
     HTMLAttributes: {
       spellcheck: false,
     },
-    // #683 `code_highlight` — report a REAL syntax-highlight recompute (init +
-    // guarded recompute inside the plugin), never a plain keystroke (AC5).
+    // `code_highlight` — report a REAL syntax-highlight recompute (init +
+    // guarded recompute inside the plugin), never a plain keystroke.
     // reportOperation is threshold-gated + isVitalsActive()-gated internally; the
     // callback is wired ONLY when the operator flag is on, so a telemetry-off
     // build passes no callback and the plugin skips timing entirely (zero cost).
@@ -570,7 +570,7 @@ const awarenessStatesToArray = (states: Map<number, Record<string, any>>) =>
     ...value.user,
   }));
 
-// #709 — local override of @tiptap/extension-collaboration-caret 3.20.4, whose
+// Local override of @tiptap/extension-collaboration-caret 3.20.4, whose
 // plugin adds an awareness "update" listener and never removes it; the
 // listener's closure holds the extension context and, through it, the editor.
 // With warm collab sessions the provider (and its awareness) outlives the

@@ -18,16 +18,14 @@ import { UpdateMcpServerDto } from './dto/update-mcp-server.dto';
 import { McpServerIdDto } from './dto/mcp-server-id.dto';
 
 /**
- * Personal external MCP server management (#686, phase 2). Unlike the admin
- * controller (`workspace/ai-mcp-servers`), there is NO CASL admin gate: any
- * authenticated member manages their OWN servers, scoped by `user.id`. Routes
- * are POST to match this codebase's convention (POST for reads too), mirroring
- * the admin controller shape.
+ * Personal external MCP server management. Unlike the admin controller
+ * (`workspace/ai-mcp-servers`), there is NO CASL admin gate: any authenticated
+ * member manages their OWN servers, scoped by `user.id`. Routes are POST to match
+ * this codebase's convention (POST for reads too), mirroring the admin controller
+ * shape.
  *
- * KILL-SWITCH (#686): when `MCP_PERSONAL_SERVERS_ENABLED=false` every endpoint
- * answers 403 — a sanctioned feature-off switch, not a rollout fork. Personal
- * rows already in the DB simply stop being manageable (and, in phase 3, drop
- * out of the agent union).
+ * KILL-SWITCH: when `MCP_PERSONAL_SERVERS_ENABLED=false` every endpoint answers
+ * 403. Personal rows already in the DB simply stop being manageable.
  *
  * SECURITY (§8.10): no route ever returns the encrypted auth headers; every
  * view carries only `hasHeaders`.

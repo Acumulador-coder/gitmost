@@ -82,7 +82,7 @@ export class AiChatRepo {
 
   /**
    * The ownership triple for a chat id, WITHOUT filtering on any of its fields —
-   * the bind-page (#665) validation needs to distinguish four outcomes that
+   * the bind-page validation needs to distinguish four outcomes that
    * findById collapses into one `undefined`: no such chat, a chat in a different
    * workspace, a chat owned by someone else, and a soft-deleted chat. Selecting
    * `creatorId + workspaceId + deletedAt` raw lets the caller tell "not owned"

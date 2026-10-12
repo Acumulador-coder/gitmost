@@ -39,7 +39,7 @@ import { isSessionExpired } from "@/features/user/session-verified";
 import { FIVE_MINUTES } from "@/lib/constants.ts";
 
 /**
- * #709 — warm collab sessions: ONE cache per tab, the sole owner of every
+ * Warm collab sessions: ONE cache per tab, the sole owner of every
  * page's collab session (ydoc, local persistence, own socket, provider). The
  * page editor takes a session on mount and hands it back on unmount; a handed
  * back session is PARKED — kept connected in the background, receiving remote
@@ -48,7 +48,7 @@ import { FIVE_MINUTES } from "@/lib/constants.ts";
  *
  * Only a WARM session (parked, synced and authorized read-write on its CURRENT
  * connection) is ever handed out again; any other parked session is destroyed
- * when its page is opened, and the page opens cold, as before. Each session has
+ * when its page is opened, and the page opens cold. Each session has
  * its OWN socket: hocuspocus remembers a failed document auth for the lifetime
  * of a connection and a socket's message queue survives a disconnect, so with a
  * shared socket one failure would break every page of the tab.
@@ -292,12 +292,12 @@ function createSession({
   // is NOT. The room name must stay `page.<pageId>` or the server resolves the
   // wrong id and every collab connection breaks (see page-ydoc-eviction).
   const roomName = pageYdocRoomName(pageId);
-  // #640 — open LOCAL persistence only when it is safe to lean on local
+  // Open LOCAL persistence only when it is safe to lean on local
   // content. Fail-closed on all three:
   //  - anon scope (not yet resolved): a signed-out/first-frame state must not
   //    write a body under `anon:anon` (invariant 2);
-  //  - session expired past OFFLINE_GRACE (30d, part 6): refuse local body;
-  //  - the page is TOMBSTONED (access revoked, part 5): y-indexeddb creates
+  //  - session expired past OFFLINE_GRACE (30d): refuse local body;
+  //  - the page is TOMBSTONED (access revoked): y-indexeddb creates
   //    the DB on construction, so gating here — not at paint — is what keeps a
   //    revoked page from resurrecting an (empty) database every visit. Checked
   //    under BOTH aliases so a slugId-only tombstone still blocks.
@@ -513,13 +513,12 @@ function createSession({
     () =>
       new HocuspocusProvider({
         websocketProvider: socket,
-        // #640, invariant 1 — the un-namespaced ROOM name (`page.<pageId>`),
-        // never the scoped DB name, so the server resolves the pageId via
-        // split('.')[1] and every authenticated collab connection succeeds
-        // (#626 regression fix).
+        // The un-namespaced ROOM name (`page.<pageId>`), never the scoped DB
+        // name, so the server resolves the pageId via split('.')[1] and every
+        // authenticated collab connection succeeds.
         name: roomName,
         document: ydoc,
-        // Ф7 (#643) — a LAZY token callback, not a by-value token. Hocuspocus
+        // A LAZY token callback, not a by-value token. Hocuspocus
         // accepts a (possibly async) function and awaits it before
         // authenticating. At t0 the collab-token query may not have resolved
         // yet; passing an empty token by value makes the server reject the

@@ -7,14 +7,14 @@ import { esmImport } from '../../../common/helpers/esm-import';
 
 // Re-export SharedToolSpec so downstream server modules keep a single import
 // path (they import it from this loader). The shape is DERIVED from the package
-// entry, not re-declared here — see the import above (issue #446).
+// entry, not re-declared here — see the import above.
 export type { SharedToolSpec } from '@docmost/mcp';
 
 /**
  * The exact set of `DocmostClient` methods the per-user in-app tool adapter
  * consumes. This is the AUTHORITATIVE list of the client surface the server
  * depends on; the adapter calls these methods POSITIONALLY, so this set is what
- * the derived type below type-checks against the real class (issue #446).
+ * the derived type below type-checks against the real class.
  */
 type DocmostClientMethod =
   // --- read ---
@@ -84,20 +84,16 @@ type DocmostClientMethod =
 
 /**
  * The client surface the per-user tool adapter consumes, DERIVED from the real
- * `DocmostClient` type in `@docmost/mcp` (issue #446, restored #294 debt). This
- * replaces the former hand-mirror of ~45 method signatures.
+ * `DocmostClient` type in `@docmost/mcp`.
  *
  * `import type` (above) is fully ERASED at compile time, so nothing is actually
  * imported from the ESM-only package at runtime — the server still loads the
  * class through the dynamic `import()` trick in `loadDocmostMcp` below; this is
  * purely a compile-time type. Deriving via `Pick` means a parameter reorder or a
- * type change to any of these methods in `client.ts` now becomes a SERVER
- * COMPILE ERROR at the positional call sites in ai-chat-tools.service.ts,
- * instead of a silent runtime "wrong argument" failure inside an agent tool.
- *
- * This made the old name-only drift-guard test
- * (packages/mcp/test/unit/client-host-contract.test.mjs) redundant — tsc now
- * enforces both names AND signatures — so that test was removed.
+ * type change to any of these methods in `client.ts` becomes a SERVER COMPILE
+ * ERROR at the positional call sites in ai-chat-tools.service.ts, instead of a
+ * silent runtime "wrong argument" failure inside an agent tool; tsc enforces both
+ * names AND signatures.
  */
 export type DocmostClientLike = Pick<DocmostClient, DocmostClientMethod>;
 
@@ -125,7 +121,7 @@ export interface DocmostClientCtor {
 }
 
 /**
- * Local hand-mirror of the "new comments: N" signal helper (#417) exported from
+ * Local hand-mirror of the "new comments: N" signal helper exported from
  * `@docmost/mcp` (packages/mcp/src/comment-signal.ts). Same cross-boundary
  * approach as `SharedToolSpec`: we do not import the ESM package's types. The
  * factory owns the transport-neutral watermark/debounce/injection-safe line
@@ -154,9 +150,8 @@ export type CommentSignalTrackerFactory = (options: {
 }) => CommentSignalTrackerLike;
 
 /**
- * Local mirror of `@docmost/mcp`'s `createListCommentsProbe` (#494): the SHARED
- * count-source probe both hosts use, so the in-app probe body is no longer a
- * hand-copy of the standalone MCP one. Given a client with the light comment feed
+ * Local mirror of `@docmost/mcp`'s `createListCommentsProbe`: the SHARED
+ * count-source probe both hosts use. Given a client with the light comment feed
  * + raw-page-title reads, it returns the tracker's `probe` (count comments newer
  * than the watermark, label a hit with the page title). Loosely typed at this
  * cross-package boundary, like the rest of this loader.
@@ -215,16 +210,16 @@ interface DocmostMcpModule {
 }
 
 /**
- * Recompute the REGISTRY_STAMP (#447) from the @docmost/mcp source tree, if it is
+ * Recompute the REGISTRY_STAMP from the @docmost/mcp source tree, if it is
  * present. Returns the stamp string, or `null` when the source is absent (a prod
  * image ships only build/, no src/). MUST stay byte-for-byte identical to
  * packages/mcp/scripts/gen-registry-stamp.mjs's `computeRegistryStamp` so the
  * build-time and src-time hashes agree: same file set (every src/**\/*.ts except
  * *.generated.ts), same POSIX-relative sort, same per-file normalization (CRLF ->
  * LF, strip a single trailing newline) with the same path+content framing, same
- * sha256. Hashing the WHOLE src tree (not just tool-specs.ts) is #486: an edit to
+ * sha256. The WHOLE src tree is hashed (not just tool-specs.ts) so an edit to
  * client.ts / a client/* module / comment-signal / drawio-* without a rebuild
- * must also be caught, otherwise build/ silently serves the old code.
+ * is also caught; otherwise build/ silently serves the old code.
  *
  * DEV vs PROD detection is by FILE EXISTENCE, not NODE_ENV: we resolve the
  * package's own directory from `require.resolve('@docmost/mcp')` (which points at

@@ -3,7 +3,7 @@ import { computePullActions } from '../src/engine/pull';
 import type { PageNode } from '../src/engine/layout';
 
 // R-Pull-2 (test-strategy report §5): `computePullActions` is the PURE half of
-// the pull cycle — layout + planReconciliation + the DESIGN.md §5 absence-deletion
+// the pull cycle — layout + planReconciliation + the SPEC §8 absence-deletion
 // suppression decision, folded together, with NO IO. These tests exercise it
 // without git/fs/network. The thin IO applier is covered in apply-pull-actions.
 
@@ -88,7 +88,7 @@ describe('computePullActions — normal complete fetch', () => {
   });
 });
 
-describe('computePullActions — DESIGN.md §5 suppression folded in', () => {
+describe('computePullActions — SPEC §8 suppression folded in', () => {
   it('INCOMPLETE fetch (treeComplete:false) SUPPRESSES absence deletions', () => {
     // dead is absent from the live tree, but the tree fetch was partial -> the
     // missing pageId is NOT proof of deletion, so toDelete must be EMPTY and the

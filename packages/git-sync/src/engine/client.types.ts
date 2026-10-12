@@ -49,7 +49,7 @@ export interface GitSyncClient {
    * Full tree of page nodes for the space (or the subtree rooted at
    * `rootPageId`), each WITHOUT body content. `complete` is `false` when the
    * walk was truncated / a fetch failed — the pull side suppresses absence
-   * deletions on an incomplete tree (DESIGN.md §5). Native impl returns
+   * deletions on an incomplete tree (SPEC §8). Native impl returns
    * `complete: true` always (reads the DB, not a paginated REST endpoint).
    */
   listSpaceTree(
@@ -75,12 +75,11 @@ export interface GitSyncClient {
   pageIdsExist(pageIds: string[]): Promise<string[]>;
 
   /**
-   * One page WITH its ProseMirror body content. `applyPullActions` reads
-   * `id`, `slugId`, `title`, `parentPageId`, `spaceId` (for the file meta) and
-   * `content` (to stabilize/serialize). `updatedAt` is carried for the
-   * poll-suppression loop-guard. `lastUpdatedSource` (`'git-sync'` when
-   * git-sync made the last write) tells the pull's add/add rule a create of
-   * git-sync's own that died before its id write-back.
+   * One page WITH its ProseMirror body content. The export (`buildExportTree`)
+   * reads `id` and `content` (to stabilize/serialize). `updatedAt` is carried
+   * for the poll-suppression loop-guard. `lastUpdatedSource` (`'git-sync'` when
+   * git-sync made the last write) lets the apply's retry-adopt recognize a
+   * create of git-sync's own that a cycle cut off before its export.
    */
   getPageJson(pageId: string): Promise<{
     id: string;
@@ -97,16 +96,13 @@ export interface GitSyncClient {
 
   /**
    * Merge a page's markdown BODY into the live page. `applyPushActions` passes
-   * the file's body with the frontmatter AND any git conflict markers already
-   * stripped — NOT the raw self-contained file — so `fullMarkdown` here is clean
-   * body text (the datasource re-parses defensively). The collab/Yjs write path
-   * — never a raw jsonb overwrite. `applyPushActions` reads only an optional
-   * `updatedAt` off the result (via `extractUpdatedAt`).
+   * the file's body with the frontmatter stripped — NOT the raw self-contained
+   * file (the datasource re-parses defensively). The collab/Yjs write path
+   * (SPEC §2/§15.6) — never a raw jsonb overwrite. The result is not inspected.
    *
-   * `baseMarkdown` is the body Docmost last held, read from the push's diff base
-   * merge-base(`docmost`, `main`) (DESIGN.md §7), likewise stripped: the common
-   * ancestor for a THREE-WAY merge against the live doc so concurrent human
-   * edits survive (review #5). Optional/null -> 2-way.
+   * `baseMarkdown` is the body at the last export (`refs/docmost/last-export`,
+   * likewise stripped), the common ancestor for a THREE-WAY merge against the
+   * live doc so concurrent human edits survive (review #5). Optional/null -> 2-way.
    */
   importPageMarkdown(
     pageId: string,
@@ -116,8 +112,9 @@ export interface GitSyncClient {
 
   /**
    * Create a new page and return the assigned id at `data.id`
-   * (`applyPushActions` reads `result.data.id`, then writes it back into the
-   * file's meta). An optional top-level/`data.updatedAt` feeds the loop-guard.
+   * (`applyPushActions` reads `result.data.id`; the export then writes the
+   * page's file with that id). An optional top-level/`data.updatedAt` feeds the
+   * loop-guard.
    */
   createPage(
     title: string,
@@ -126,7 +123,7 @@ export interface GitSyncClient {
     parentPageId?: string,
   ): Promise<{ data: { id: string }; updatedAt?: string; [key: string]: unknown }>;
 
-  /** Soft-delete a page to Trash (DESIGN.md §7). Result is not inspected. */
+  /** Soft-delete a page to Trash (SPEC §8). Result is not inspected. */
   deletePage(pageId: string): Promise<unknown>;
 
   /**
@@ -146,7 +143,7 @@ export interface GitSyncClient {
   // --- continuous (phase B+) ------------------------------------------------
 
   /**
-   * Pages updated since `sinceIso` (the poll-safety reconciliation).
+   * Pages updated since `sinceIso` (the poll-safety reconciliation, SPEC §8).
    * `spaceId` may be undefined (all spaces); `hardPageCap` bounds the walk.
    */
   listRecentSince(

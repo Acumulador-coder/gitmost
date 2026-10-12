@@ -10,26 +10,21 @@ import { diff3PlanWithConflicts, Pick } from './three-way-merge';
 import { createDiffBudget, lcsMatches } from './lcs';
 
 /**
- * Block-level merge of an incoming (git) page body into a LIVE Yjs document,
- * replacing the previous full-body "delete everything + re-insert" write that
- * clobbered concurrent human edits on every sync (review #5 — "do the write as a
- * merge").
+ * Block-level merge of an incoming (git) page body into a LIVE Yjs document.
  *
- * Strategy: diff the two documents at TOP-LEVEL BLOCK granularity (an LCS over
- * each block's markdown projection, `blockKey`) and apply only the minimal
- * operations. Blocks with the same projection on both sides are left UNTOUCHED
- * in the live doc — so a human editing one paragraph is unaffected when git
- * changes a different paragraph, and an unchanged re-sync is a complete no-op
- * (zero Yjs operations). Yjs then CRDT-merges the minimal ops with any
- * concurrent edits.
+ * Diff the two documents at TOP-LEVEL BLOCK granularity (an LCS over each
+ * block's markdown projection, `blockKey`) and apply only the minimal
+ * operations. Blocks with the same projection on both sides are left UNTOUCHED,
+ * so a human editing one paragraph is unaffected when git changes another, and
+ * an unchanged re-sync is a no-op (zero Yjs operations). Yjs then CRDT-merges
+ * the minimal ops with any concurrent edits.
  *
- * Merge mode: a THREE-WAY merge (live vs incoming vs base) runs whenever the
- * engine plumbs the last-synced base (`baseMarkdown`: the file at
- * merge-base(`docmost`, `main`), see packages/git-sync/DESIGN.md §3), so a block both sides changed is a genuine
- * conflict resolved deterministically (git wins that block; the prior state is
- * preserved in page history). Only when NO base is available (a brand-new file)
- * does it fall back to a 2-way merge (live vs incoming). Common cases — unchanged
- * resync and edits to DIFFERENT blocks — are lossless in both modes.
+ * A THREE-WAY merge (live vs incoming vs base) runs whenever the engine passes
+ * the body at the last export (`baseMarkdown` from refs/docmost/last-export): a
+ * block both sides changed is a conflict resolved to git, with the prior state
+ * preserved in page history. Without a base (a brand-new file) it falls back to
+ * a 2-way merge. Unchanged resyncs and edits to different blocks are lossless in
+ * both modes.
  */
 
 type XmlNode = Y.XmlElement | Y.XmlText | Y.XmlHook;
@@ -46,12 +41,10 @@ type XmlNode = Y.XmlElement | Y.XmlText | Y.XmlHook;
  * is, by construction, not part of the key. A block whose projection is empty
  * (an empty paragraph) is ignorable (`isIgnorableBlockKey`).
  *
- * Known limitation (accepted trade-off of content-based matching): two
- * GENUINELY DISTINCT blocks with the same projection collapse to the same key,
- * so when git deletes one of the duplicates the LCS may drop the OTHER live
- * instance instead. The visible result is identical (one copy removed, one
- * kept), but a concurrent in-flight human edit on the dropped instance could be
- * lost.
+ * Known limitation: two distinct blocks with the same projection share a key,
+ * so when git deletes one of them the LCS may drop the OTHER live instance. The
+ * visible result is identical, but an in-flight human edit on the dropped
+ * instance could be lost.
  */
 export function blockKey(node: unknown): string {
   return markdownBlockKey(yBlockToJson(node));
@@ -455,12 +448,9 @@ function planSteps(
 /**
  * THREE-WAY block merge: reconcile `live` toward `target` using `base` (the
  * last-synced common ancestor) so a block only the human changed is KEPT and a
- * block only git changed is taken — instead of git's version always winning
- * (review #5). Conflicts (both changed the same block) resolve to git, and the
- * conflict count is returned so the caller can make a "git won a concurrent
- * same-block edit" event OBSERVABLE (the documented conflict contract: git wins
- * deterministically, but the losing human content is never destroyed silently —
- * it is logged and recoverable via page history).
+ * block only git changed is taken. Conflicts (both changed the same block)
+ * resolve to git; their count is returned so the caller can log that git won a
+ * same-block edit, whose prior state stays recoverable via page history.
  *
  * `diff3PlanWithConflicts` computes the merged block order (picks from live or
  * target, bounded by one work budget — over it, `MergeBudgetExceededError` is

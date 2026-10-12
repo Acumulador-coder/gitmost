@@ -206,12 +206,12 @@ const SpaceTree = forwardRef<SpaceTreeApi, SpaceTreeProps>(function SpaceTree(
   const openIdsRef = useRef(openIds);
   openIdsRef.current = openIds;
 
-  // Boot-cache hygiene (#159 #8): the localStorage-hydrated tree carries the
+  // Boot-cache hygiene: the localStorage-hydrated tree carries the
   // children of every branch ever expanded, including ones now COLLAPSED. Their
   // first expand would skip the lazy-load and render stale children (a
   // rename/move/delete missed while offline). Drop the cached children of every
   // COLLAPSED branch ONCE at mount so its first expand fetches fresh via
-  // handleToggle — exactly as it did before the tree was cached. OPEN branches
+  // handleToggle. OPEN branches
   // keep their children and are refreshed by refreshOpenBranches instead, so
   // this runs before any expand and never double-fetches an open branch.
   const prunedBootCacheRef = useRef(false);

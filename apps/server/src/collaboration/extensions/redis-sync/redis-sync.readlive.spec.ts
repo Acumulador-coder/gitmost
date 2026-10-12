@@ -1,8 +1,8 @@
 import { RedisSyncExtension } from './redis-sync.extension';
 
 /**
- * #647 refinement B/C — `readLiveIfLoaded` bridge contract (the primitive #654
- * gates on). Exercises the 6-property contract against a FAKE ioredis + fake
+ * `readLiveIfLoaded` bridge contract. Exercises the 6-property contract
+ * against a FAKE ioredis + fake
  * hocuspocus instance, with NO real Redis:
  *  2. never force-loads (owner-not-loaded / no-owner → loaded:false, no route);
  *  3. NON-CLAIMING — routing uses plain GET, NEVER `SET … NX`;

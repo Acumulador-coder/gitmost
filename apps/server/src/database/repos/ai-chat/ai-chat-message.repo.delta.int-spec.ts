@@ -11,7 +11,7 @@ import { AiChatMessageRepo } from './ai-chat-message.repo';
 import { AiChatRunRepo } from './ai-chat-run.repo';
 
 /**
- * #491 delta-poll — OBSERVABLE-PROPERTY tests against a LIVE Postgres (the local
+ * Delta-poll — OBSERVABLE-PROPERTY tests against a LIVE Postgres (the local
  * gitmost test DB, docker `gitmost-test-pg` on :5432), not "rows through a mock"
  * (a mock cannot observe the DB clock nor the overlap-window race — the very
  * things that matter here). Drives the REAL repo methods (`findByChatUpdatedAfter`,
@@ -28,12 +28,7 @@ import { AiChatRunRepo } from './ai-chat-run.repo';
  *
  * INTEGRATION lane (`*.int-spec.ts`): runs under `test:int`, whose global-setup
  * DROPS + RE-CREATES + MIGRATES `docmost_test`, so the real `ai_chat_messages` /
- * `ai_chat_runs` tables EXIST here. (It was previously a `.spec.ts` defaulting to
- * the UNmigrated dev `docmost`; in the CI unit lane — where `WAL_TEST_DATABASE_URL`
- * is unset and only `test:int` migrates — that meant 5/6 ERROR
- * `relation "ai_chat_messages" does not exist`, silently voiding coverage of the
- * risky cursor/overlap logic. Renaming to `.int-spec.ts` + defaulting the DSN to
- * `docmost_test` fixes the CI fidelity.)
+ * `ai_chat_runs` tables exist here.
  *
  * FK triggers are bypassed (`session_replication_role = replica`) so synthetic
  * chat/workspace ids need no parent fixtures; a single pooled connection (max 1)

@@ -12,7 +12,7 @@ import { PublicShareChatService } from './public-share-chat.service';
 import { PublicShareChatToolsService } from './tools/public-share-chat-tools.service';
 
 /**
- * SECURITY integration guard for #394 (commit 5): a tool's or the provider's raw
+ * SECURITY integration guard: a tool's or the provider's raw
  * error text must NOT leak to an anonymous public-share reader.
  *
  * The render gate (ToolCallCard showErrors=false) hides the text in the DOM but

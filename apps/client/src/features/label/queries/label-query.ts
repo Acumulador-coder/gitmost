@@ -78,7 +78,7 @@ export function useAddLabelsMutation(pageId: string | undefined) {
 
       queryClient.invalidateQueries({ queryKey: ["label-pages"] });
       queryClient.invalidateQueries({ queryKey: ["label-info"] });
-      // Notify on success so the action gives visible feedback (issue #128)
+      // Notify on success so the action gives visible feedback
       notifications.show({ message: t("Label added") });
     },
     onError: (error: any) => {
@@ -112,7 +112,7 @@ export function useRemoveLabelMutation(pageId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: ["workspace-labels"] });
       queryClient.invalidateQueries({ queryKey: ["label-pages"] });
       queryClient.invalidateQueries({ queryKey: ["label-info"] });
-      // Notify on success so the action gives visible feedback (issue #128)
+      // Notify on success so the action gives visible feedback
       notifications.show({ message: t("Label removed") });
     },
     onError: () => {

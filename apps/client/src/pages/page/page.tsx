@@ -55,8 +55,8 @@ export default function Page() {
 function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   const { t } = useTranslation();
   // The URL space slug is the only space identifier available when offline (the
-  // #563 meta cache deliberately stores none): used to source the read-only
-  // offline body's chrome links when the live `page` is absent.
+  // meta cache stores none): used to source the read-only offline body's chrome
+  // links when the live `page` is absent.
   const { spaceSlug: urlSpaceSlug } = useParams();
   const pageSlugId = extractPageSlugId(pageSlug);
 
@@ -70,25 +70,14 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   } = usePageQuery({ pageId: pageSlugId });
   const { data: space } = useGetSpaceBySlugQuery(page?.space?.slug);
 
-  // #563 — local-first phase 1. The boot cache is read SYNCHRONOUSLY (jotai
-  // atomWithStorage + getOnInit), so the chrome below no longer waits for THIS
-  // page's `/pages/info` round-trip: it renders from the cached metadata the
-  // moment this component mounts.
-  //
-  // What that does NOT (yet) mean: a paint on the very first frame of a reload.
-  // UserProvider still returns nothing until `/me` resolves (user-provider.tsx —
-  // `if (isLoading) return <></>`) and it wraps ALL authenticated routing, so the
-  // app shell — this page included — is still gated on that ONE request. Phase 1
-  // removes the SECOND, sequential round-trip (`/pages/info`, which today only
-  // starts after `/me`), not the first. A true first-frame paint additionally
-  // needs the `/me` gate lifted (a persisted current-user), which is out of
-  // scope here.
+  // The boot cache is read SYNCHRONOUSLY (jotai atomWithStorage + getOnInit),
+  // so the chrome below does not wait for this page's `/pages/info` round-trip:
+  // it renders from the cached metadata the moment this component mounts.
   //
   // Precedence: the LIVE query always wins — the cached entry only fills the gap
-  // until it resolves. Reconciliation is automatic: usePageQuery force-refetches
-  // on every mount and writes the fresh page back through to the cache, so a
-  // rename/icon/permission change lands as soon as the response arrives (and
-  // re-renders the chrome).
+  // until it resolves. usePageQuery force-refetches on every mount and writes
+  // the fresh page back to the cache, so a rename/icon/permission change lands
+  // as soon as the response arrives.
   const cachedMeta = useCachedPageMeta(pageSlugId);
   // `placeholderData: keepPreviousData` means `page` can still hold the PREVIOUS
   // page while we navigate into this one, so it only counts as live data for THIS
@@ -175,8 +164,8 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   // (401/403/404) renders not-found, never the stale cached chrome. The cached
   // entry itself is dropped by the global query-cache subscriber
   // (installPageMetaEviction), so the next visit is a clean miss — no flash of
-  // stale chrome. Same second condition as before: a settled query with no data
-  // and no error (e.g. a missing slug) still shows the error state.
+  // stale chrome. A settled query with no data and no error (e.g. a missing
+  // slug) also shows the error state.
   //
   // A TRANSPORT (unreachable) error does not collapse to the error screen: if we
   // have the cached chrome it renders chrome + the local body (offline-local)

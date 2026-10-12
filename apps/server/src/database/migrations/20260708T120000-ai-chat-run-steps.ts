@@ -1,28 +1,20 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * `ai_chat_run_steps` — append-only per-step persistence for an assistant turn
- * (#492 wave C). Each finished agent step's UI `parts` (its text part + a part
- * per tool call, WITH the tool output) is INSERTed as its own lightweight row the
- * moment the step ends, instead of REWRITING the whole assistant row's growing
- * `metadata.parts` jsonb on every `onStepFinish`.
+ * `ai_chat_run_steps` — append-only per-step persistence for an assistant turn.
+ * Each finished agent step's UI `parts` (its text part + a part per tool call,
+ * WITH the tool output) is INSERTed as its own row the moment the step ends.
  *
- * WHY a separate table + INSERT (not a jsonb `||` append on the message row): a
- * Postgres jsonb UPDATE rewrites the ENTIRE TOASTed row version under MVCC, so
- * re-persisting a growing `metadata.parts` on every step is O(n²) write volume
- * (a 50-step run with ~100 KB tool outputs wrote hundreds of MB of WAL / dead
- * tuples per turn, hammering autovacuum). `||` would only shave the network
- * payload — the WAL/TOAST rewrite harm remains. An INSERT into a per-step table
- * writes ONLY that step's bytes, so the per-turn write volume is O(Σ steps).
+ * A separate table, because a jsonb UPDATE (even `||`) rewrites the entire
+ * TOASTed row version under MVCC, so re-persisting a growing `metadata.parts`
+ * on every step is O(n²) WAL / dead tuples; an INSERT writes only that step's
+ * bytes.
  *
- * The full `metadata.parts` on the message row is assembled ONCE at finalize (the
- * terminal completed/error/aborted write). Mid-run, a resuming client's seed is
- * reconstructed by concatenating these step rows in `step_index` order — which
- * reproduces exactly what the old per-step full-row rewrite persisted. Records
- * written the OLD way (full `metadata.parts` on the row, no step rows) still
- * reconstruct from the row unchanged; the two eras are distinguished by whether
- * the row already carries non-empty `metadata.parts` (see reconstructRunParts /
- * assembleStepParts in ai-chat.service.ts).
+ * The full `metadata.parts` on the message row is assembled once at finalize
+ * (the terminal completed/error/aborted write). Mid-run, a resuming client's
+ * seed is the step rows concatenated in `step_index` order. A row that already
+ * carries non-empty `metadata.parts` and no step rows reconstructs from the row
+ * (see reconstructRunParts / assembleStepParts in ai-chat.service.ts).
  *
  * ON DELETE CASCADE on `message_id`: the step rows are a derived projection of the
  * assistant message; they must vanish with it (or with its workspace).

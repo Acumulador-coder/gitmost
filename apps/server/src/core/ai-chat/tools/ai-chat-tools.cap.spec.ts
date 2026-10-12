@@ -6,7 +6,7 @@ import {
 import type { Tool, ToolCallOptions } from 'ai';
 
 /**
- * #487 commit 1 — in-app tool race-on-abort + safe-points + per-call cap.
+ * In-app tool race-on-abort + safe-points + per-call cap.
  *
  * Tests assert the HONEST observable property the spec names — "after Stop, NO
  * new HTTP/WS call STARTS; an already-started single call may take either

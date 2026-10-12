@@ -40,10 +40,10 @@ export interface ICreatedApiKey {
   createdAt: string;
 }
 
-// Response of `POST /api/api-keys/create`. `token` is returned on create; it is
-// ALSO retrievable later via reveal (deterministic re-mint under a step-up), so
-// it is no longer "show once". It must never be cached, persisted or logged —
-// the create flow discards it (the user copies via the per-row Copy action).
+// Response of `POST /api/api-keys/create`. `token` is returned on create and is
+// also retrievable later via reveal (deterministic re-mint under a step-up). It
+// must never be cached, persisted or logged — the create flow discards it (the
+// user copies via the per-row Copy action).
 export interface ICreateApiKeyResponse {
   token: string;
   apiKey: ICreatedApiKey;

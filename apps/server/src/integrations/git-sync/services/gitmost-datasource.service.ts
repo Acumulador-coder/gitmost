@@ -27,8 +27,8 @@ export interface GitSyncBindContext {
   /**
    * The space this cycle reconciles. Every id-scoped write checks the target
    * page lives in it (and in `workspaceId`): a vault file of this space can
-   * carry another space's page id (GA-1). `deletePage` also uses it to tell a
-   * genuine deletion from a cross-space MOVE (the page still lives in space B).
+   * carry another space's page id. `deletePage` also uses it to tell a genuine
+   * deletion from a cross-space MOVE (the page still lives in space B).
    */
   spaceId: string;
   /**
@@ -49,8 +49,8 @@ export const GIT_SYNC_BODY_WRITE_TIMEOUT_MS = 60_000;
 /**
  * The git-sync provenance carried into PageService writes. PageService.create/
  * update/movePage honor this provenance and stamp `lastUpdatedSource = 'git-sync'`
- * on the page row when `provenance.actor === 'git-sync'`. Body writes (writeBody,
- * §3.3) likewise stamp 'git-sync' because the collab context's `actor: 'git-sync'`
+ * on the page row when `provenance.actor === 'git-sync'`. Body writes (writeBody)
+ * likewise stamp 'git-sync' because the collab context's `actor: 'git-sync'`
  * flows into PersistenceExtension. So ALL git-sync structural + body writes mark
  * the row's source, which the listener's loop-guard reads to skip our own writes.
  */
@@ -62,7 +62,7 @@ const GIT_SYNC_PROVENANCE: AuthProvenanceData = {
 /**
  * Native, in-process implementation of the engine's `GitSyncClient` seam
  * Reads go through repositories (PageRepo/SpaceRepo); body writes go
- * through collab `openDirectConnection` (§3.3); structural mutations
+ * through the collaboration gateway (see writeBody); structural mutations
  * (create/move/delete/rename) go through PageService.
  *
  * Shape: this is an `@Injectable()` holding the repos/services. The orchestrator
@@ -150,7 +150,7 @@ export class GitmostDataSourceService {
   }
 
   /**
-   * GA-1 confused-deputy guard. A vault file of the reconciling space can carry
+   * Confused-deputy guard. A vault file of the reconciling space can carry
    * the `gitmost_id` of a page in another space or workspace (hand-edited
    * frontmatter), and these writes run as the service user without CASL. Returns
    * why the page must not be touched, or null when it lives in the reconciling
@@ -175,7 +175,7 @@ export class GitmostDataSourceService {
    * rejects it at the `uuid` predicate with error code `22P02`
    * ("invalid input syntax for type uuid"). Left unhandled, the push apply records
    * that throw as a per-cycle failure that NEVER clears — refs never advance, so
-   * the WHOLE space's sync loops on the same failure indefinitely (bug C9-D1).
+   * the WHOLE space's sync loops on the same failure indefinitely.
    * Swallow exactly that error as an inert no-op so the cycle succeeds and the rest
    * of the space keeps syncing; re-throw anything else. NOTE: `pageId` is NOT the
    * only user-influenced uuid in these ops — `movePage` (and `createPage`) also
@@ -211,7 +211,7 @@ export class GitmostDataSourceService {
   /**
    * Full page tree of a space mapped to the engine's `PageNode` shape. We read
    * the DB directly, so `complete` is ALWAYS `true` — the incomplete-fetch
-   * suppression (packages/git-sync/DESIGN.md §5) never fires natively.
+   * suppression (SPEC §8) never fires natively.
    */
   private async listSpaceTree(
     ctx: GitSyncBindContext,
@@ -317,9 +317,9 @@ export class GitmostDataSourceService {
   /**
    * Merge a page's body from a self-contained markdown file: parse the meta+body
    * envelope, convert the body to ProseMirror, then merge it through collab
-   * (§3.3). When `baseMarkdown` (the last-synced version of the file) is given,
+   * When `baseMarkdown` (the last-synced version of the file) is given,
    * the body write is a THREE-WAY merge against the live doc so concurrent human
-   * edits survive (review #5); without it, a 2-way merge. Returns the fresh
+   * edits survive; without it, a 2-way merge. Returns the fresh
    * page's `updatedAt` for the loop-guard.
    */
   private async importPageMarkdown(
@@ -328,8 +328,8 @@ export class GitmostDataSourceService {
     fullMarkdown: string,
     baseMarkdown?: string | null,
   ): Promise<{ updatedAt?: string }> {
-    // Idempotency guard #1 (fixes GS-EDIT-REVERT + idle re-ingest churn). The
-    // reconcile can call this every poll cycle for a page whose vault file did
+    // Idempotency guard #1. The reconcile can call this every poll cycle for a
+    // page whose vault file did
     // NOT actually change since the last sync (non-idempotent change-detection
     // upstream). Each such call re-imports the SAME vault body into the live
     // collab doc — a no-op at idle, but it CLOBBERS a concurrent human edit that
@@ -341,14 +341,14 @@ export class GitmostDataSourceService {
     const currentPage = await this.pageRepo.findById(pageId, {
       includeContent: true,
     });
-    // Unknown-page guard (bug N1-D1). `importPageMarkdown` is only ever called for a
+    // Unknown-page guard. `importPageMarkdown` is only ever called for a
     // vault file that CARRIES a `gitmost_id`, so a null page means the id is a
     // well-formed UUID that matches NO page — a stale id from a restored-from-backup
     // file, or a copied/foreign id. Left unhandled it falls through to `writeBody()`
     // on a non-existent page, which throws "Page … not found"; the push apply records
     // that as a per-cycle failure that never clears, wedging the whole space's sync
-    // loop (same user-visible impact as C9-D1, but the id is a VALID uuid so the
-    // 22P02 guard does not catch it). Skip it as an inert no-op so the cycle succeeds
+    // loop (the id is a VALID uuid, so the 22P02 guard does not catch it). Skip it
+    // as an inert no-op so the cycle succeeds
     // and the rest of the space keeps syncing. (ADOPTING such a file as a fresh page
     // — the restore-from-backup use case — is a separate design decision: the title
     // lives in the filename, which the engine classifier holds, not this method.)
@@ -358,13 +358,13 @@ export class GitmostDataSourceService {
       );
       return {};
     }
-    // Cross-space confused-deputy guard (review S2, GA-1). The target `pageId`
-    // comes from THIS space's vault file frontmatter, but a file in space A could
-    // carry the id of a page in space B (or in another workspace). Without this
-    // check that file could resurrect (via restorePage), overwrite the body
-    // (writeBody), or clear the content of that page — a write the reconciling
-    // space has no authority over. Skip — touch nothing. A null page is already
-    // handled by the N1-D1 guard above.
+    // Cross-space confused-deputy guard. The target `pageId` comes from THIS
+    // space's vault file frontmatter, but a file in space A could carry the id
+    // of a page in space B (or in another workspace). Without this check that
+    // file could resurrect (via restorePage), overwrite the body (writeBody), or
+    // clear the content of that page — a write the reconciling space has no
+    // authority over. Skip — touch nothing. A null page is already handled by
+    // the unknown-page guard above.
     const foreign = this.foreignPageReason(ctx, currentPage);
     if (foreign) {
       this.logger.log(
@@ -446,15 +446,14 @@ export class GitmostDataSourceService {
     spaceId: string,
     parentPageId?: string,
   ): Promise<{ data: { id: string }; updatedAt?: string }> {
-    // F1 self-heal (bug C9-D1, parent-id variant). `parentPageId` is a SECOND
+    // Self-heal for a malformed parent id. `parentPageId` is a SECOND
     // user-influenced uuid: the push planner derives it from the parent
     // folder-note's `gitmost_id` frontmatter (resolveParentPageIdViaTree). A
     // broken/hand-edited non-UUID value flows into pageService.create, whose
     // findById(parentPageId) falls back to a slugId lookup (no row) and throws
     // NotFoundException — a throw that lands in the push `failures` set. The
     // wedge-gate only advances refs when failures is empty, so the WHOLE space
-    // loops forever re-attempting (same failure mode as the self-id C9-D1 bug,
-    // inside the same threat model). Do NOT skip the create (that would DROP the
+    // loops forever re-attempting. Do NOT skip the create (that would DROP the
     // page); instead COERCE a malformed parent to root (undefined) so the page is
     // created at the space root and self-heals, never wedging. Reuses the shared
     // `uuid` validator — the same check pageRepo.findById uses to tell an id from
@@ -513,13 +512,12 @@ export class GitmostDataSourceService {
     // disappears from THIS space's vault. That happens for a genuine deletion —
     // but ALSO when the page was moved to another space (source vault file
     // removed, page recreated in the destination vault). In the move case the
-    // page still exists and must NOT be trashed: soft-deleting it here loses the
-    // page from BOTH vaults and dumps it in Trash (observed data-loss on
-    // move-to-space with git-sync enabled). If the page's CURRENT space differs
+    // page still exists and must NOT be trashed: soft-deleting it here would lose
+    // the page from BOTH vaults and dump it in Trash. If the page's CURRENT space differs
     // from the space we're reconciling, this is a move-out — drop only the vault
     // file (already done by the engine), never the page.
     const page = await this.pageRepo.findById(pageId);
-    // GA-1: a page of another workspace is never touched.
+    // A page of another workspace is never touched.
     if (page && page.workspaceId !== ctx.workspaceId) {
       this.logger.warn(
         `git-sync[${ctx.spaceId}] skip delete of page ${pageId}: page is in another workspace (foreign gitmost_id; page preserved)`,
@@ -553,7 +551,7 @@ export class GitmostDataSourceService {
     position?: string,
   ): Promise<unknown> {
     const page = await this.pageRepo.findById(pageId);
-    // GA-1: the pageId comes from this space's vault frontmatter; a page that is
+    // The pageId comes from this space's vault frontmatter; a page that is
     // missing or lives elsewhere is never moved (PageService.movePage would run
     // as the service user without CASL).
     const foreign = this.foreignPageReason(ctx, page);
@@ -564,7 +562,7 @@ export class GitmostDataSourceService {
       return { id: pageId, skipped: 'cross-space' };
     }
 
-    // F1 self-heal (parent-id variant), mirror of createPage. `parentPageId` is a
+    // Self-heal for a malformed parent id, mirror of createPage. `parentPageId` is a
     // second user-influenced uuid (the DESTINATION parent folder-note's
     // `gitmost_id`). A malformed value reaches `computeMovePosition`'s raw
     // `where('parentPageId','=',parentPageId)` uuid predicate (22P02 — swallowed
@@ -669,7 +667,7 @@ export class GitmostDataSourceService {
     title: string,
   ): Promise<unknown> {
     const page = await this.pageRepo.findById(pageId);
-    // GA-1: never retitle a page that is missing or lives in another space or
+    // Never retitle a page that is missing or lives in another space or
     // workspace (PageService.update runs as the service user without CASL).
     const foreign = this.foreignPageReason(ctx, page);
     if (foreign) {
@@ -683,9 +681,8 @@ export class GitmostDataSourceService {
     // to the colliding file's stem (engine `disambiguate(name, slugId)` = exactly
     // `${name} ~${slugId}`) so two pages never map to one `.md`. That suffix is a
     // LOCAL filesystem artifact and must NEVER become the page's real Docmost
-    // title. A filename-derived title can carry it back in on ingest (observed:
-    // intermittent same-title collision left a page permanently titled
-    // "Title ~<slugId>"). Strip it here on the RENAME path (this is where a
+    // title. A filename-derived title can carry it back in on ingest (leaving a
+    // page titled "Title ~<slugId>"). Strip it here on the RENAME path (this is where a
     // filename-derived title lands as a page's real title); other title-write
     // paths (e.g. createPage / importPageMarkdown) are separate and not covered
     // by this choke point. Strip ONLY when the trailing token equals THIS page's
@@ -696,7 +693,7 @@ export class GitmostDataSourceService {
       page.slugId && title.endsWith(suffix)
         ? title.slice(0, -suffix.length)
         : title;
-    // GS-TITLE-SANITIZE guard (review Critical #2). A rename in Docmost to a
+    // Sanitized-title echo guard. A rename in Docmost to a
     // title with filename-hostile chars (`:` `/` `"` `|`, newlines, double
     // spaces, >120 chars) is pulled to a SANITIZED file stem; the same cycle then
     // sees an R(ename) line and would call renamePage with that sanitized stem,
@@ -786,7 +783,7 @@ export class GitmostDataSourceService {
     ctx: GitSyncBindContext,
     pageId: string,
   ): Promise<unknown> {
-    // GA-1: pageRepo.restorePage is not scoped to a workspace or space, so check
+    // pageRepo.restorePage is not scoped to a workspace or space, so check
     // here that the page is one this space may restore.
     const foreign = this.foreignPageReason(
       ctx,
@@ -823,8 +820,8 @@ export class GitmostDataSourceService {
    * owning instance broadcasts the merge as a Yjs update so the editor converges
    * (see CollaborationGateway.writePageBody for the full rationale).
    *
-   * The merge itself stays a block-level reconcile, not a full-body replace
-   * (review #5): only changed blocks are touched, concurrently-edited blocks are
+   * The merge itself stays a block-level reconcile, not a full-body replace:
+   * only changed blocks are touched, concurrently-edited blocks are
    * left untouched, and an unchanged resync is a 0-op write. With a `base` (the
    * last-synced version) it is a THREE-WAY merge so a block ONLY the human
    * changed is kept and a block ONLY git changed is taken (conflicts -> git);
@@ -833,7 +830,7 @@ export class GitmostDataSourceService {
    * PersistenceExtension.onStoreDocument, which persists ydoc+content+textContent,
    * stamps `lastUpdatedSource = 'git-sync'`, and broadcasts `page.updated`.
    *
-   * Deadline (GL-7): the write is aborted after GIT_SYNC_BODY_WRITE_TIMEOUT_MS
+   * Deadline: the write is aborted after GIT_SYNC_BODY_WRITE_TIMEOUT_MS
    * or when the cycle's `signal` fires, so one stuck merge cannot hold the
    * space lock. We stop waiting at once; the gateway stops the write at its
    * next step before the (atomic) merge transaction, so a merge that already

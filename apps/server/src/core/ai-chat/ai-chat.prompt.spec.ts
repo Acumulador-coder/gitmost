@@ -213,7 +213,7 @@ describe('buildSystemPrompt current-page context', () => {
 });
 
 /**
- * Unit tests for the per-EXTERNAL-MCP-server guidance block (#180). When the
+ * Unit tests for the per-EXTERNAL-MCP-server guidance block. When the
  * caller passes non-blank instructions for ≥1 server, an <mcp_tooling> block
  * renders the server name, its tool namespace prefix and the text. The block
  * sits INSIDE the safety sandwich (after context, before the trailing SAFETY)

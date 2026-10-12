@@ -2,9 +2,9 @@ import { type Tool } from 'ai';
 import { McpClientsService } from './mcp-clients.service';
 
 /**
- * Tool-allowlist filtering semantics on the merged external toolset (#476).
+ * Tool-allowlist filtering semantics on the merged external toolset.
  *
- * COVERAGE CHOICE (documented per issue #476): the full corrupt-row chain
+ * COVERAGE: the full corrupt-row chain
  * (DB value -> repo normalizeRow -> toolsFor filter) is covered on TWO levels
  * instead of one live-stub-MCP-server integration test:
  *   (a) apps/server/test/integration/ai-mcp-server-repo.int-spec.ts pins the
@@ -103,8 +103,7 @@ describe('external MCP tool-allowlist filtering (via toolsFor, #476)', () => {
   });
 
   it('[] (deny-all) yields ZERO tools — an empty array is authoritative, not falsy (#476)', async () => {
-    // This is the regression the #476 change guards: `[]` used to fall through
-    // the old `allow.length > 0` check and expose ALL tools. It must expose NONE.
+    // `[]` (an empty allowlist) must expose NO tools, never all of them.
     const keys = await mergedKeysFor(
       [server({ id: 'id-1', name: 'srv', toolAllowlist: [] })],
       RAW(),

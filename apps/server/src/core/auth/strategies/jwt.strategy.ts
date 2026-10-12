@@ -52,17 +52,17 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException();
     }
 
-    // #348 — reuse the workspace DomainMiddleware already loaded for this request
+    // Reuse the workspace DomainMiddleware already loaded for this request
     // instead of re-querying it. `validate()` above has confirmed
     // `req.raw.workspaceId === payload.workspaceId` (or that it is unset), and the
     // middleware sets `req.raw.workspace` alongside `req.raw.workspaceId` from the
-    // SAME workspace row, so when the ids match this is that row. NOTE it is the
+    // SAME workspace row, so when the ids match this is that row. It is the
     // middleware's `selectAll` object (a superset of the fallback `findById` base
     // fields — it also carries licenseKey/auditRetentionDays); that is harmless
-    // here because every consumer reads this workspace via the AuthWorkspace
-    // decorator, which already preferred `req.raw.workspace` (the selectAll object)
-    // over `req.user.workspace` before this change. Fall back to the query if the
-    // middleware did not populate it (a path that bypasses DomainMiddleware).
+    // because every consumer reads this workspace via the AuthWorkspace decorator,
+    // which prefers `req.raw.workspace` (the selectAll object) anyway. Fall back to
+    // the query if the middleware did not populate it (a path that bypasses
+    // DomainMiddleware).
     const workspace =
       req.raw.workspace && req.raw.workspaceId === payload.workspaceId
         ? req.raw.workspace
@@ -127,15 +127,15 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     req.raw.authType = 'api_key';
     req.raw.apiKeyId = payload.apiKeyId;
 
-    // Stamp the agent-edit provenance for the API-KEY path too (#486, #559).
-    // Unlike the access-token path above, it CANNOT be resolved before this point:
-    // the API-key payload carries no signed actor/aiChatId claim, and the user is
-    // unknown until the key is validated. #559 — EVERY api-key write is now an
-    // EXTERNAL MCP write: passing the verified `payload.apiKeyId` makes
-    // resolveProvenance stamp actor='agent' even for an ordinary user's PERSONAL
-    // key (intentional — the access is programmatic via api_key, so it is
-    // attributed to the "External MCP" persona named after the key, not shown as
-    // the human). An API key has no internal ai_chats row, so aiChatId stays null;
+    // Stamp the agent-edit provenance for the API-KEY path too. Unlike the
+    // access-token path above, it CANNOT be resolved before this point: the
+    // API-key payload carries no signed actor/aiChatId claim, and the user is
+    // unknown until the key is validated. EVERY api-key write is an EXTERNAL MCP
+    // write: passing the verified `payload.apiKeyId` makes resolveProvenance stamp
+    // actor='agent' even for an ordinary user's PERSONAL key (intentional — the
+    // access is programmatic via api_key, so it is attributed to the "External
+    // MCP" persona named after the key, not shown as the human). An API key has
+    // no internal ai_chats row, so aiChatId stays null;
     // the key id is what distinguishes the persona. Derived from the SERVER-side
     // identity + the verified key id (never a client field), so unspoofable.
     const provenance = resolveProvenance(result.user, null, payload.apiKeyId);

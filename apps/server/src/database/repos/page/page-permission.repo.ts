@@ -922,14 +922,10 @@ export class PagePermissionRepo {
    *
    * UNCACHED (like the sibling hasRestrictedPagesInSpace) — a single cheap
    * `EXISTS(pageAccess WHERE workspaceId=?)` per call. This is an ACCESS-CONTROL
-   * gate on whole-workspace list endpoints, so it must never go stale: caching it
-   * (even 5s) reintroduced a leak the space-path never had — a concurrent
-   * whole-workspace read in the insert->commit window of the FIRST restricted page
-   * could re-populate `false` under withCache (read-then-set, no del-during-read
-   * guard) and override the insert bust, leaking that page to unauthorized users
-   * for up to the TTL (#348 review F1). An uncached EXISTS removes both the
-   * cache/DB asymmetry with hasRestrictedPagesInSpace and that race; the space
-   * path already accepts this exact per-call cost.
+   * gate on whole-workspace list endpoints, so it must never go stale: with a
+   * read-then-set cache, a concurrent read in the insert->commit window of the
+   * first restricted page could re-populate `false` over the insert bust and
+   * leak that page for up to the TTL.
    */
   async hasRestrictedPagesInWorkspace(workspaceId: string): Promise<boolean> {
     const result = await this.db

@@ -4,13 +4,11 @@ import type {
   VaultGit as VaultGitClass,
   vaultGitEnv as vaultGitEnvFn,
   runCycle as runCycleFn,
-  recoverVault as recoverVaultFn,
+  prepareVault as prepareVaultFn,
   parseDocmostMarkdown as parseDocmostMarkdownFn,
   markdownToProseMirror as markdownToProseMirrorFn,
   sanitizeTitle as sanitizeTitleFn,
   PUSH_BUDGET as PUSH_BUDGET_VALUE,
-  DEFAULT_BRANCH as DEFAULT_BRANCH_VALUE,
-  RECEIVE_REF as RECEIVE_REF_VALUE,
 } from '@docmost/git-sync';
 
 /**
@@ -23,13 +21,11 @@ interface GitSyncModule {
   VaultGit: typeof VaultGitClass;
   vaultGitEnv: typeof vaultGitEnvFn;
   runCycle: typeof runCycleFn;
-  recoverVault: typeof recoverVaultFn;
+  prepareVault: typeof prepareVaultFn;
   parseDocmostMarkdown: typeof parseDocmostMarkdownFn;
   markdownToProseMirror: typeof markdownToProseMirrorFn;
   sanitizeTitle: typeof sanitizeTitleFn;
   PUSH_BUDGET: typeof PUSH_BUDGET_VALUE;
-  DEFAULT_BRANCH: typeof DEFAULT_BRANCH_VALUE;
-  RECEIVE_REF: typeof RECEIVE_REF_VALUE;
 }
 
 // The CJS->ESM dynamic-import bridge lives in one shared helper

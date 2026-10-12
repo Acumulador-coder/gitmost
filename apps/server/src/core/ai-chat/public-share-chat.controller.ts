@@ -277,7 +277,7 @@ export async function resolveShareAssistantRequest(
   //     checked FIRST so a workspace that has already burned its day's token
   //     budget gets a clean 429 WITHOUT consuming a request slot, and spends
   //     nothing. Counting requests alone does not bound the owner's provider
-  //     bill (issue #159, finding #5).
+  //     bill.
   if (!(await deps.publicShareChat.withinShareTokenBudget(workspaceId))) {
     throw new HttpException(
       'This documentation assistant has reached its usage budget. Please try again later.',

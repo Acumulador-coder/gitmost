@@ -62,7 +62,7 @@ export function InviteSignUpForm() {
 
   if (isError) {
     // Styled error with a CTA to login, mirroring the password-reset
-    // error page and the 404 page (issue #133)
+    // error page and the 404 page
     return (
       <AuthLayout>
         <Container my={40}>

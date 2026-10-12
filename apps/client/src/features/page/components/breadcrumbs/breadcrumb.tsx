@@ -49,8 +49,8 @@ function getTitle(name: string, icon: string | null | undefined) {
  * Equality over a breadcrumb chain by the only fields the breadcrumb renders
  * (id, slugId, name, icon). Lets the selectAtom below hand back the SAME
  * reference when an unrelated tree mutation leaves THIS page's ancestor chain
- * visually unchanged, so the breadcrumb no longer re-renders on every tree
- * event (it previously subscribed to the whole treeDataAtom).
+ * visually unchanged, so the breadcrumb does not re-render on every tree
+ * event.
  */
 export function breadcrumbPathEqual(
   a: SpaceTreeNode[] | null,
@@ -104,12 +104,12 @@ export default function Breadcrumb() {
   const { data: ancestors } = usePageBreadcrumbsQuery(currentPageId);
   const isMobile = useMediaQuery("(max-width: 48em)");
 
-  // Narrowed subscription: instead of subscribing to the whole treeDataAtom and
-  // recomputing on every tree event, derive ONLY the current page's ancestor
-  // chain. The custom equality returns the previous reference when that chain is
-  // visually unchanged, so an unrelated tree mutation no longer re-renders this
-  // component. Mirrors computeBreadcrumbState's tree-hit branch
-  // (findBreadcrumbPath); the tree-miss/ancestors fallback is applied below.
+  // Narrowed subscription: derive ONLY the current page's ancestor chain rather
+  // than subscribing to the whole treeDataAtom. The custom equality returns the
+  // previous reference when that chain is visually unchanged, so an unrelated
+  // tree mutation does not re-render this component. Mirrors
+  // computeBreadcrumbState's tree-hit branch (findBreadcrumbPath); the
+  // tree-miss/ancestors fallback is applied below.
   const treePathAtom = useMemo(
     () =>
       selectAtom(

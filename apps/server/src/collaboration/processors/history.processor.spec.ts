@@ -143,9 +143,8 @@ describe('HistoryProcessor.process', () => {
       PAGE_ID,
       expect.objectContaining({ withLock: true, trx: { __trx: true } }),
     );
-    // #370 F7 — addPageWatchers MUST receive the trx, or its FK-check runs on a
-    // separate connection and self-deadlocks against our FOR UPDATE. Asserting
-    // the trx arg here is exactly what would have caught that regression.
+    // addPageWatchers MUST receive the trx, or its FK-check runs on a separate
+    // connection and self-deadlocks against our FOR UPDATE.
     expect(watcherService.addPageWatchers).toHaveBeenCalledWith(
       ['u1', 'u2'],
       PAGE_ID,

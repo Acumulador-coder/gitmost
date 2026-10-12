@@ -1,6 +1,6 @@
 import './git-env';
 import { execFile } from 'node:child_process';
-import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -29,24 +29,32 @@ async function gitAvailable(): Promise<boolean> {
   }
 }
 
-/** Read the author "Name <email>" of HEAD in a repo dir. */
-async function headAuthor(dir: string): Promise<string> {
+/** Read the author or committer (`%an <%ae>` / `%cn <%ce>`) of a commit. */
+async function identity(dir: string, sha: string, format: string): Promise<string> {
   const { stdout } = await execFileAsync(
     'git',
-    ['--no-pager', 'log', '-1', '--pretty=%an <%ae>'],
+    ['--no-pager', 'log', '-1', `--pretty=${format}`, sha],
     { cwd: dir },
   );
   return stdout.trim();
 }
 
-/** Read the committer "Name <email>" of HEAD in a repo dir. */
-async function headCommitter(dir: string): Promise<string> {
-  const { stdout } = await execFileAsync(
-    'git',
-    ['--no-pager', 'log', '-1', '--pretty=%cn <%ce>'],
-    { cwd: dir },
-  );
-  return stdout.trim();
+/** Commit `files` (path -> text, `null` removes) on top of `parent`, with plumbing. */
+async function commitFiles(
+  git: VaultGit,
+  parent: string,
+  files: Record<string, string | null>,
+  message: string,
+): Promise<string> {
+  const changes = [];
+  for (const [path, text] of Object.entries(files)) {
+    changes.push({ path, sha: text === null ? null : await git.hashObject(text) });
+  }
+  const tree = await git.buildTree(parent, changes);
+  return git.commitTree(tree, [parent], message, {
+    authorName: BOT_AUTHOR_NAME,
+    authorEmail: BOT_AUTHOR_EMAIL,
+  });
 }
 
 /** Read a LOCAL git config value (or '' if unset) in a repo dir. */
@@ -91,32 +99,32 @@ describe('VaultGit integration gaps (temp repo)', () => {
     const vault = await freshDir();
     const git = new VaultGit(vault);
     await git.ensureRepo();
+    const init = (await git.revParse('HEAD'))!;
 
     // Base commit: `keep.md` (to be modified) and `old-name.md` (to be renamed).
     const renameBody = 'line a\nline b\nline c\nline d\n';
-    await writeFile(join(vault, 'keep.md'), 'v1\n', 'utf8');
-    await writeFile(join(vault, 'old-name.md'), renameBody, 'utf8');
-    await git.stageAll();
-    await git.commit('base', {
-      authorName: BOT_AUTHOR_NAME,
-      authorEmail: BOT_AUTHOR_EMAIL,
-    });
-    const base = await git.revParse('HEAD');
-    expect(base).toBeTruthy();
+    const base = await commitFiles(
+      git,
+      init,
+      { 'keep.md': 'v1\n', 'old-name.md': renameBody },
+      'base',
+    );
 
     // Second commit: MODIFY keep.md, ADD fresh.md, RENAME old-name.md ->
     // new-name.md (identical content so -M detects a rename, not delete+add).
-    await writeFile(join(vault, 'keep.md'), 'v2\n', 'utf8');
-    await writeFile(join(vault, 'fresh.md'), 'brand new\n', 'utf8');
-    await rm(join(vault, 'old-name.md'));
-    await writeFile(join(vault, 'new-name.md'), renameBody, 'utf8');
-    await git.stageAll();
-    await git.commit('mixed change', {
-      authorName: BOT_AUTHOR_NAME,
-      authorEmail: BOT_AUTHOR_EMAIL,
-    });
+    const head = await commitFiles(
+      git,
+      base,
+      {
+        'keep.md': 'v2\n',
+        'fresh.md': 'brand new\n',
+        'old-name.md': null,
+        'new-name.md': renameBody,
+      },
+      'mixed change',
+    );
 
-    const entries = await git.diffNameStatus(base!, 'HEAD');
+    const entries = await git.diffNameStatus(base, head);
     const byPath = new Map(entries.map((e) => [e.path, e]));
 
     // The modify and the add are each classified correctly (1 path token each).
@@ -153,43 +161,33 @@ describe('VaultGit integration gaps (temp repo)', () => {
     const vault = await freshDir();
     const git = new VaultGit(vault);
     await git.ensureRepo();
+    const init = (await git.revParse('HEAD'))!;
 
     // Base: a single source file with enough content to be copy-detectable.
     const body = 'aaa\nbbb\nccc\nddd\neee\nfff\n';
-    await writeFile(join(vault, 'src.md'), body, 'utf8');
-    await git.stageAll();
-    await git.commit('add src', {
-      authorName: BOT_AUTHOR_NAME,
-      authorEmail: BOT_AUTHOR_EMAIL,
-    });
-    const base = await git.revParse('HEAD');
+    const base = await commitFiles(git, init, { 'src.md': body }, 'add src');
 
     // KEEP src.md and add an identical copy dup.md (a pure copy, not a rename).
-    await copyFile(join(vault, 'src.md'), join(vault, 'dup.md'));
-    await git.stageAll();
-    await git.commit('add copy of src', {
-      authorName: BOT_AUTHOR_NAME,
-      authorEmail: BOT_AUTHOR_EMAIL,
-    });
+    const head = await commitFiles(git, base, { 'dup.md': body }, 'add copy of src');
 
-    const entries = await git.diffNameStatus(base!, 'HEAD');
+    const entries = await git.diffNameStatus(base, head);
 
     // With -M only (no -C), git does NOT emit a C row: the copy is a plain add.
     expect(entries).toEqual([{ status: 'A', path: 'dup.md' }]);
     expect(entries.some((e) => e.status === 'C')).toBe(false);
   });
 
-  // --- 9. commit: per-invocation committer/author does NOT leak into config ----
+  // --- 9. commitTree: per-invocation committer/author does NOT leak into config
   //
   // The engine sets author + committer identity via GIT_AUTHOR_*/GIT_COMMITTER_*
-  // env vars per `git commit` invocation (commitRaw). This underpins the DESIGN.md §11
+  // env vars per `git commit-tree` invocation. This underpins the §10
   // provenance/loop-guard: the identity must travel WITH the commit, not be
   // written into the repo config (which would make it global to every later
   // hand-run commit). We commit with the distinct "Local" identity (different
   // from the repo's default `user.name`/`user.email`, which ensureRepo seeds as
   // the bot identity) and assert the commit carries the passed identity while the
   // repo config is UNCHANGED (still the bot default).
-  it('commit passes committer/author per-invocation without mutating repo config', async (ctx) => {
+  it('commitTree passes committer/author per-invocation without mutating repo config', async (ctx) => {
     if (!available) ctx.skip();
     const vault = await freshDir();
     const git = new VaultGit(vault);
@@ -203,18 +201,19 @@ describe('VaultGit integration gaps (temp repo)', () => {
     // Commit with a DIFFERENT identity, passed per-invocation only.
     const LOCAL_NAME = 'Local';
     const LOCAL_EMAIL = 'local@local';
-    await writeFile(join(vault, 'page.md'), 'hello\n', 'utf8');
-    await git.stageAll();
-    const made = await git.commit('docmost: sync 1 page(s)', {
+    const init = (await git.revParse('HEAD'))!;
+    const tree = await git.buildTree(init, [
+      { path: 'page.md', sha: await git.hashObject('hello\n') },
+    ]);
+    const made = await git.commitTree(tree, [init], 'docmost: sync 1 page(s)', {
       authorName: LOCAL_NAME,
       authorEmail: LOCAL_EMAIL,
     });
-    expect(made).toBe(true);
 
     // The commit's author AND committer are the passed per-invocation identity
     // (committer matches author via GIT_COMMITTER_* — not the repo default).
-    expect(await headAuthor(vault)).toBe(`${LOCAL_NAME} <${LOCAL_EMAIL}>`);
-    expect(await headCommitter(vault)).toBe(`${LOCAL_NAME} <${LOCAL_EMAIL}>`);
+    expect(await identity(vault, made, '%an <%ae>')).toBe(`${LOCAL_NAME} <${LOCAL_EMAIL}>`);
+    expect(await identity(vault, made, '%cn <%ce>')).toBe(`${LOCAL_NAME} <${LOCAL_EMAIL}>`);
 
     // CRITICAL: the per-commit identity did NOT leak into the repo config — the
     // LOCAL user.* is still the bot default ensureRepo seeded.
@@ -288,12 +287,12 @@ describe('VaultGit parser/error-fallback gaps (runRaw stubbed)', () => {
     expect(entries[0]).toEqual({ status: 'A', path: 'a.md' });
   });
 
-  // --- 3. listTrackedFiles: non-zero exit, EMPTY stderr, stdout carries detail -
+  // --- 3. lsTree: non-zero exit, EMPTY stderr, stdout carries detail --------
   //
   // The thrown message is built from `(r.stderr || r.stdout || '')`. This pins
   // the `|| r.stdout` arm (empty stderr, non-empty stdout) — distinct from the
   // non-empty-stderr and spawn-ENOENT paths the accepted specs cover.
-  it('listTrackedFiles uses stdout in the error message when stderr is empty', async () => {
+  it('lsTree uses stdout in the error message when stderr is empty', async () => {
     const git = new VaultGit('/tmp/any');
     (git as any).runRaw = async () => ({
       code: 1,
@@ -301,15 +300,13 @@ describe('VaultGit parser/error-fallback gaps (runRaw stubbed)', () => {
       stdout: 'some detail',
     });
 
-    await expect(git.listTrackedFiles()).rejects.toThrow(
-      'git ls-files failed: some detail',
-    );
+    await expect(git.lsTree('X')).rejects.toThrow('git ls-tree X failed: some detail');
   });
 
   // --- 4. diffNameStatus: non-zero exit, EMPTY stderr, stdout carries detail ---
   //
   // diffNameStatus has its OWN independent `(r.stderr || r.stdout || '').trim()`
-  // fallback (git.ts ~line 469), separate from listTrackedFiles. Pin the
+  // fallback, separate from lsTree. Pin the
   // empty-stderr/non-empty-stdout arm of THIS branch.
   it('diffNameStatus uses stdout in the error message when stderr is empty', async () => {
     const git = new VaultGit('/tmp/any');

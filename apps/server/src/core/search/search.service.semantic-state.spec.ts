@@ -2,7 +2,7 @@ import { SearchService } from './search.service';
 import { AiEmbeddingNotConfiguredException } from '../../integrations/ai/ai-embedding-not-configured.exception';
 
 /**
- * #599 — the `semantic` block of the search response: the COVERAGE STATE.
+ * The `semantic` block of the search response: the COVERAGE STATE.
  *
  *   off   — no provider (reason 'no-provider'), the kill-switch, or a degrade.
  *   stale — the vector arm ran, but the ACTIVE generation does not cover the

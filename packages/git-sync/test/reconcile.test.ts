@@ -190,7 +190,7 @@ describe('planReconciliation', () => {
   });
 });
 
-describe('decideAbsenceDeletions (DESIGN.md §5)', () => {
+describe('decideAbsenceDeletions (SPEC §8)', () => {
   it('APPLIES when the tree is complete and the delete count is modest', () => {
     const d = decideAbsenceDeletions({
       treeComplete: true,

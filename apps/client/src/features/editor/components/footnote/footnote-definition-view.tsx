@@ -22,10 +22,10 @@ export function backlinkLabel(index: number): string {
  * editable content (NodeViewContent), and a "↩" back-link to its reference.
  * The number is derived from the document (not stored).
  *
- * After #166 a footnote can be referenced more than once (one number, one
- * definition, N forward links). When it is, the back-link becomes a row of
- * per-occurrence links — ↩ a b c … — each scrolling to its own reference (#168);
- * a single-reference footnote keeps the plain ↩.
+ * A footnote can be referenced more than once (one number, one definition, N
+ * forward links). When it is, the back-link becomes a row of per-occurrence
+ * links — ↩ a b c … — each scrolling to its own reference; a single-reference
+ * footnote keeps the plain ↩.
  */
 export default function FootnoteDefinitionView(props: NodeViewProps) {
   const { node, editor } = props;

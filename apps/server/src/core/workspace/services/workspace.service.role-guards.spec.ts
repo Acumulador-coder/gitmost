@@ -13,11 +13,12 @@ import { EventName } from '../../../common/events/event.contants';
 // page.service.spec.ts / workspace-update-gate.spec.ts) and asserts BOTH the
 // thrown exception AND that no destructive DB write happened on a rejection.
 //
-// Constructor arg order (18 positional deps) is pinned here so a reorder is
+// Constructor arg order (19 positional deps) is pinned here so a reorder is
 // caught: workspaceRepo, spaceService, spaceMemberService, groupRepo,
 // groupUserRepo, userRepo, environmentService, domainService,
 // licenseCheckService, shareRepo, watcherRepo, favoriteRepo, db,
-// attachmentQueue, billingQueue, aiQueue, auditService, userSessionRepo.
+// attachmentQueue, billingQueue, aiQueue, auditService, userSessionRepo,
+// mcpClients.
 
 type UserRow = {
   id: string;
@@ -103,7 +104,7 @@ function buildService(opts?: {
     {} as any, // aiQueue
     auditService as any, // auditService
     userSessionRepo as any, // userSessionRepo
-    mcpClients as any, // mcpClients (#686)
+    mcpClients as any, // mcpClients
     eventEmitter as any, // eventEmitter
   );
 

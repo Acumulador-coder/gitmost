@@ -1,12 +1,12 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * The MUTABLE page->chat binding (#665): "for THIS user, on THIS page, this is
+ * The MUTABLE page->chat binding: "for THIS user, on THIS page, this is
  * the chat that opens." Distinct from `ai_chats.page_id`, which stays IMMUTABLE
  * provenance (where a chat was BORN — it also feeds the history-row "· PageTitle"
  * join). This table is the STATE the header button reads and that the history
  * select / "New chat" / first-message writers mutate. Absence of a row == "nothing
- * bound" == an empty chat opens. #191 named exactly this mechanism and deferred it.
+ * bound" == an empty chat opens.
  *
  * Surrogate `id` + UNIQUE(user_id, page_id) (not a composite PK): a surrogate key
  * is the 100% repo convention (~20 tables); the unique constraint holds the 1:1
@@ -87,7 +87,7 @@ export async function up(db: Kysely<any>): Promise<void> {
 }
 
 /**
- * ⚠️ NOT the production rollback path (#665, #361). In prod the rollback is
+ * ⚠️ NOT the production rollback path. In prod the rollback is
  * "revert everything EXCEPT this file — leave the file in the image and the table
  * in the DB": reverting the commit would remove the migration file while its row
  * stays in `kysely_migration`, which is exactly the missing-file condition that

@@ -6,7 +6,7 @@ import { AiChatPageSnapshot } from '@docmost/db/types/entity.types';
 
 /**
  * Repository for the per-(chat,page) Markdown snapshot taken at the end of the
- * agent's previous turn (#274). Diffing the current page against this snapshot
+ * agent's previous turn. Diffing the current page against this snapshot
  * tells the agent what a human changed between turns, so it doesn't overwrite
  * those edits. There is at most one live row per (chatId, pageId) — the turn-end
  * write is an upsert on that unique key. Every lookup is workspace-scoped as

@@ -1,5 +1,5 @@
 /**
- * Server-authoritative "agent avatar stack" provenance (#300).
+ * Server-authoritative "agent avatar stack" provenance.
  *
  * Agent-authored content (comments / page-history snapshots) is displayed as a
  * two-avatar stack: the AGENT in front, and the HUMAN who launched it behind.
@@ -34,7 +34,7 @@ export interface LauncherInfo {
  *   provenance token was minted for the human, so `creator` is the human and the
  *   agent identity comes from the chat's role); null => external (no internal
  *   chat row).
- * - `api_key_id` — EXTERNAL-MCP discriminator (#559): non-null (with aiChatId
+ * - `api_key_id` — EXTERNAL-MCP discriminator: non-null (with aiChatId
  *   null) => the write authenticated over an api_key, so the persona is the
  *   named key ("External MCP" / <key name>), with no separate human launcher.
  * - `apiKeyName` — the acting key's human-assigned name (e.g. `agent-node-2`),
@@ -80,7 +80,7 @@ export const EXTERNAL_MCP_FALLBACK_NAME = 'External MCP';
  *  1. HUMAN — `source='user'`: isAgent false → null (flat human avatar).
  *  2. INTERNAL AGENT — `source='agent'`, aiChatId != null, api_key_id == null:
  *     agent = the chat's role name (or the AI-agent fallback), launcher = the
- *     human chat owner. UNCHANGED by #559.
+ *     human chat owner.
  *  3. EXTERNAL MCP — `source='agent'`, aiChatId == null, api_key_id != null:
  *     agent = the api_key's name ("External MCP" fallback), launcher = null. The
  *     access was programmatic via an api_key — including an ordinary user's
@@ -89,7 +89,7 @@ export const EXTERNAL_MCP_FALLBACK_NAME = 'External MCP';
  *
  * The degenerate form `source='agent'` with BOTH aiChatId and api_key_id null
  * (e.g. an is_agent account acting on a plain ACCESS token, no key, no chat)
- * keeps the pre-#559 external branch: the login itself is the agent account, so
+ * takes the plain external branch: the login itself is the agent account, so
  * agent = the creator (AI-agent fallback), launcher = null.
  */
 export function resolveAgentProvenance(

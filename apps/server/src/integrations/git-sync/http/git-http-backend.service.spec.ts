@@ -329,7 +329,7 @@ describe('GitHttpBackendService.run', () => {
 
   it('(abort) an ALREADY-aborted signal -> no spawn, 500 lock-lost', async () => {
     // The per-space lock was already lost before run() reached the spawn: we must
-    // NOT start writing the working tree after a possible lock takeover.
+    // NOT start writing the vault after a possible lock takeover.
     const child = fakeChild();
     spawnMock.mockReturnValue(child);
     const service = buildService();
@@ -382,8 +382,8 @@ describe('GitHttpBackendService.run', () => {
     );
   });
 
-  // --- GH-4: client disconnect kills the child -------------------------------
-  describe('client disconnect (GH-4)', () => {
+  // --- client disconnect kills the child ------------------------------------
+  describe('client disconnect', () => {
     it('the response closing before it finished kills the child and settles', async () => {
       const child = fakeChild();
       spawnMock.mockReturnValue(child);
@@ -465,8 +465,8 @@ describe('GitHttpBackendService.run', () => {
     });
   });
 
-  // --- GH-4: concurrency budget ------------------------------------------------
-  describe('concurrency budget (GH-4)', () => {
+  // --- concurrency budget -----------------------------------------------------
+  describe('concurrency budget', () => {
     it(`refuses the request over the per-space budget (${GIT_BACKEND_MAX_CONCURRENT_PER_SPACE}) with 503 + reason, then frees the slot on exit`, async () => {
       const children: any[] = [];
       spawnMock.mockImplementation(() => {
@@ -555,7 +555,7 @@ describe('GitHttpBackendService.run', () => {
     });
   });
 
-  // --- GH-5: backpressure ----------------------------------------------------------
+  // --- backpressure ---------------------------------------------------------------
   it('(backpressure) pauses the child stdout when the response is full and resumes on drain', async () => {
     const child = fakeChild();
     spawnMock.mockReturnValue(child);
@@ -860,10 +860,10 @@ describe('buildGitBackendCgiEnv', () => {
     remoteUser: 'alice@example.com',
   };
 
-  it('points PATH_INFO at the NON-bare repo dir (no .git suffix)', () => {
-    // Regression guard: the vault lives at <root>/<spaceId> (a working repo), so
-    // PATH_INFO must be /<spaceId>/<subpath>. A `.git` suffix made git
-    // http-backend resolve <root>/<spaceId>.git and 404 every fetch/push.
+  it('points PATH_INFO at the vault dir (no .git suffix)', () => {
+    // The vault lives at <root>/<spaceId> (no .git suffix), so PATH_INFO must be
+    // /<spaceId>/<subpath>. A `.git` suffix would make git http-backend resolve
+    // <root>/<spaceId>.git and 404 every fetch/push.
     const env = buildGitBackendCgiEnv(base, '/vaults');
     expect(env.PATH_INFO).toBe('/space-1/info/refs');
     expect(env.PATH_INFO).not.toContain('.git');

@@ -4,8 +4,8 @@
  * Event/job names are REUSED from the shared event contract (event.contants.ts)
  * so the listener subscribes to the exact names the rest of the server emits —
  * never a string literal that could drift. The Redis lock-key prefix + TTLs back
- * the single-writer leader lock (§9); the debounce default backs the per-space
- * event coalescing (§10).
+ * the single-writer leader lock; the debounce default backs the per-space
+ * event coalescing.
  */
 import { EventName } from '../../common/events/event.contants';
 
@@ -48,10 +48,9 @@ export const GIT_SYNC_LOCK_TTL_MS = 30_000;
  * processes a whole space, so a legitimate `git push` that arrives during a
  * cycle would otherwise IMMEDIATELY 503 (GitSyncLockHeldError) even though the
  * cycle is about to release the lock in well under a second for most spaces.
- * Under continuous polling that made a majority of pushes 503 non-
- * deterministically. So the push path retries the acquire with a small capped
- * backoff for up to ~`TOTAL_MS` BEFORE giving up — a transient overlap with a
- * cycle no longer fails the push, while a genuinely stuck/long cycle still
+ * So the push path retries the acquire with a small capped backoff for up to
+ * ~`TOTAL_MS` BEFORE giving up — a transient overlap with a cycle does not fail
+ * the push, while a genuinely stuck/long cycle still
  * surfaces a 503 after the bound (git then retries the whole push, which is
  * safe: the receive-pack only runs ONCE the lock is held, so a 503 never leaves
  * a half-applied ref). The POLL cycle itself does NOT retry (it just skips and

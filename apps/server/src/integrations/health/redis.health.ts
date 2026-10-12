@@ -11,12 +11,10 @@ export class RedisHealthIndicator implements OnModuleDestroy {
   private readonly logger = new Logger(RedisHealthIndicator.name);
 
   /**
-   * ONE long-lived probe connection, reused across every /health tick. The old
-   * code built `new Redis(...)` per call and only `disconnect()`d on the SUCCESS
-   * path, so while Redis was DOWN every probe added a fresh, forever-reconnecting
-   * client — a handle leak that grew without bound for as long as the outage (and
-   * the health checker keeps polling) lasted. A single shared client keeps at most
-   * ONE background reconnect loop regardless of how many probes run.
+   * ONE long-lived probe connection, reused across every /health tick. A
+   * per-probe client would, while Redis is DOWN, leave a forever-reconnecting
+   * client behind on every tick; a single shared client keeps at most ONE
+   * background reconnect loop regardless of how many probes run.
    */
   private probeClient: Redis | null = null;
 

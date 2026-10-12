@@ -78,7 +78,7 @@ Obsidian резолвит `[[Заметка]]` по **basename** (не по по
 
 ## PUSH (vault → Docmost)
 
-1. Дифф `merge-base(docmost, main)..main`.
+1. Дифф `last-export..main`.
 2. Идентичность файла — из frontmatter `gitmost_id`. Родитель — из пути (folder-note
    родительской папки).
 3. Классификация:

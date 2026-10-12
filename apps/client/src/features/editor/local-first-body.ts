@@ -4,7 +4,7 @@ import { isChangeOrigin } from "@tiptap/extension-collaboration";
 import * as Y from "yjs";
 
 /**
- * Local-first body (#564): the two mechanisms that make an "instant body from
+ * Local-first body: the two mechanisms that make an "instant body from
  * the local ydoc" safe.
  *
  *  1. `isYdocBodyNonEmpty` — do NOT trust the IndexedDB "synced" event as proof
@@ -60,7 +60,7 @@ export const bodyWriteGuardPluginKey = new PluginKey("gitmostBodyWriteGuard");
 
 /**
  * Blocks every LOCAL doc mutation until the remote collab room has confirmed a
- * sync (#564, guard 2 — the Yjs-level half).
+ * sync (guard 2 — the Yjs-level half).
  *
  * Passed through:
  *  - transactions that don't change the doc (selection, decorations, awareness),

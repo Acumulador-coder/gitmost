@@ -2,9 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { runCycle, type RunCycleDeps } from "../src/engine/cycle";
 import { serializePageFile } from "@docmost/prosemirror-markdown";
 
-// A fake VaultGit recording the staging calls. An EMPTY vault/tree lets the real
-// readExisting/computePullActions/applyPullActions/runPush run trivially (no
-// files, no pages) so we can assert runCycle's choreography without real git.
+// A fake VaultGit recording the ref and tree calls. An EMPTY vault/tree lets
+// the real readExisting/computePullActions/buildExportTree/runPush run
+// trivially (no files, no pages) so we can assert runCycle's choreography
+// without real git. `main` and the last export start on different trees, so
+// the apply step runs.
 function fakeVault(overrides: Record<string, any> = {}) {
   const order: string[] = [];
   const rec =
@@ -13,33 +15,33 @@ function fakeVault(overrides: Record<string, any> = {}) {
       order.push(args.length ? `${name}:${args.join(",")}` : name);
       return ret;
     };
+  const refs: Record<string, string> = {
+    "refs/heads/main": "main0",
+    "refs/docmost/last-export": "base0",
+    "main0^{tree}": "tree-main",
+    "base0^{tree}": "tree-base",
+  };
   const vault: any = {
     order,
     assertGitAvailable: rec("assertGitAvailable"),
-    ensureRepo: rec("ensureRepo"),
-    clearStaleGitLocks: rec("clearStaleGitLocks"),
-    ensureMainBranch: rec("ensureMainBranch"),
-    isMergeInProgress: vi.fn(async () => false),
-    isWorkingTreeDirty: vi.fn(async () => false),
-    readRef: vi.fn(async () => null),
-    deleteRef: rec("deleteRef"),
-    ensureBranch: rec("ensureBranch"),
-    checkout: rec("checkout"),
-    listTrackedFiles: vi.fn(async () => [] as string[]),
-    // push-side git surface (empty diff -> a clean no-op push)
-    stageAll: rec("stageAll"),
-    commit: rec("commit", { committed: false }),
-    merge: rec("merge", { ok: true, conflict: false, output: "" }),
-    listUnmergedPaths: vi.fn(async () => [] as string[]),
-    commitMerge: rec("commitMerge"),
-    abortMerge: rec("abortMerge"),
-    resetHardToHead: rec("resetHardToHead"),
-    mergeBase: vi.fn(async () => "0000000000000000000000000000000000000000"),
-    revParse: vi.fn(async () => "0000000000000000000000000000000000000000"),
+    ensureRepo: rec("ensureRepo", false),
+    clearStaleGitLocks: rec("clearStaleGitLocks", 0),
+    // The vault already has the bare layout: the legacy upgrade is a no-op.
+    getConfig: vi.fn(async () => "2"),
+    ensureMainBranch: rec("ensureMainBranch", false),
+    revParse: vi.fn(async (ref: string) => refs[ref] ?? null),
+    commitMessage: vi.fn(async () => "a user commit"),
+    lsTree: vi.fn(async () => [] as any[]),
+    pageIdsAtRef: vi.fn(async () => [] as any[]),
+    readFilesAtRef: vi.fn(async () => new Map<string, string>()),
+    hashObject: vi.fn(async () => "blob"),
+    buildTree: vi.fn(async () => "tree-export"),
+    treeWithPathsFrom: vi.fn(async () => "tree-record"),
+    commitTree: rec("commitTree", "commit"),
     diffNameStatus: vi.fn(async () => [] as any[]),
     showFileAtRef: vi.fn(async () => ""),
+    commitAddingPath: vi.fn(async () => null),
     updateRef: rec("updateRef"),
-    fastForwardBranch: rec("fastForwardBranch", { ok: true }),
     ...overrides,
   };
   return vault;
@@ -64,108 +66,12 @@ function baseDeps(vault: any, over: Partial<RunCycleDeps> = {}): RunCycleDeps {
     } as any,
     vault,
     settings: { vaultPath: "/vault" } as any,
-    fs: {
-      readFile: vi.fn(async () => ""),
-      writeFile: vi.fn(async () => undefined),
-      mkdir: vi.fn(async () => undefined),
-      rm: vi.fn(async () => undefined),
-      // Default: nothing is a symlink and everything resolves in place (no
-      // escape). The symlink-guard tests below override these.
-      lstat: vi.fn(async () => ({ isSymbolicLink: false })),
-      realpath: vi.fn(async (p: string) => p),
-    },
     log: vi.fn(),
     ...over,
   };
 }
 
 describe("runCycle (composition)", () => {
-  it("RECOVERS from a vault left mid-merge: aborts the stale merge and continues (no wedge)", async () => {
-    // Regression for the WEDGE bug (QA #119): a vault left mid-merge by a prior
-    // cycle used to skip the WHOLE space forever. Now the cycle aborts the stale
-    // merge and proceeds so the space self-heals.
-    let midMerge = true;
-    const vault = fakeVault({
-      // mid-merge until `abortMerge` clears it (then the cycle continues).
-      isMergeInProgress: vi.fn(async () => midMerge),
-      abortMerge: vi.fn(async () => {
-        midMerge = false;
-      }),
-    });
-    const deps = baseDeps(vault);
-
-    const res = await runCycle(deps);
-
-    // The stale merge was aborted and the cycle RAN (no permanent wedge).
-    expect(vault.abortMerge).toHaveBeenCalledTimes(1);
-    expect(res.ran).toBe(true);
-    expect(deps.client.listSpaceTree).toHaveBeenCalledTimes(1);
-    expect(vault.order).toContain("checkout:docmost");
-  });
-
-  it("hard-resets when 'merge --abort' cannot clear a stray unmerged index", async () => {
-    // abortMerge does NOT clear it (no MERGE_HEAD but stray unmerged entries);
-    // the cycle falls back to a hard reset, then proceeds.
-    let midMerge = true;
-    const vault = fakeVault({
-      isMergeInProgress: vi.fn(async () => midMerge),
-      abortMerge: vi.fn(async () => undefined), // leaves it mid-merge
-      resetHardToHead: vi.fn(async () => {
-        midMerge = false;
-      }),
-    });
-    const deps = baseDeps(vault);
-
-    const res = await runCycle(deps);
-
-    expect(vault.abortMerge).toHaveBeenCalledTimes(1);
-    expect(vault.resetHardToHead).toHaveBeenCalledTimes(1);
-    expect(res.ran).toBe(true);
-  });
-
-  it("stages ensureRepo -> ensureBranch(docmost,main) -> checkout(docmost) BEFORE pulling", async () => {
-    const vault = fakeVault();
-    const deps = baseDeps(vault);
-
-    const res = await runCycle(deps);
-
-    expect(res.ran).toBe(true);
-    const ensureRepoIdx = vault.order.indexOf("ensureRepo");
-    const ensureBranchIdx = vault.order.indexOf("ensureBranch:docmost,main");
-    const checkoutIdx = vault.order.indexOf("checkout:docmost");
-    expect(ensureRepoIdx).toBeGreaterThanOrEqual(0);
-    expect(ensureBranchIdx).toBeGreaterThan(ensureRepoIdx);
-    expect(checkoutIdx).toBeGreaterThan(ensureBranchIdx);
-    expect(deps.client.listSpaceTree).toHaveBeenCalledTimes(1);
-  });
-
-  it("runs the self-heal preflight in a SAFE order: ensureRepo -> clearStaleGitLocks -> ensureMainBranch -> ensureBranch (bugs D3-N3/D3-N1)", async () => {
-    // The order is load-bearing for safety: clearStaleGitLocks MUST run AFTER
-    // ensureRepo (else it would delete ensureRepo's own transient lock) and
-    // BEFORE the checkout/diff; ensureMainBranch MUST run before the
-    // ensureBranch("docmost","main") + checkout that would otherwise throw on a
-    // missing `main`.
-    const vault = fakeVault();
-    const deps = baseDeps(vault);
-
-    const res = await runCycle(deps);
-    expect(res.ran).toBe(true);
-
-    const ensureRepoIdx = vault.order.indexOf("ensureRepo");
-    const clearStaleGitLocksIdx = vault.order.indexOf("clearStaleGitLocks");
-    const ensureMainBranchIdx = vault.order.indexOf("ensureMainBranch");
-    const ensureBranchIdx = vault.order.indexOf("ensureBranch:docmost,main");
-
-    expect(ensureRepoIdx).toBeGreaterThanOrEqual(0);
-    expect(clearStaleGitLocksIdx).toBeGreaterThanOrEqual(0);
-    expect(ensureMainBranchIdx).toBeGreaterThanOrEqual(0);
-    expect(ensureBranchIdx).toBeGreaterThanOrEqual(0);
-
-    expect(ensureRepoIdx).toBeLessThan(clearStaleGitLocksIdx);
-    expect(clearStaleGitLocksIdx).toBeLessThan(ensureMainBranchIdx);
-    expect(ensureMainBranchIdx).toBeLessThan(ensureBranchIdx);
-  });
-
   it("runs a SINGLE push planning pass (no dry-run; the delete-cap hook is gone)", async () => {
     const vault = fakeVault();
     const deps = baseDeps(vault);
@@ -177,7 +83,7 @@ describe("runCycle (composition)", () => {
     expect(vault.diffNameStatus).toHaveBeenCalledTimes(1);
   });
 
-  it("throws on a PRE-aborted signal BEFORE applying the pull (first destructive phase)", async () => {
+  it("throws on a PRE-aborted signal BEFORE the apply (first write phase)", async () => {
     const vault = fakeVault();
     const controller = new AbortController();
     controller.abort();
@@ -185,44 +91,15 @@ describe("runCycle (composition)", () => {
 
     await expect(runCycle(deps)).rejects.toThrow();
 
-    // The signal is checked AFTER planning but BEFORE the first write phase:
-    // the tree was listed (planning) but neither destructive phase advanced —
-    // no pull merge and no push diff.
-    expect(deps.client.listSpaceTree).toHaveBeenCalledTimes(1);
-    expect(vault.order).not.toContain("merge:main");
+    // Neither phase advanced: no push diff, no export tree, no ref moved.
     expect(vault.diffNameStatus).not.toHaveBeenCalled();
+    expect(vault.buildTree).not.toHaveBeenCalled();
+    expect(vault.order.some((o: string) => o.startsWith("updateRef"))).toBe(false);
   });
 
-  it("SYMLINK GUARD: never reads a tracked .md that is a symlink (no .env/passwd disclosure)", async () => {
-    // Security regression (PR #119 review): a writer who pushes `leak.md` as a
-    // SYMLINK to a server file (e.g. `.env`) must NOT have its target read and
-    // published. readExisting reads each tracked .md to recover its gitmost_id;
-    // the guard refuses the symlink BEFORE the raw read, so the target's bytes
-    // are never touched and the cycle keeps running for the rest of the space.
-    const vault = fakeVault({
-      listTrackedFiles: vi.fn(async () => ["leak.md"]),
-    });
-    const deps = baseDeps(vault);
-    const rawReadFile = vi.fn(async () => "GIT_SYNC_SECRET=topsecret");
-    deps.fs.readFile = rawReadFile as any;
-    // `/vault/leak.md` is reported as a symlink by lstat.
-    deps.fs.lstat = vi.fn(async (p: string) =>
-      p === "/vault/leak.md"
-        ? { isSymbolicLink: true }
-        : { isSymbolicLink: false },
-    ) as any;
-
-    const res = await runCycle(deps);
-
-    expect(res.ran).toBe(true);
-    // The poisoned symlink's target was NEVER read (the guard short-circuited).
-    expect(rawReadFile).not.toHaveBeenCalled();
-  });
-
-  it("throws BEFORE the push apply when the signal aborts during the pull phase", async () => {
-    // Abort mid-cycle: the signal fires while listSpaceTree (the pull read)
-    // runs, so the SECOND checkpoint (before runPush) trips and the push apply
-    // never starts.
+  it("throws BEFORE the export moves a ref when the signal aborts during the export read", async () => {
+    // Abort mid-cycle: the signal fires while listSpaceTree (the export read)
+    // runs, so the SECOND checkpoint (before the export) trips and no ref moves.
     const controller = new AbortController();
     const vault = fakeVault();
     const deps = baseDeps(vault, {
@@ -237,16 +114,17 @@ describe("runCycle (composition)", () => {
     });
 
     await expect(runCycle(deps)).rejects.toThrow();
-    // Pull planning ran but the push never did (aborted at a checkpoint).
-    expect(deps.client.listSpaceTree).toHaveBeenCalledTimes(1);
-    expect(vault.diffNameStatus).not.toHaveBeenCalled();
+    // The apply ran; the export never did (aborted at a checkpoint).
+    expect(vault.diffNameStatus).toHaveBeenCalledTimes(1);
+    expect(vault.buildTree).not.toHaveBeenCalled();
+    expect(vault.order.some((o: string) => o.startsWith("updateRef"))).toBe(false);
   });
 
   // D-P3-1 ghost guard, end-to-end through runCycle: a tracked file whose id is
   // absent from live AND is NOT returned by `pageIdsExist` (a ghost — never a
   // page) must SURVIVE the whole cycle (no rm), while a sibling id that IS
   // returned (a genuinely deleted page row) is absence-deleted. This proves the
-  // guard flows from pageIdsExist -> computePullActions -> applyPullActions,
+  // guard flows from pageIdsExist -> computePullActions -> buildExportTree,
   // not just at the pure `planReconciliation` unit.
   it("GHOST GUARD (e2e): a ghost tracked file SURVIVES runCycle; a real deleted-page file is removed", async () => {
     const ghostId = "019f2500-dead-7000-8000-000000000009"; // never a page
@@ -254,8 +132,16 @@ describe("runCycle (composition)", () => {
     const liveId = "019f2500-0000-7000-8000-0000000000aa"; // keeps empty-live from firing
 
     // Two tracked files, both ABSENT from the live tree (deletion candidates).
+    const texts = new Map([
+      ["Ghost.md", serializePageFile(ghostId, "a body authored in git")],
+      ["Deleted.md", serializePageFile(deletedId, "a deleted page body")],
+    ]);
     const vault = fakeVault({
-      listTrackedFiles: vi.fn(async () => ["Ghost.md", "Deleted.md"]),
+      pageIdsAtRef: vi.fn(async () => [
+        { path: "Ghost.md", id: ghostId },
+        { path: "Deleted.md", id: deletedId },
+      ]),
+      readFilesAtRef: vi.fn(async () => texts),
     });
 
     // The datasource reports ONLY the deleted page as a real row; the ghost has
@@ -263,23 +149,7 @@ describe("runCycle (composition)", () => {
     const pageIdsExist = vi.fn(async (ids: string[]) =>
       ids.filter((id) => id === deletedId),
     );
-    const rm = vi.fn(async () => undefined);
-
     const deps = baseDeps(vault, {
-      fs: {
-        readFile: vi.fn(async (absPath: string) => {
-          if (absPath.includes("Ghost.md"))
-            return serializePageFile(ghostId, "a body authored in git");
-          if (absPath.includes("Deleted.md"))
-            return serializePageFile(deletedId, "a deleted page body");
-          return "";
-        }),
-        writeFile: vi.fn(async () => undefined),
-        mkdir: vi.fn(async () => undefined),
-        rm,
-        lstat: vi.fn(async () => ({ isSymbolicLink: false })),
-        realpath: vi.fn(async (p: string) => p),
-      },
       client: {
         ...baseDeps(vault).client,
         // A single live page so the empty-live suppression does NOT fire (which
@@ -320,9 +190,10 @@ describe("runCycle (composition)", () => {
     );
 
     // The real deleted-page file is removed; the ghost file is PRESERVED.
-    const rmPaths = rm.mock.calls.map((c) => c[0] as string);
-    expect(rmPaths.some((p) => p.includes("Deleted.md"))).toBe(true);
-    expect(rmPaths.some((p) => p.includes("Ghost.md"))).toBe(false);
+    const removed = vault.buildTree.mock.calls[0][1]
+      .filter((c: { sha: string | null }) => c.sha === null)
+      .map((c: { path: string }) => c.path);
+    expect(removed).toEqual(["Deleted.md"]);
     expect(res.pull?.deleted).toBe(1);
   });
 
@@ -333,14 +204,11 @@ describe("runCycle (composition)", () => {
     const goodId = "019f2500-0000-7000-8000-0000000000a1";
     const badId = "019f2500-0000-7000-8000-0000000000b1";
     const vault = fakeVault();
-    const writeFile = vi.fn(async () => undefined);
     const warn = vi.fn();
-    const base = baseDeps(vault);
     const deps = baseDeps(vault, {
       warn,
-      fs: { ...base.fs, writeFile },
       client: {
-        ...base.client,
+        ...baseDeps(vault).client,
         listSpaceTree: vi.fn(async () => ({
           pages: [
             { id: goodId, slugId: "good", title: "Good", parentPageId: null, hasChildren: false },
@@ -378,25 +246,25 @@ describe("runCycle (composition)", () => {
         error: expect.stringContaining('unknown node type "noSuchNode"'),
       },
     });
-    // Only the good page reached the vault.
-    expect(writeFile).toHaveBeenCalledTimes(1);
-    expect(writeFile.mock.calls[0][0]).toBe("/vault/Good.md");
+    // Only the good page was stored for the export tree.
+    expect(vault.hashObject).toHaveBeenCalledTimes(1);
+    expect(vault.hashObject.mock.calls[0][0]).toContain(goodId);
     expect(warn).toHaveBeenCalledWith(
       expect.stringMatching(
         new RegExp(
-          `^space space-1: pull could not write 1 page\\(s\\) into the vault ` +
+          `^space space-1: the export could not place 1 page\\(s\\) in the vault ` +
             `\\(retried next cycle\\); first: page ${badId}: .*noSuchNode`,
         ),
       ),
     );
   });
 
-  it("reports no pull failure when every page was written", async () => {
+  it("reports no export failure when every page was placed", async () => {
     const vault = fakeVault();
     const warn = vi.fn();
     const res = await runCycle(baseDeps(vault, { warn }));
 
-    expect(res.pull).toEqual({ written: 0, deleted: 0, conflict: false, failures: 0 });
+    expect(res.pull).toEqual({ written: 0, deleted: 0, failures: 0 });
     expect(warn).not.toHaveBeenCalled();
   });
 });

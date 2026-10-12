@@ -181,14 +181,10 @@ export class AiAgentRoleRepo {
 
 /**
  * Parse the `model_config` value read from the DB into the object the entity
- * type promises. Rows written by the old double-encoding bind (`::jsonb` instead
- * of `::text::jsonb`) round-trip as a JSON STRING, so the driver hands back e.g.
- * `'{"driver":"gemini"}'` rather than an object; the read-path check
- * `typeof cfg === 'object'` then failed and the model override was SILENTLY
- * dropped (the role fell back to the default model). Be tolerant: a JSON string
- * is parsed; an already-parsed object passes through; null / a non-object (incl.
- * an array) / unparseable value becomes null (= no override). This self-heals
- * already-corrupted rows on read, no migration required.
+ * type promises. Rows written with a `::jsonb` bind (instead of
+ * `::text::jsonb`) round-trip as a JSON STRING, e.g. `'{"driver":"gemini"}'`.
+ * A JSON string is parsed; an already-parsed object passes through; null / a
+ * non-object (incl. an array) / unparseable value becomes null (= no override).
  */
 export function parseModelConfig(
   value: unknown,

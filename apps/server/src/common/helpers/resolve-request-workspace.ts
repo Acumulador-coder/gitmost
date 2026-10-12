@@ -79,10 +79,10 @@ export function cachedWorkspaceLoader(
  * subdomain on cloud). `isSelfHosted()` is `!isCloud()`, so exactly one branch is
  * always taken.
  *
- * Both request paths call it with `cachedWorkspaceLoader(...)`: `DomainMiddleware`
- * (the normal /api request path) and `GitHttpService` (the raw root-mounted /git
- * smart-HTTP host, which Nest middleware does NOT run for). There is no second
- * copy of this branch.
+ * Shared by `DomainMiddleware` (the normal /api request path) and
+ * `GitHttpService` (the raw root-mounted /git smart-HTTP host, which Nest
+ * middleware does NOT run for), both through `cachedWorkspaceLoader(...)`, so
+ * the two cannot drift.
  *
  * This helper does NOT catch lookup errors — callers decide: DomainMiddleware
  * lets a throw bubble; GitHttpService logs it and answers 500. A blank/missing

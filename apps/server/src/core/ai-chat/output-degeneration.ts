@@ -1,10 +1,10 @@
 /**
- * Token-degeneration detector for the in-app agent stream (#444).
+ * Token-degeneration detector for the in-app agent stream.
  *
- * When the final-step lockdown is OFF (the new default) there is no toolChoice
+ * When the final-step lockdown is OFF (the default) there is no toolChoice
  * override to strip the model's tools mid-work, so the anti-babble safety net is
  * this detector. It watches the accumulating assistant text and, on a runaway
- * repetition loop (the 255KB "loadTools." incident), aborts the run.
+ * repetition loop (e.g. "loadTools." repeated for hundreds of KB), aborts the run.
  *
  * Both rules are PURE functions of the text tail so they are cheap to run every
  * few KB and are unit-testable in isolation. They operate on the TAIL only
@@ -30,7 +30,7 @@ export const MIN_PERIOD_REPEATS = 20;
  * is treated as "unset" (→ fallback) rather than coercing to 0. Thresholds must
  * stay ≥ 1 — a 0/negative would make the detector fire on any text (or never), so
  * a bad value degrades to the safe compiled default instead. Env-tunable so an
- * operator can retune the anti-babble guard (#444) without a redeploy, following
+ * operator can retune the anti-babble guard without a redeploy, following
  * the `AI_CHAT_FINAL_STEP_LOCKDOWN` toggle convention.
  */
 function envThreshold(name: string, fallback: number): number {
@@ -128,8 +128,8 @@ export function hasPeriodicTail(
   // too, not just p===1. We therefore split the check: a monochar tail needs far
   // more repeats (a real single-char babble loop produces hundreds-to-thousands;
   // 60 is well above any realistic divider yet a fifth of TAIL_WINDOW), while a
-  // genuine multi-char block repeat (>=2 distinct chars, e.g. the "loadTools."
-  // incident, period ~10) keeps the normal MIN_PERIOD_REPEATS threshold.
+  // genuine multi-char block repeat (>=2 distinct chars, e.g. "loadTools." ×N,
+  // period ~10) keeps the normal MIN_PERIOD_REPEATS threshold.
   const TRIVIAL_MIN_REPEATS = 60;
 
   // Monochar-tail check (the trivial-period case): count the trailing run of one
@@ -191,14 +191,14 @@ export function isDegenerateOutput(text: string): boolean {
 export const DEGENERATION_CHECK_STEP = 2000;
 
 /**
- * Throttle decision for the degeneration guard (#444/#486). Returns true when
+ * Throttle decision for the degeneration guard. Returns true when
  * the accumulated text has grown at least DEGENERATION_CHECK_STEP bytes past the
  * last-checked offset, so the pure rules only fire every ~2KB. Pure; the caller
  * updates its watermark to `textLen` when this returns true.
  *
  * The watermark is an offset INTO the accumulator, so when the accumulator is
  * reset to '' on a step boundary the caller MUST reset the watermark to 0 too
- * (#486). Otherwise `textLen - lastCheckLen` goes negative after the reset and
+ * Otherwise `textLen - lastCheckLen` goes negative after the reset and
  * this returns false until a later step re-grows past the stale offset — a whole
  * degenerate step could stream unchecked.
  */
@@ -211,7 +211,7 @@ export function shouldCheckDegeneration(
 
 /**
  * Truncate a degenerated tail before persist so hundreds of KB of garbage never
- * reach the DB / replay (#444). Keeps everything up to and including the FIRST
+ * reach the DB / replay. Keeps everything up to and including the FIRST
  * `keepRepeats` repeats of the detected loop, then appends a short marker. If no
  * loop is detected the text is returned unchanged (by identity).
  *

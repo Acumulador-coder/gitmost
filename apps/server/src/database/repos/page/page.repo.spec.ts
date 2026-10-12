@@ -12,7 +12,7 @@ import type { KyselyDB } from '../../types/kysely.types';
 
 /**
  * SQL-builder unit test for the git-sync provenance stamp on PageRepo's
- * soft-delete / restore paths (PR #119 review). Both `removePage` and
+ * soft-delete / restore paths. Both `removePage` and
  * `restorePage` take an optional `lastUpdatedSource` arg and conditionally fold
  * it into the recursive-subtree `UPDATE pages SET ...` via
  * `...(lastUpdatedSource ? { lastUpdatedSource } : {})`. The change-listener

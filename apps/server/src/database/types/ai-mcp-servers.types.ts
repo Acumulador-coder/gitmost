@@ -4,14 +4,14 @@ import { Timestamp, Generated } from '@docmost/db/types/db';
 // Hand-written (not generated) because codegen requires a live DB.
 // Mirrors the migration 20260617T130000-ai-mcp-servers.ts.
 //
-// SECURITY (§8.10/§8.11): `headersEnc` is the AES-256-GCM blob of the per-server
+// SECURITY: `headersEnc` is the AES-256-GCM blob of the per-server
 // auth headers (the external service's API key, e.g. Tavily). It is WRITE-ONLY:
 // it must NEVER be added to workspace `baseFields`, returned by any endpoint, or
 // written to logs. Only the server-side MCP client layer decrypts it.
 export interface AiMcpServers {
   id: Generated<string>;
   workspaceId: string;
-  // Owner of a PERSONAL external MCP server (#686). null = an admin/workspace-
+  // Owner of a PERSONAL external MCP server. null = an admin/workspace-
   // managed server (the only kind before #686); a uuid = a personal server
   // owned by that user (visible only to that user's agent turn, managed only by
   // that user). FK users(id) ON DELETE CASCADE — a personal row is destroyed

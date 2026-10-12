@@ -43,16 +43,11 @@ export function EditSpaceForm({ space, readOnly }: EditSpaceFormProps) {
     space?.settings?.gitSync?.enabled ?? false,
   );
 
-  const [autoMergeConflicts, setAutoMergeConflicts] = useState<boolean>(
-    space?.settings?.gitSync?.autoMergeConflicts ?? false,
-  );
-
-  // One parameterized handler for both git-sync space toggles: they differ only by
-  // the local state setter, the mutation payload field, and the error label. The
-  // update is optimistic and reverts the local state on failure (the mutation
-  // surfaces a toast via onError; the raw error is still logged per AGENTS.md).
+  // Handler for the git-sync space toggle. The update is optimistic and reverts
+  // the local state on failure (the mutation surfaces a toast via onError; the
+  // raw error is still logged per AGENTS.md).
   const handleToggle = async (
-    field: "gitSyncEnabled" | "autoMergeConflicts",
+    field: "gitSyncEnabled",
     value: boolean,
     previous: boolean,
     setLocal: (next: boolean) => void,
@@ -162,25 +157,6 @@ export function EditSpaceForm({ space, readOnly }: EditSpaceFormProps) {
                   gitSyncEnabled,
                   setGitSyncEnabled,
                   "Failed to toggle git-sync for space",
-                )
-              }
-            />
-
-            <Switch
-              mt="md"
-              label={t("Auto-merge conflicts on push")}
-              description={t(
-                "When off (recommended), a page whose content still has unresolved Git conflict markers is skipped on push until you resolve the conflict in Git. When on, the markers are stripped and both sides' content is pushed.",
-              )}
-              checked={autoMergeConflicts}
-              disabled={readOnly || updateSpaceMutation.isPending}
-              onChange={(event) =>
-                handleToggle(
-                  "autoMergeConflicts",
-                  event.currentTarget.checked,
-                  autoMergeConflicts,
-                  setAutoMergeConflicts,
-                  "Failed to toggle git-sync auto-merge-conflicts",
                 )
               }
             />

@@ -3,8 +3,8 @@ import { readUIMessageStream, type UIMessage } from "ai";
 import pkg from "../../../../package.json";
 
 /**
- * PIN-SPEC TRIP-WIRE (#491). The tail-only attach continuation relies on THREE
- * behaviors of `ai@6.0.207`, verified line-by-line in the issue. Without this
+ * PIN-SPEC TRIP-WIRE. The tail-only attach continuation relies on THREE
+ * behaviors of `ai@6.0.207`. Without this
  * test, an `ai` bump could silently break attach (the client would append the
  * live tail to the wrong message, or duplicate a step):
  *

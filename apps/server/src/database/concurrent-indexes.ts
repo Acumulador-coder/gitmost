@@ -3,42 +3,26 @@ import { Kysely, sql } from 'kysely';
 /**
  * Indexes that MUST be built with `CREATE INDEX CONCURRENTLY` so an auto-deploy
  * migration never takes a `SHARE` lock that blocks writes on a hot table
- * (`pages`) for the — potentially minutes-long — GIN trigram build (#495 item 12).
+ * (`pages`) for the potentially minutes-long GIN trigram build.
  *
- * Kysely runs each migration INSIDE a transaction (Postgres has transactional
- * DDL), and `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block, so
- * these cannot live in an ordinary migration. Instead {@link ensureConcurrentIndexes}
- * builds them out-of-band (no transaction) BEFORE the migrator runs; the matching
- * migrations keep a plain `CREATE INDEX IF NOT EXISTS` as a backstop, which then
- * no-ops because the index already exists. So:
- *   - existing prod DB, incremental deploy: the pre-build FIRST redefines
- *     `f_unaccent` to its index-inlinable 1-arg form (see below), THEN builds each
- *     index CONCURRENTLY (no write lock); the migration's IF NOT EXISTS no-ops →
- *     the write-blocking build is gone;
- *   - fresh DB (or a DB whose `pages` / `unaccent` extension does not exist yet):
- *     the pre-build fails and is swallowed (best-effort), and the migration builds
- *     the index normally on an empty/small table where the lock is irrelevant.
+ * Kysely runs each migration inside a transaction and `CREATE INDEX
+ * CONCURRENTLY` cannot run in one, so {@link ensureConcurrentIndexes} builds
+ * these out-of-band BEFORE the migrator runs; the matching migrations keep a
+ * plain `CREATE INDEX IF NOT EXISTS` as a backstop that then no-ops. On a fresh
+ * DB (no `pages` / `unaccent` yet) the pre-build fails, is swallowed, and the
+ * migration builds the index on an empty table where the lock is irrelevant.
  *
- * NOT a strict "worst case = previous behaviour":
- *   - The f_unaccent form matters. The trigram expressions use `LOWER(f_unaccent(col))`.
- *     The INDEX-INLINABLE 1-arg `f_unaccent(text)` (`SELECT public.unaccent($1)`)
- *     is created INSIDE migration 20260705, which runs AFTER this pre-build. On an
- *     existing tenant the live `f_unaccent` is still the OLD 2-arg form from
- *     20250729, which Postgres CANNOT inline into a CONCURRENTLY index expression
- *     (`function unaccent(unknown, text) does not exist ... during inlining`) — the
- *     build fails outright. So this pre-build redefines `f_unaccent` to the 1-arg
- *     form FIRST (idempotent, output-identical, in lockstep with 20260705). Without
- *     that redefine the whole feature is dead-on-arrival for the very case it
- *     targets.
- *   - An INTERRUPTED `CREATE INDEX CONCURRENTLY` (killed pod, cancelled query) with
- *     a working `f_unaccent` leaves an INVALID index behind. A subsequent name-based
- *     `IF NOT EXISTS` — in BOTH this pre-build and the migration backstop — sees the
- *     name and skips, so the invalid index is NEVER repaired automatically and the
- *     query keeps seq-scanning until an operator `DROP INDEX`es it. The old
- *     in-transaction build could not leave an invalid index (a failed tx rolled the
- *     whole index back), so this is a genuinely new failure mode, not "= previous".
- *     (A future hardening could `DROP` an `indisvalid = false` index before
- *     rebuilding; not done here.)
+ * Caveats:
+ *   - The trigram expressions use `LOWER(f_unaccent(col))`. The index-inlinable
+ *     1-arg `f_unaccent(text)` is created in migration 20260705, which runs AFTER
+ *     this pre-build; the older 2-arg form from 20250729 cannot be inlined into a
+ *     CONCURRENTLY index expression and the build fails. So the pre-build
+ *     redefines `f_unaccent` to the 1-arg form first (idempotent,
+ *     output-identical, in lockstep with 20260705).
+ *   - An interrupted `CREATE INDEX CONCURRENTLY` leaves an INVALID index behind.
+ *     The name-based `IF NOT EXISTS` in both this pre-build and the migration
+ *     backstop then skips it, so it is never repaired automatically — an
+ *     operator has to `DROP INDEX` it.
  *
  * The `create` text is the CANONICAL definition — it MUST match the migration's
  * `IF NOT EXISTS` create expression exactly (same functional expression + opclass)

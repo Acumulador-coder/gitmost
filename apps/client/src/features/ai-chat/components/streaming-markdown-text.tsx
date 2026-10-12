@@ -8,18 +8,18 @@ import classes from "@/features/ai-chat/components/ai-chat.module.css";
  * memoized on its string prop. During streaming only the TAIL chunk grows (the
  * `splitPlainChunks` append-only invariant guarantees every earlier chunk is
  * byte-identical across deltas), so React skips every stable block and each one
- * is parsed by `renderChatMarkdown` EXACTLY ONCE — turning the pre-#492
- * "re-parse the whole accumulated answer on every ~20Hz tick" (O(ticks)) into
- * O(number of blocks). The markup is DOMPurify-sanitized inside renderChatMarkdown
- * before it reaches `dangerouslySetInnerHTML`.
+ * is parsed by `renderChatMarkdown` EXACTLY ONCE — O(number of blocks) instead
+ * of re-parsing the whole accumulated answer on every ~20Hz tick. The markup is
+ * DOMPurify-sanitized inside renderChatMarkdown before it reaches
+ * `dangerouslySetInnerHTML`.
  *
  * NOTE (transient streaming-only artifact): a safe cut is a blank-line boundary,
  * so a construct that legitimately contains a blank line (e.g. a fenced code block
  * with an empty line) can be split across chunks and render oddly WHILE it is still
  * streaming. This is cosmetic and self-heals: the moment the part finalizes,
- * MarkdownPart renders the WHOLE text through one canonical pass (visual parity
- * with the pre-#492 output). The reasoning path makes the same trade (plain text
- * while streaming, one markdown parse at the end).
+ * MarkdownPart renders the WHOLE text through one canonical pass. The reasoning
+ * path makes the same trade (plain text while streaming, one markdown parse at
+ * the end).
  */
 const MarkdownChunk = memo(function MarkdownChunk({
   text,

@@ -128,17 +128,14 @@ describe('JwtStrategy — provenance derivation', () => {
 });
 
 /**
- * Provenance derivation on the API-KEY path (jwt.strategy.validateApiKey, #486
- * + #501).
+ * Provenance derivation on the API-KEY path (jwt.strategy.validateApiKey).
  *
- * The access-token path stamped provenance; the API-key path returned early
- * WITHOUT it, so an is_agent API key's REST writes recorded no 'agent' marker.
  * The API-key payload carries no signed claim, so provenance is resolved from the
  * SERVER-SIDE user returned by ApiKeyService.validate: isAgent -> 'agent',
  * otherwise 'user'; aiChatId is always null (an API key has no ai_chats row).
  *
- * #501 wires the CORE ApiKeyService (the EE `ee/api-key` module is absent in the
- * fork) directly into the strategy — no dynamic require. The strategy also stamps
+ * The CORE ApiKeyService (the EE `ee/api-key` module is absent in the fork) is
+ * wired directly into the strategy — no dynamic require. The strategy also stamps
  * `req.raw.authType='api_key'` + `req.raw.apiKeyId` for the "a token cannot manage
  * tokens" guard on the /api-keys surface.
  */

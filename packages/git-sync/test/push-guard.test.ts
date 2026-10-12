@@ -1,42 +1,23 @@
-import "./git-env";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { MAX_MARKDOWN_BYTES } from "../src/engine/convert-pool";
-import { buildPushGuardHook, PUSH_BUDGET, VaultGit } from "../src/engine/git";
+import {
+  BOT_AUTHOR_EMAIL,
+  BOT_AUTHOR_NAME,
+  PUSH_BUDGET,
+  VaultGit,
+  buildPushGuardHook,
+} from "../src/engine/git";
 import { execFileAsync, git, gitAvailable } from "./cycle-realgit-helpers";
 
-// A push whose ref advertisement predates a cycle's commit on `main` must be
-// refused before receive-pack (updateInstead) checks it out into the working
-// tree; otherwise the tree holds the rejected push and the next cycle commits
-// it over the cycle's work. Driven against a REAL receive-pack.
+// Pushes into a bare vault set up as the server serves it: a push based on an
+// older `main` is refused (pull first), a push to the engine's own refs is
+// refused by the pre-receive hook, an up-to-date push lands. Driven against a
+// REAL receive-pack.
 
-// A receive-pack whose repo gets a commit on `main` right after the ref
-// advertisement went out (the first byte the client sends back), as when a
-// cycle commits between a push's GET info/refs and its POST.
-const RACING_RECEIVE_PACK = `#!/bin/sh
-repo="$1"
-fifo="$repo/../rp.fifo"
-mkfifo "$fifo"
-git receive-pack "$repo" < "$fifo" &
-exec 3> "$fifo"
-dd bs=1 count=1 of="$repo/../rp.first" 2>/dev/null
-(cd "$repo" && echo "docmost edit" > B.md && git add B.md &&
-  git -c user.name=t -c user.email=t@t commit -q -m "cycle export")
-cat "$repo/../rp.first" >&3
-cat >&3
-exec 3>&-
-wait
-`;
-
-const exists = (path: string) =>
-  access(path).then(
-    () => true,
-    () => false,
-  );
-
-describe("PUSH_GUARD_HOOK — a push racing a cycle", () => {
+describe("pushes into the vault", () => {
   let available = false;
   let dir: string | undefined;
 
@@ -56,38 +37,32 @@ describe("PUSH_GUARD_HOOK — a push racing a cycle", () => {
     const cli = join(dir, "cli");
     const vault = new VaultGit(srv);
     await vault.ensureRepo();
-    await git(srv, "config", "receive.denyCurrentBranch", "updateInstead");
     await vault.installPushGuard();
     await git(dir, "clone", "-q", srv, cli);
     await writeFile(join(cli, "C.md"), "pushed\n", "utf8");
     await git(cli, "add", "C.md");
     await git(cli, "commit", "-q", "-m", "user push");
-    return { root: dir, srv, cli };
+    return { srv, cli, vault };
   }
 
-  it("refuses the push: the working tree and the cycle's commit stay as they were", async () => {
+  it("refuses a push based on an older main (an export landed since): main keeps the export", async () => {
     if (!available) return;
-    const { root, srv, cli } = await setup();
-    const wrapper = join(root, "rp.sh");
-    await writeFile(wrapper, RACING_RECEIVE_PACK, { mode: 0o755 });
-
-    const push = execFileAsync(
-      "git",
-      ["push", `--receive-pack=${wrapper}`, "origin", "main"],
-      { cwd: cli },
-    );
-
-    await expect(push).rejects.toMatchObject({
-      stderr: expect.stringContaining(
-        "'main' changed on the server since your last fetch",
-      ),
+    const { srv, cli, vault } = await setup();
+    // An export commit lands on `main` after the clone was made.
+    const main0 = (await vault.revParse("refs/heads/main"))!;
+    const tree = await vault.buildTree(main0, [
+      { path: "B.md", sha: await vault.hashObject("docmost edit\n") },
+    ]);
+    const exported = await vault.commitTree(tree, [main0], "docmost: export", {
+      authorName: BOT_AUTHOR_NAME,
+      authorEmail: BOT_AUTHOR_EMAIL,
     });
-    expect(await git(srv, "status", "--porcelain")).toBe("");
-    expect(await git(srv, "log", "-1", "--format=%s", "main")).toBe(
-      "cycle export",
-    );
-    expect(await exists(join(srv, "B.md"))).toBe(true);
-    expect(await exists(join(srv, "C.md"))).toBe(false);
+    await vault.updateRef("refs/heads/main", exported, main0);
+
+    await expect(
+      execFileAsync("git", ["push", "origin", "main"], { cwd: cli }),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("rejected") });
+    expect(await vault.revParse("refs/heads/main")).toBe(exported);
   });
 
   it("refuses a push to the engine's own refs: they do not move", async () => {
@@ -95,7 +70,7 @@ describe("PUSH_GUARD_HOOK — a push racing a cycle", () => {
     const { srv, cli } = await setup();
     const before = await git(srv, "for-each-ref", "refs/heads/docmost", "refs/docmost");
 
-    for (const ref of ["refs/heads/docmost", "refs/docmost/recording"]) {
+    for (const ref of ["refs/heads/docmost", "refs/docmost/last-export"]) {
       await expect(
         execFileAsync("git", ["push", "origin", `HEAD:${ref}`], { cwd: cli }),
       ).rejects.toMatchObject({
@@ -110,45 +85,6 @@ describe("PUSH_GUARD_HOOK — a push racing a cycle", () => {
     ).toBe(before);
   });
 
-  it("keeps refusing a push to 'docmost' when the host's global config points core.hooksPath elsewhere", async () => {
-    if (!available) return;
-    const { root, srv, cli } = await setup();
-    const globalConfig = join(root, "global.gitconfig");
-    await writeFile(
-      globalConfig,
-      `[core]\n\thooksPath = ${join(root, "no-hooks")}\n`,
-      "utf8",
-    );
-    const saved = process.env.GIT_CONFIG_GLOBAL;
-    process.env.GIT_CONFIG_GLOBAL = globalConfig;
-    try {
-      // Without the pin the ambient hooksPath switches the guard off.
-      await git(cli, "push", "-q", "origin", "HEAD:refs/heads/docmost");
-      expect(await git(srv, "rev-parse", "docmost")).toBe(
-        await git(cli, "rev-parse", "HEAD"),
-      );
-
-      await new VaultGit(srv).ensureServableConfig();
-      await writeFile(join(cli, "D.md"), "pushed again\n", "utf8");
-      await git(cli, "add", "D.md");
-      await git(cli, "commit", "-q", "-m", "second push");
-      const before = await git(srv, "rev-parse", "docmost");
-
-      await expect(
-        execFileAsync("git", ["push", "origin", "HEAD:refs/heads/docmost"], {
-          cwd: cli,
-        }),
-      ).rejects.toMatchObject({
-        stderr: expect.stringContaining(
-          "'refs/heads/docmost' is managed by git-sync and cannot be pushed.",
-        ),
-      });
-      expect(await git(srv, "rev-parse", "docmost")).toBe(before);
-    } finally {
-      process.env.GIT_CONFIG_GLOBAL = saved;
-    }
-  });
-
   it("lets a push from an up-to-date clone through", async () => {
     if (!available) return;
     const { srv, cli } = await setup();
@@ -158,10 +94,25 @@ describe("PUSH_GUARD_HOOK — a push racing a cycle", () => {
     expect(await git(srv, "rev-parse", "main")).toBe(
       await git(cli, "rev-parse", "HEAD"),
     );
-    expect(await git(srv, "status", "--porcelain")).toBe("");
-    expect(await exists(join(srv, "C.md"))).toBe(true);
+    expect(await git(srv, "show", "main:C.md")).toBe("pushed");
   });
 });
+
+/** Commit `files` (path -> text) on the vault's `main` with plumbing, as an export does. */
+async function commitOnMain(vault: VaultGit, files: Record<string, string>): Promise<void> {
+  const main0 = (await vault.revParse("refs/heads/main"))!;
+  const changes = [];
+  for (const [path, text] of Object.entries(files)) {
+    changes.push({ path, sha: await vault.hashObject(text) });
+  }
+  const commit = await vault.commitTree(
+    await vault.buildTree(main0, changes),
+    [main0],
+    "docmost: export",
+    { authorName: BOT_AUTHOR_NAME, authorEmail: BOT_AUTHOR_EMAIL },
+  );
+  await vault.updateRef("refs/heads/main", commit, main0);
+}
 
 describe("PUSH_GUARD_HOOK — the push budget", () => {
   let available = false;
@@ -180,8 +131,8 @@ describe("PUSH_GUARD_HOOK — the push budget", () => {
   const BUDGET = { files: 3, fileBytes: 100, markdownFileBytes: 80, totalBytes: 150 };
 
   /**
-   * A space the pull exported far over BUDGET: more files, more bytes and a
-   * page bigger than the `.md` limit, already on `main`.
+   * A space exported far over BUDGET: more files, more bytes and a page bigger
+   * than the `.md` limit, already on `main`.
    */
   const BIG_TREE: Record<string, string> = {
     "Exported.md": "e".repeat(90),
@@ -192,9 +143,9 @@ describe("PUSH_GUARD_HOOK — the push budget", () => {
   };
 
   /**
-   * A servable vault guarded by a hook with BUDGET, holding `existing` (path ->
-   * content) on `main` as the pull would have committed it, and a clone that
-   * commits `files` on top of it and pushes them to `ref`.
+   * A vault guarded by a hook with BUDGET, holding `existing` (path -> content)
+   * on `main` as an export would have committed it, and a clone that commits
+   * `files` on top of it and pushes them to `ref`.
    */
   async function pushFiles(
     files: Record<string, string>,
@@ -205,19 +156,10 @@ describe("PUSH_GUARD_HOOK — the push budget", () => {
     const cli = join(dir, "cli");
     const vault = new VaultGit(srv);
     await vault.ensureRepo();
-    await git(srv, "config", "receive.denyCurrentBranch", "updateInstead");
-    await writeFile(
-      join(srv, ".git", "hooks", "pre-receive"),
-      buildPushGuardHook(BUDGET),
-      { mode: 0o755 },
-    );
-    if (opts.existing) {
-      for (const [path, text] of Object.entries(opts.existing)) {
-        await writeFile(join(srv, path), text, "utf8");
-      }
-      await git(srv, "add", "-A");
-      await git(srv, "commit", "-q", "-m", "docmost: sync");
-    }
+    const hooks = join(await vault.gitDir(), "hooks");
+    await mkdir(hooks, { recursive: true });
+    await writeFile(join(hooks, "pre-receive"), buildPushGuardHook(BUDGET), { mode: 0o755 });
+    if (opts.existing) await commitOnMain(vault, opts.existing);
     await git(dir, "clone", "-q", srv, cli);
     for (const [path, text] of Object.entries(files)) {
       await writeFile(join(cli, path), text, "utf8");
@@ -246,7 +188,6 @@ describe("PUSH_GUARD_HOOK — the push budget", () => {
       ),
     });
     expect(await git(srv, "rev-parse", "main")).toBe(before);
-    expect(await exists(join(srv, "Small.md"))).toBe(false);
   });
 
   it("holds a .md file to the .md limit, any other file to the per-file limit", async () => {
@@ -305,8 +246,7 @@ describe("PUSH_GUARD_HOOK — the push budget", () => {
     });
 
     await push;
-    expect(await exists(join(srv, "A.md"))).toBe(true);
-    expect(await git(srv, "status", "--porcelain")).toBe("");
+    expect(await git(srv, "show", "main:A.md")).toBe("a".repeat(70));
   });
 
   it("does not count what the vault already holds: a one-line edit to a tree over the budget goes through", async () => {
@@ -320,8 +260,7 @@ describe("PUSH_GUARD_HOOK — the push budget", () => {
     expect(await git(srv, "rev-parse", "main")).toBe(
       await git(cli, "rev-parse", "HEAD"),
     );
-    expect(await git(srv, "status", "--porcelain")).toBe("");
-    expect(await exists(join(srv, "New.md"))).toBe(true);
+    expect(await git(srv, "show", "main:New.md")).toBe("new");
   });
 
   it("counts a changed file at its new size: an edit growing a page past the .md limit is refused", async () => {
@@ -406,7 +345,6 @@ describe("PUSH_GUARD_HOOK — the installed budget", () => {
     const cli = join(dir, "cli");
     const vault = new VaultGit(srv);
     await vault.ensureRepo();
-    await git(srv, "config", "receive.denyCurrentBranch", "updateInstead");
     await vault.installPushGuard();
     await git(dir, "clone", "-q", srv, cli);
     // Over the converter's budget, far under the per-file one.
@@ -424,6 +362,5 @@ describe("PUSH_GUARD_HOOK — the installed budget", () => {
       ),
     });
     expect(await git(srv, "rev-parse", "main")).toBe(before);
-    expect(await exists(join(srv, "Big.md"))).toBe(false);
   });
 });

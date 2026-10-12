@@ -1,23 +1,17 @@
 /**
- * Run-lifecycle finite state machine for a single AI-chat thread (#488).
+ * Run-lifecycle finite state machine for a single AI-chat thread.
  *
- * ============================================================================
- * WHY THIS EXISTS
- * ----------------------------------------------------------------------------
- * The resume/reconnect/poll/stop/supersede lifecycle used to be spread across
- * ~26 `useRef` one-shot flags in `chat-thread.tsx`, each disarmed "on every
- * path". Ownerless flag combinations produced silent UI freezes, and every fix
- * added another ref (the #381 -> #432 -> #456 spiral). This module replaces that
- * ref-zoo with ONE pure reducer whose transitions are enumerable and unit-
- * testable in isolation (event x state -> next state is the observable property).
+ * ONE pure reducer owns the resume/reconnect/poll/stop/supersede lifecycle, so
+ * its transitions are enumerable and unit-testable in isolation (event x state
+ * -> next state is the observable property).
  *
  * The reducer is PURE: it owns no timers, no fetches, no React state. It maps
  * `(machine, event) -> machine`, where the returned machine carries the list of
  * COMMAND EFFECTS to run for that transition. A thin runtime in `chat-thread.tsx`
  * dispatches events (from SDK callbacks / HTTP outcomes) and executes the
  * effects (attach GET, POST /stream, POST /run, POST /stop, poll arm/disarm).
- * The runtime lives in a THREAD, not the window, so a late SDK
- * callback dies with the owner (kills the "event from a dead view" class, #161).
+ * The runtime lives in a THREAD, not the window, so a late SDK callback dies
+ * with the owner (no events from a dead view).
  *
  * ============================================================================
  * INVARIANTS (see run-fsm.spec.md for the full spec + tables)
@@ -26,8 +20,7 @@
  *      `supersede`) are async; their outcomes arrive on the
  *      SAME SDK/HTTP callbacks. Every command-emitting transition increments
  *      `ctx.epoch`; every OUTCOME event carries the epoch it was issued under;
- *      the reducer DROPS an outcome whose epoch != the current epoch. This is
- *      what the one-shot-ref zoo used to approximate by hand.
+ *      the reducer DROPS an outcome whose epoch != the current epoch.
  *  I2  OWNERSHIP is a CONTEXT FIELD (`'local' | 'observer'`), not a state —
  *      orthogonal to the transport phase. The queue is flushed ONLY by a local
  *      owner (an observer following a detached run never flushes, except a
@@ -37,8 +30,7 @@
  *      holds the server-confirmed active run id (POST /run on mount, the `start`
  *      metadata runId, attach outcomes). A live disconnect recovers (to the
  *      degraded poll) by the RUN-FACT, not by the presence of an assistant
- *      message (#488 commit 2). A fresh negative fact (null) cancels recovery
- *      immediately.
+ *      message. A fresh negative fact (null) cancels recovery immediately.
  *  I4  Exit `stopping` by DATA (a terminal row / negative run-fact), NEVER by the
  *      stopRun HTTP response (which returns after abort, before finalization).
  *  I5  Command controllers are effect-owned (abort in cleanup), NOT render-phase
@@ -220,7 +212,7 @@ function isFinishEvent(event: Event): boolean {
 }
 
 export function reduce(m: Machine, event: Event): Machine {
-  // MEDIUM (#488 re-review): honor ANY stream finish in `stopping` regardless of
+  // Honor ANY stream finish in `stopping` regardless of
   // generation. A plain user Stop has NO successor stream — the aborted stream's
   // finish IS the expected end of the stop, so exit `stopping -> idle` by that DATA
   // (I4). The epoch filter below must NOT drop it: STOP_REQUESTED bumped the epoch,

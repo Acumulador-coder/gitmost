@@ -1,13 +1,12 @@
 // Unit tests for GitHttpService — the /git smart-HTTP handler. Everything it
 // depends on (backend, auth, repos, ability factory, env, orchestrator) is
 // mocked so we exercise ONLY the handler wiring: workspace resolution (which is
-// done HERE, not by DomainMiddleware — see FIX 1), the auth/gating precedence,
+// done HERE, not by DomainMiddleware), the auth/gating precedence,
 // the read-vs-write dispatch, and that a fetch does NOT take the lock.
 //
 // These tests deliberately NEVER set `req.raw.workspaceId`: the workspace must
-// come from WorkspaceRepo. If the handler regressed to reading
-// `req.raw.workspaceId`, the happy-path fetch test below would fail (the repo
-// would not be consulted and the request would 401).
+// come from WorkspaceRepo; a handler reading `req.raw.workspaceId` would 401 in
+// the happy-path fetch test below.
 import {
   BadRequestException,
   Logger,
@@ -49,7 +48,6 @@ interface Built {
   vaultRegistry: { ensureServable: AnyMock };
   orchestrator: {
     ingestExternalPush: AnyMock;
-    serveReadAdvertisement: AnyMock;
   };
   backend: { run: AnyMock };
   restrictions: { spaceHasRestrictedPages: AnyMock };
@@ -92,12 +90,6 @@ function build(opts: BuildOptions = {}): Built {
   const vaultRegistry = { ensureServable: jest.fn(async () => undefined) };
   const orchestrator = {
     ingestExternalPush: jest.fn(async () => undefined),
-    // The read-advertisement wrapper pins HEAD under the lock then serves; the
-    // mock just runs the serve callback so the read path still hits backend.run.
-    serveReadAdvertisement: jest.fn(
-      async (_spaceId: string, _workspaceId: string, serve: () => Promise<void>) =>
-        serve(),
-    ),
   };
   const backend = { run: jest.fn(async () => undefined) };
   const restrictions = {
@@ -223,7 +215,7 @@ function fakeRequest(opts: {
     query,
     ip,
     // raw is intentionally WITHOUT workspaceId — the handler must resolve it
-    // itself via WorkspaceRepo (a regression to req.raw.workspaceId would 401).
+    // itself via WorkspaceRepo (reading req.raw.workspaceId would 401).
     raw: {},
   } as any;
 }
@@ -272,52 +264,6 @@ describe('GitHttpService.handle', () => {
     expect(state.hijacked).toBe(true);
     expect(built.backend.run).toHaveBeenCalledTimes(1);
     // A fetch must NOT take the push lock.
-    expect(built.orchestrator.ingestExternalPush).not.toHaveBeenCalled();
-  });
-
-  it('upload-pack ref advertisement is served HEAD-pinned via serveReadAdvertisement (bug #3)', async () => {
-    // GET info/refs?service=git-upload-pack carries the HEAD symref a clone reads
-    // for its default branch, so it must be served with HEAD pinned to `main`
-    // (under the lock) — not streamed raw — or a clone racing a mid-pull cycle
-    // would default to the read-only `docmost` mirror.
-    const built = build({ abilityCan: true });
-    const { reply } = fakeReply();
-    const req = fakeRequest({
-      url: '/git/space-1.git/info/refs?service=git-upload-pack',
-      method: 'GET',
-      authorization: basic('dev@example.com', 'pw'),
-    });
-
-    await built.service.handle(req, reply);
-
-    expect(built.orchestrator.serveReadAdvertisement).toHaveBeenCalledTimes(1);
-    expect(built.orchestrator.serveReadAdvertisement.mock.calls[0][0]).toBe(
-      'space-1',
-    );
-    // The workspace rides along so a lock-held fetch shows in /status.
-    expect(built.orchestrator.serveReadAdvertisement.mock.calls[0][1]).toBe(
-      'ws-1',
-    );
-    // The wrapper still streams the backend (the mock runs the serve callback).
-    expect(built.backend.run).toHaveBeenCalledTimes(1);
-    expect(built.orchestrator.ingestExternalPush).not.toHaveBeenCalled();
-  });
-
-  it('a POST git-upload-pack pack fetch streams directly (no HEAD-pin needed, resolved by SHA)', async () => {
-    // The pack negotiation is object-SHA based; only the ref advertisement carries
-    // the HEAD symref, so the pack POST streams the backend directly (no lock).
-    const built = build({ abilityCan: true });
-    const { reply } = fakeReply();
-    const req = fakeRequest({
-      url: '/git/space-1.git/git-upload-pack',
-      method: 'POST',
-      authorization: basic('dev@example.com', 'pw'),
-    });
-
-    await built.service.handle(req, reply);
-
-    expect(built.orchestrator.serveReadAdvertisement).not.toHaveBeenCalled();
-    expect(built.backend.run).toHaveBeenCalledTimes(1);
     expect(built.orchestrator.ingestExternalPush).not.toHaveBeenCalled();
   });
 
@@ -396,7 +342,7 @@ describe('GitHttpService.handle', () => {
     // createForUser throws NotFound when the user holds no role in the space (a
     // non-member). The gate must return 404 — the SAME response a missing /
     // sync-disabled space gives — so a 403↔404 difference cannot be used to
-    // brute-force which spaces exist / have git-sync enabled (the security fix).
+    // brute-force which spaces exist / have git-sync enabled.
     const built = build({ abilityCan: false });
     built.abilityFactory.createForUser.mockRejectedValue(
       new NotFoundException('Space permissions not found'),
@@ -671,8 +617,8 @@ describe('GitHttpService.handle', () => {
         new Error('db down'),
       );
 
-      // 10 such failures — far beyond the threshold — must all be 500 (GH-2:
-      // never a 401), never 429, because each releases its reservation.
+      // 10 such failures — far beyond the threshold — must all be 500 (never a
+      // 401), never 429, because each releases its reservation.
       for (let i = 0; i < 10; i++) {
         const { reply, state } = fakeReply();
         await built.service.handle(wrongCredReq(), reply);
@@ -683,7 +629,7 @@ describe('GitHttpService.handle', () => {
       built.service.onModuleDestroy();
     });
 
-    it('GH-3: failures from one IP do not lock the victim out from another IP', async () => {
+    it('failures from one IP do not lock the victim out from another IP', async () => {
       const built = build();
       built.authService.verifyUserCredentials.mockRejectedValue(
         new UnauthorizedException(CREDENTIALS_MISMATCH_MESSAGE),
@@ -727,7 +673,7 @@ describe('GitHttpService.handle', () => {
       built.service.onModuleDestroy();
     });
 
-    it('GH-3: the per-IP bucket throttles one source across different emails', async () => {
+    it('the per-IP bucket throttles one source across different emails', async () => {
       const built = build();
       built.authService.verifyUserCredentials.mockRejectedValue(
         new UnauthorizedException(CREDENTIALS_MISMATCH_MESSAGE),
@@ -755,7 +701,7 @@ describe('GitHttpService.handle', () => {
     });
   });
 
-  // --- infrastructure failures are logged 500s, never 401/404 (item 1, GH-2) --
+  // --- infrastructure failures are logged 500s, never 401/404 ----------------
   describe('infrastructure failures', () => {
     const fetchReq = () =>
       fakeRequest({
@@ -848,8 +794,8 @@ describe('GitHttpService.handle', () => {
     });
   });
 
-  // --- GH-1: a duplicated `service` parameter is refused ----------------------
-  it('GH-1: a duplicated service query parameter -> 400, nothing authorized or served', async () => {
+  // --- a duplicated `service` parameter is refused ---------------------------
+  it('a duplicated service query parameter -> 400, nothing authorized or served', async () => {
     const built = build();
     const { reply, state } = fakeReply();
     const req = fakeRequest({
@@ -863,11 +809,10 @@ describe('GitHttpService.handle', () => {
     expect(state.statusCode).toBe(400);
     expect(String(state.body)).toContain("'service'");
     expect(built.abilityFactory.createForUser).not.toHaveBeenCalled();
-    expect(built.orchestrator.serveReadAdvertisement).not.toHaveBeenCalled();
     expect(built.backend.run).not.toHaveBeenCalled();
   });
 
-  it('GH-1: a duplicated service parameter without credentials still gets the 401 first', async () => {
+  it('a duplicated service parameter without credentials still gets the 401 first', async () => {
     const built = build();
     const { reply, state } = fakeReply();
     const req = fakeRequest({
@@ -880,8 +825,8 @@ describe('GitHttpService.handle', () => {
     expect(state.statusCode).toBe(401);
   });
 
-  // --- GH-6: every throw on the raw route ends in a logged 500 -----------------
-  describe('GH-6: unexpected throws', () => {
+  // --- every throw on the raw route ends in a logged 500 ---------------------
+  describe('unexpected throws', () => {
     it('a space lookup that throws BEFORE the hijack -> logged 500 via the reply, handle() resolves', async () => {
       const built = build();
       built.spaceRepo.findById.mockRejectedValue(new Error('relation missing'));
@@ -957,7 +902,7 @@ describe('GitHttpService.handle', () => {
     });
   });
 
-  // --- restricted spaces (part of GA-2/GA-3) -----------------------------------
+  // --- restricted spaces -------------------------------------------------------
   it('a MEMBER of a space with restricted pages -> 403 naming the reason, nothing served', async () => {
     const built = build({ restricted: true });
     const { reply, state } = fakeReply();

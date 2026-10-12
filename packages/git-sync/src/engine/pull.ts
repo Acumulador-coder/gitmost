@@ -1,45 +1,22 @@
 /**
- * Pull cycle — Docmost -> vault (DESIGN.md §5).
+ * Export planning — Docmost -> vault (SPEC §6 "Docmost -> FS").
  *
- * This increment turns the read-only mirror into the git-backed pull cycle:
+ *   - `readExisting`: the page files `main` holds (`gitmost_id` frontmatter).
+ *   - `computePullActions` (PURE): the live tree's layout reconciled against
+ *     them — what to write, what moved, what to delete (with the SPEC §8
+ *     suppression folded in) and each live page's export key.
+ *   - `buildExportTree`: that plan applied to a tree with plumbing only (no
+ *     working tree, no checkout); `runCycle` commits it.
  *
- *   1. ensureRepo(vault); refuse if a merge is in progress (DESIGN.md §8);
- *      ensureBranch("docmost", "main")   (DESIGN.md §3 branches)
- *   2. checkout docmost
- *   3. fetch the live tree (listSpaceTree -> {pages, complete}) -> compute the
- *      desired `live` files (relPath via the pure sanitize/disambiguation layout)
- *   4. parse `existing` tracked .md files (pageId + relPath from gitmost_id frontmatter)
- *   5. plan = planReconciliation(live, existing)   (pure); toDelete
- *      is absence-only, moves are separate
- *   6. decideAbsenceDeletions: SUPPRESS absence deletions on an incomplete tree
- *      fetch and behind the mass-delete guard (defense in depth, DESIGN.md §5)
- *   7. write each live page in its fixpoint form (normalize-on-write);
- *      apply moved-old-path removals (only when the move write SUCCEEDED) and
- *      absence-delete removals (only when the decision allowed them)
- *   8. stageAll + commit on `docmost` with the provenance trailer (DESIGN.md §11)
- *   9. checkout main + merge docmost by page identity (DESIGN.md §4, §6)
- *  10. one-line summary
- *
- * DIRECTION IS Docmost -> vault ONLY. Nothing here ever writes to Docmost
- * (read-only: listSpaceTree + getPageJson). All git operations run against
- * the vault repo (`cwd = vaultPath`), never the source repo (see ./git.ts).
- *
- * The client seam is the native `GitSyncClient` (`Pick<GitSyncClient, ...>`);
- * the gitmost server drives the engine in-process (there is no standalone CLI
- * entry point).
+ * Nothing here writes to Docmost (read-only: listSpaceTree + getPageJson).
  */
-import { dirname } from "node:path";
-import { sep } from "node:path";
-import { parsePageFile, serializePageFile } from "@docmost/prosemirror-markdown";
+import {
+  parsePageFile,
+  serializePageFile,
+} from "@docmost/prosemirror-markdown";
 import type { GitSyncClient } from "./client.types.js";
 import { buildVaultLayout, type PageNode } from "./layout.js";
-import {
-  VaultGit,
-  BOT_AUTHOR_NAME,
-  BOT_AUTHOR_EMAIL,
-  DEFAULT_BRANCH,
-  DOCMOST_SOURCE_TRAILER,
-} from "./git.js";
+import type { VaultGit } from "./git.js";
 import {
   planReconciliation,
   decideAbsenceDeletions,
@@ -48,10 +25,7 @@ import {
   type DeletionDecision,
 } from "./reconcile.js";
 import { stabilizePageBody } from "./stabilize.js";
-import { isOwnUnfinishedCreate, isPageFile } from "./push.js";
-import { gitCopyStem } from "./sanitize.js";
 import { CycleAbortedError, throwIfAborted } from "./abort.js";
-import { DOCMOST_BRANCH } from "./vault-refs.js";
 
 // Number of pages fetched/stabilized concurrently. Bounded so a large space
 // does not open thousands of simultaneous requests/conversions at once.
@@ -59,83 +33,36 @@ const CONCURRENCY = 6;
 // How often to log incremental progress (every N completed pages).
 const PROGRESS_EVERY = 25;
 
-/** Convert a vault-relative path (forward-slash) to an absolute FS path. */
-function relToAbs(vaultRoot: string, relPath: string): string {
-  return [vaultRoot, ...relPath.split("/")].join("/");
-}
-
-/**
- * Canonicalize a file's TRAILING whitespace: drop any trailing blank /
- * whitespace-only lines (and trailing spaces on the last line) and end with
- * exactly one newline; an empty body becomes a single "\n". This matches
- * `serializePageFile`'s trailing form (`body.trim()` + a single "\n").
- *
- * Why (DESIGN.md §6, the spurious conflict): the engine writes pages in their
- * normalize-on-write form (one trailing newline), but a user can push a `.md` to
- * `main` with EXTRA trailing/empty lines (e.g. a double-blank-line append). When
- * the docmost mirror (normalized) and `main` (raw) both change near end-of-file,
- * git's line-based 3-way merge reports a CONFLICT even though the only difference
- * is trailing blank lines. Normalizing BOTH sides before comparing collapses that
- * difference to nothing, so the pull cycle can recognize the conflict as SPURIOUS
- * and resolve it cleanly instead of committing raw conflict markers onto `main`.
- */
-export function normalizeTrailingWhitespace(text: string): string {
-  // `trimEnd` strips exactly the regex `\s` set (which includes U+FEFF) in
-  // linear time. The former `/[\s\uFEFF]+$/` retried its whitespace run from
-  // every start position: quadratic on a long whitespace run followed by more
-  // text (40k newlines: ~0.7 s of blocked event loop), on the conflict and
-  // adopt paths.
-  const body = text.trimEnd();
-  return body.length > 0 ? `${body}\n` : "\n";
-}
-
 /** Convert an absolute/relative segment list under the vault to a relPath. */
 function segmentsToRelPath(segments: string[], stem: string): string {
   return [...segments, `${stem}.md`].join("/");
 }
 
-/**
- * Injectable IO for `readExisting` (R-Pull-1, test-strategy report §5). The real
- * `main` wires these to `git.listTrackedFiles("*.md")` and an `fs.readFile`
- * rooted at the vault; tests pass fakes so the parsing/skip rules are unit-
- * testable without a real git repo or filesystem.
- */
+/** IO for `readExisting`; the cycle reads `main`, tests pass fakes. */
 export interface ReadExistingDeps {
-  /** List tracked .md paths (forward-slash, vault-relative). */
-  listTracked: () => Promise<string[]>;
-  /** Read a tracked file's text by its (forward-slash) vault-relative path. */
-  readFile: (relPath: string) => Promise<string>;
+  /** Each `.md` file's first `gitmost_id:` line (`VaultGit.pageIdsAtRef`). */
+  candidates: () => Promise<{ path: string; id: string }[]>;
+  /** The texts of the given files; a file missing from the map is skipped. */
+  readFiles: (paths: string[]) => Promise<Map<string, string>>;
 }
 
 /**
- * Read every tracked .md file in the vault and recover `{ pageId, relPath }` from
- * its `gitmost_id` frontmatter (native-Obsidian format). Files without a
- * `gitmost_id` are skipped (they are not engine-tracked pages yet — e.g. a stray
- * hand-written Obsidian file; PUSH adopts those separately).
- *
- * The IO is injected (R-Pull-1) so this is testable with fakes. Skip rules:
- *   - a `readFile` rejection (tracked but missing on disk, a mid-operation race)
- *     -> skipped, NOT thrown; the next pull converges;
- *   - no `gitmost_id` frontmatter (`parsePageFile` -> id null) -> skipped.
+ * The tracked page files: `{ pageId, relPath }` of every candidate whose
+ * `gitmost_id` FRONTMATTER parses (a body line can carry the key too, so a grep
+ * hit alone is not identity). Files without one are not engine-tracked pages
+ * yet — the apply step creates them.
  */
 export async function readExisting(
   deps: ReadExistingDeps,
 ): Promise<{ pageId: string; relPath: string }[]> {
-  const tracked = await deps.listTracked();
+  const candidates = await deps.candidates();
+  const texts = await deps.readFiles(candidates.map((c) => c.path));
   const existing: { pageId: string; relPath: string }[] = [];
-  for (const relPath of tracked) {
-    // git ls-files always emits forward-slash paths; normalize just in case.
-    const rel = relPath.split(sep).join("/");
-    let text: string;
-    try {
-      text = await deps.readFile(rel);
-    } catch {
-      // Tracked but missing on disk (mid-operation race) — skip; the next pull
-      // converges.
-      continue;
-    }
+  for (const { path } of candidates) {
+    const text = texts.get(path);
+    if (text === undefined) continue;
     const { id } = parsePageFile(text);
-    if (id) existing.push({ pageId: id, relPath: rel });
+    if (id) existing.push({ pageId: id, relPath: path });
   }
   return existing;
 }
@@ -151,7 +78,7 @@ export interface PullActionsInput {
    * export key; a node without it is never treated as unchanged.
    */
   pages: (PageNode & { updatedAt?: string })[];
-  /** Whether the live tree fetch was COMPLETE (DESIGN.md §5 suppression). */
+  /** Whether the live tree fetch was COMPLETE (SPEC §8 suppression). */
   treeComplete: boolean;
   /** Parsed tracked files: `{ pageId, relPath }` (from `readExisting`). */
   existing: { pageId: string; relPath: string }[];
@@ -199,11 +126,13 @@ export function exportKeyOf(
 
 /**
  * The PURE decisions object computed by `computePullActions` (no IO). It holds
- * the reconciliation plan plus the absence-deletion decision (DESIGN.md §5), with the
+ * the reconciliation plan plus the SPEC §8 absence-deletion decision, with the
  * suppression already folded in: `toDelete` is the POST-suppression set the
  * caller should actually remove (empty when `deletionDecision.apply` is false).
  */
 export interface PullActions {
+  /** Every live page at its layout path. */
+  live: LiveEntry[];
   /**
    * Pages to (re)write at their relPath (add + update + move target). Excludes
    * live pages proven unchanged by `PullActionsInput.exportKeys`.
@@ -236,14 +165,13 @@ export interface PullActions {
  *
  *   - builds the vault layout (deterministic relPath per live page),
  *   - `planReconciliation` -> toWrite / moved / absence-toDelete,
- *   - `decideAbsenceDeletions` -> the DESIGN.md §5 suppression (incomplete-fetch +
+ *   - `decideAbsenceDeletions` -> the SPEC §8 suppression (incomplete-fetch +
  *     empty-live + mass-delete guard), folded IN here so `toDelete` is the
  *     POST-suppression set (empty when suppressed).
  *
  * Moves are NOT governed by the suppression: a moved page is present in `live`,
  * so its old-path removal is real (the caller still gates it on the write
- * succeeding). The expensive content fetch / file write / git ops happen in the
- * thin `applyPullActions`.
+ * succeeding). The content fetch and the tree happen in `buildExportTree`.
  */
 export function computePullActions(input: PullActionsInput): PullActions {
   const { pages, treeComplete, existing, deletableIds, exportKeys } = input;
@@ -272,7 +200,7 @@ export function computePullActions(input: PullActionsInput): PullActions {
   );
 
   // Decide whether the ABSENCE-based deletions may be applied this cycle
-  // (DESIGN.md §5): incomplete-fetch suppression + empty-live + mass-delete guard.
+  // (SPEC §8): incomplete-fetch suppression + empty-live + mass-delete guard.
   // Moves are NOT governed by this.
   const deletionDecision = decideAbsenceDeletions({
     treeComplete,
@@ -297,6 +225,7 @@ export function computePullActions(input: PullActionsInput): PullActions {
     : plan.toWrite;
 
   return {
+    live,
     toWrite,
     liveExportKeys,
     moved: plan.moved,
@@ -308,57 +237,46 @@ export function computePullActions(input: PullActionsInput): PullActions {
   };
 }
 
-/**
- * Injectable IO for `applyPullActions` (R-Pull-2). The real `main` wires these
- * to the live client, the vault git wrapper, and `node:fs/promises`; tests pass
- * fakes that RECORD calls so the ordering + the move-on-success data-loss guard
- * are testable without real git/fs/network.
- */
-export interface ApplyPullActionsDeps {
+/** Log why absence deletions were suppressed this cycle (SPEC §8), if they were. */
+export function logDeletionDecision(
+  log: (line: string) => void,
+  actions: Pick<PullActions, "deletionDecision" | "existingCount" | "plannedDeleteCount">,
+): void {
+  const decision = actions.deletionDecision;
+  if (decision.apply) return;
+  if (decision.reason === "incomplete-fetch") {
+    log("pull: tree fetch incomplete — deletions suppressed this cycle (SPEC §8)");
+  } else if (decision.reason === "empty-live") {
+    log(
+      `pull: live fetch returned 0 pages but ${actions.existingCount} file(s) are ` +
+        `tracked — deletions suppressed this cycle (SPEC §8). Re-run when ` +
+        `Docmost is reachable.`,
+    );
+  } else {
+    log(
+      `pull: plan would delete ${actions.plannedDeleteCount} of ${actions.existingCount} ` +
+        `tracked file(s) (mass-delete guard) — deletions suppressed this ` +
+        `cycle (SPEC §8). Verify the live Docmost tree, then re-run.`,
+    );
+  }
+}
+
+/** IO for `buildExportTree`. */
+export interface ExportTreeDeps {
   client: Pick<GitSyncClient, "getPageJson">;
-  git: Pick<
-    VaultGit,
-    | "stageAll"
-    | "commit"
-    | "checkout"
-    | "merge"
-    | "listUnmergedPaths"
-    | "commitMerge"
-    | "showStage"
-    | "mergeFileOurs"
-    | "pageIdsAtRef"
-    | "showFileAtRef"
-    | "listTrackedFiles"
-    | "mergeBase"
-    | "revParse"
-    | "isMergeInProgress"
-    | "diffNameStatus"
-  >;
-  /** Write a file by ABSOLUTE path; its parent directory must exist. */
-  writeFile: (absPath: string, text: string) => Promise<void>;
-  /** Recursive mkdir of an ABSOLUTE directory path. */
-  mkdir: (absDir: string) => Promise<void>;
-  /** Remove a file by ABSOLUTE path (force: a missing file is a no-op). */
-  rm: (absPath: string) => Promise<void>;
+  git: Pick<VaultGit, "hashObject" | "buildTree">;
+  log: (line: string) => void;
   /**
-   * Injected logger for cycle diagnostics (mirrors the push side). Optional —
-   * falls back to `console.log` so existing callers stay green.
-   */
-  log?: (line: string) => void;
-  /** Injected WARN-level logger; falls back to `log`. */
-  warn?: (line: string) => void;
-  /**
-   * The cycle's AbortSignal (DESIGN.md §9): checked before each page is
-   * fetched and before the commit and the merge, and handed to every
-   * conversion. An abort stops the pull with a `CycleAbortedError`.
+   * The cycle's AbortSignal: checked before each page is fetched and handed to
+   * every conversion. An abort stops the export with a `CycleAbortedError`.
    */
   signal?: AbortSignal;
 }
 
 /**
- * A live page the pull could not write into the vault (its fetch, its export
- * — over the JSON budget, past its conversion deadline, a converter error — or
- * its write failed). It does not reach git this cycle and is retried the next.
+ * A live page the export could not place (its fetch, its conversion — over the
+ * JSON budget, past its deadline, a converter error — or its blob write
+ * failed). It does not reach git this cycle and is retried the next.
  */
 export interface PullFailure {
   pageId: string;
@@ -366,804 +284,158 @@ export interface PullFailure {
   error: string;
 }
 
-/** Outcome counters from `applyPullActions` (for the summary + tests). */
-export interface ApplyResult {
+/** What one export changes in its start tree. */
+export interface ExportTreePlan {
+  /** The tree-ish the export starts from. */
+  start: string;
+  /**
+   * Page files to place at `relPath`: the given `blob`, else the page fetched
+   * and serialized in its fixpoint form (SPEC §11).
+   */
+  pages: { pageId: string; relPath: string; blob?: string }[];
+  /**
+   * Paths removed only when the page's file is placed by this export (a failed
+   * fetch or a pinned layout path keeps them).
+   */
+  removeIfWritten: { pageId: string; path: string }[];
+  /** Paths removed whatever the fetches did. */
+  remove: string[];
+  /** Paths left exactly as they are in `start`. */
+  pinned?: ReadonlySet<string>;
+}
+
+/** The tree an export built, with its counters. */
+export interface ExportTreeResult {
+  tree: string;
+  /** Pages fetched and serialized. */
   written: number;
+  /** `removeIfWritten` paths removed. */
   movedApplied: number;
+  /** `remove` paths removed. */
   deleted: number;
-  failed: number;
-  /** pageIds whose fetch/convert/write FAILED this pull (never recorded as exported). */
+  /**
+   * Pages not placed: their fetch, conversion or blob write failed, or their
+   * layout path is pinned.
+   */
   failedPageIds: string[];
+  /** Pages whose fetch, conversion or blob write failed (pinned ones not counted). */
+  failed: number;
   /** The first of the `failed` pages and its reason (absent when none failed). */
   firstFailure?: PullFailure;
-  committed: boolean;
-  merge: { ok: boolean; conflict: boolean; output: string };
-  /**
-   * Vault-relative paths of the page(s) that had a GENUINE conflict in the
-   * docmost -> main merge and were AUTO-RESOLVED (conflicting hunks to the
-   * git/main side, DESIGN.md §6) — committed CLEAN, never with raw conflict markers. Empty on a
-   * clean merge AND when the only conflicts were spurious trailing-whitespace
-   * differences (those are normalized, not reported). Surfaced for logging /
-   * /status visibility; the docmost-side content stays recoverable via the
-   * `docmost` branch + page history.
-   */
-  conflictedPaths: string[];
 }
 
 /**
- * THIN IO applier (R-Pull-2). Performs the side effects in the EXACT current
- * order, with all the original safety guards preserved bit-for-bit:
- *
- *   1. for each `toWrite`: fetch content (`client.getPageJson`) -> stabilize
- *      (normalize-on-write fixpoint, DESIGN.md §11) -> mkdir + write. One bad page
- *      never aborts the pull (bounded-concurrency pool, fault-tolerant).
- *   2. apply MOVE old-path removals — ONLY when the planner marked the old path
- *      removable AND the new-path write SUCCEEDED (the ⭐ data-loss guard: a
- *      failed move-write keeps the old path so the page never vanishes).
- *   3. apply (post-suppression) absence deletes.
- *   4. stageAll + commit on `docmost` (subject from ACTUAL written/deleted
- *      counts) + checkout main + merge docmost (conflicts resolved, DESIGN.md §6).
- *
- * `vaultRoot` roots the relPath -> absolute-path conversion for the fs deps.
+ * Build the export tree with plumbing only (no working tree, no checkout):
+ * fetch each page without a blob through a bounded-concurrency pool, store it
+ * with `hash-object`, then apply removals and page files to `start` in a private
+ * index. One bad page never aborts the export: it lands in `failedPageIds` and
+ * every path tied to it by `removeIfWritten` stays. So does a page whose layout
+ * path is pinned (held by a page whose apply failed): it is not fetched or
+ * placed until that path is released.
  */
-export async function applyPullActions(
-  deps: ApplyPullActionsDeps,
-  actions: PullActions,
-  vaultRoot: string,
-): Promise<ApplyResult> {
-  const { client, git } = deps;
-  // One channel, mirroring the push side: route every cycle diagnostic through
-  // the injected logger; fall back to `console.log` when none is supplied.
-  const log = deps.log ?? ((line: string) => console.log(line));
-  const warn = deps.warn ?? log;
-
-  const signal = deps.signal;
-
-  // Emit the absence-deletion suppression warnings (DESIGN.md §5).
-  const decision = actions.deletionDecision;
-  if (!decision.apply) {
-    if (decision.reason === "incomplete-fetch") {
-      log(
-        "pull: tree fetch incomplete — deletions suppressed this cycle",
-      );
-    } else if (decision.reason === "empty-live") {
-      log(
-        `pull: live fetch returned 0 pages but ${actions.existingCount} file(s) are ` +
-          `tracked — deletions suppressed this cycle. Re-run when ` +
-          `Docmost is reachable.`,
-      );
-    } else {
-      log(
-        `pull: plan would delete ${actions.plannedDeleteCount} of ${actions.existingCount} ` +
-          `tracked file(s) (mass-delete guard) — deletions suppressed this ` +
-          `cycle. Verify the live Docmost tree, then re-run.`,
-      );
-    }
+export async function buildExportTree(
+  deps: ExportTreeDeps,
+  plan: ExportTreePlan,
+): Promise<ExportTreeResult> {
+  const { client, git, log, signal } = deps;
+  const pinned = plan.pinned ?? new Set<string>();
+  const blobs = new Map<string, string>();
+  const failedPageIds = new Set<string>();
+  for (const p of plan.pages) {
+    if (!pinned.has(p.relPath)) continue;
+    failedPageIds.add(p.pageId);
+    log(`pull: ${p.relPath} is held by a failed page — ${p.pageId} keeps its files`);
   }
-
-  // 1. Write each live page in its fixpoint form (normalize-on-write).
+  const toFetch = plan.pages.filter(
+    (p) => p.blob === undefined && !failedPageIds.has(p.pageId),
+  );
   let written = 0;
   let failed = 0;
+  let firstFailure: PullFailure | undefined;
   let completed = 0;
   let nextIndex = 0;
-  // pageIds whose write FAILED. A moved page whose new-path write failed must
-  // NOT have its old path removed (otherwise the page vanishes entirely).
-  const failedPageIds = new Set<string>();
-  let firstFailure: PullFailure | undefined;
 
-  const writeOne = async (w: {
-    pageId: string;
-    relPath: string;
-  }): Promise<void> => {
+  const fetchOne = async (p: { pageId: string; relPath: string }) => {
     try {
-      const page = await client.getPageJson(w.pageId);
+      const page = await client.getPageJson(p.pageId);
       // Native-Obsidian format: a minimal `gitmost_id` frontmatter + the fixpoint
-      // markdown body. title/parent/space are DERIVED (filename / folder / repo),
-      // so nothing but the pageId is persisted as meta.
+      // markdown body; title/parent/space are derived from the path.
       const text = serializePageFile(
         page.id,
         await stabilizePageBody(page.content, signal),
       );
-      const abs = relToAbs(vaultRoot, w.relPath);
-      await deps.mkdir(dirname(abs));
-      await deps.writeFile(abs, text);
+      blobs.set(p.pageId, await git.hashObject(text));
       written++;
     } catch (err) {
-      // An abort ends the pull, it is not this page's failure.
+      // An abort ends the export, it is not this page's failure.
       if (err instanceof CycleAbortedError) throw err;
+      failedPageIds.add(p.pageId);
       failed++;
-      failedPageIds.add(w.pageId);
       const error = err instanceof Error ? err.message : String(err);
-      firstFailure ??= { pageId: w.pageId, error };
+      firstFailure ??= { pageId: p.pageId, error };
       // Every failed page is named here; the cycle WARNs the count and the
-      // first one (cycle.ts).
-      log(`pull: failed page ${w.pageId}: ${error}`);
+      // first one.
+      log(`pull: failed page ${p.pageId}: ${error}`);
     } finally {
       completed++;
       if (completed % PROGRESS_EVERY === 0) {
-        log(`pulled ${completed}/${actions.toWrite.length}`);
+        log(`pulled ${completed}/${toFetch.length}`);
       }
     }
   };
-
-  // Bounded-concurrency pool (dependency-free): a fixed set of runners each
-  // take the next index until the write list is exhausted. One bad page never
-  // aborts the whole pull (mirrors the fault-tolerant tree walk).
   const runner = async (): Promise<void> => {
     while (true) {
       const i = nextIndex++;
-      if (i >= actions.toWrite.length) return;
-      throwIfAborted(signal, `before pulling page ${actions.toWrite[i].pageId}`);
-      await writeOne(actions.toWrite[i]);
+      if (i >= toFetch.length) return;
+      throwIfAborted(signal, `before exporting page ${toFetch[i].pageId}`);
+      await fetchOne(toFetch[i]);
     }
   };
-  // Every runner is waited for, an aborted one included, so no page write
-  // lands after the pull has stopped.
+  // Every runner is waited for, an aborted one included, so no fetch or blob
+  // write is still running when the export has stopped.
   const runs = await Promise.allSettled(
-    Array.from(
-      { length: Math.min(CONCURRENCY, actions.toWrite.length) || 1 },
-      () => runner(),
+    Array.from({ length: Math.min(CONCURRENCY, toFetch.length) || 1 }, () =>
+      runner(),
     ),
   );
   for (const run of runs) if (run.status === "rejected") throw run.reason;
 
-  // Helper: `rm` with force:true is a no-op if the file is already gone.
-  const removePath = async (rel: string, what: string): Promise<boolean> => {
-    try {
-      await deps.rm(relToAbs(vaultRoot, rel));
-      return true;
-    } catch (err) {
-      log(
-        `pull: failed to ${what} ${rel}: ` +
-          (err instanceof Error ? err.message : String(err)),
-      );
-      return false;
+  const placed = new Map<string, { relPath: string; blob: string }>();
+  for (const p of plan.pages) {
+    const blob = p.blob ?? blobs.get(p.pageId);
+    if (blob !== undefined && !failedPageIds.has(p.pageId)) {
+      placed.set(p.pageId, { relPath: p.relPath, blob });
     }
-  };
-
-  // 2. Apply MOVE old-path removals. A moved page IS present in `live`, so its
-  //    old path is genuinely stale — NOT subject to the incomplete-fetch
-  //    suppression. BUT only remove the old path when (a) the planner marked it
-  //    removable (not reused by another live page) AND (b) the new-path write
-  //    actually SUCCEEDED — otherwise we would delete the only copy of a page
-  //    whose move-write failed (⭐ data-loss guard).
+  }
+  const changes = new Map<string, string | null>();
   let movedApplied = 0;
-  for (const m of actions.moved) {
-    if (!m.removeOldPath) continue;
-    if (failedPageIds.has(m.pageId)) {
-      log(
-        `pull: move write for ${m.pageId} failed — keeping old path ` +
-          `${m.fromRelPath}`,
-      );
+  for (const r of plan.removeIfWritten) {
+    if (pinned.has(r.path)) continue;
+    if (!placed.has(r.pageId)) {
+      log(`pull: ${r.pageId} was not exported — keeping ${r.path} (SPEC §8)`);
       continue;
     }
-    if (await removePath(m.fromRelPath, "remove moved old path")) movedApplied++;
+    changes.set(r.path, null);
+    movedApplied++;
   }
-
-  // 3. Apply ABSENCE-based deletions — `actions.toDelete` is ALREADY the
-  //    post-suppression set (empty when the decision suppressed them).
   let deleted = 0;
-  for (const rel of actions.toDelete) {
-    if (await removePath(rel, "delete")) deleted++;
+  for (const path of plan.remove) {
+    if (pinned.has(path)) continue;
+    changes.set(path, null);
+    deleted++;
   }
-
-  // 4. Stage + commit on `docmost` (only if there is something to commit).
-  //    Deterministic stabilized output means unchanged pages produce identical
-  //    bytes -> git sees no diff -> no churn. The subject reflects the
-  //    ACTUAL work applied (pages written + files deleted), not the planned size,
-  //    so a run with failures does not over-report.
-  throwIfAborted(signal, `before committing the pull on '${DOCMOST_BRANCH}'`);
-  const subject =
-    deleted > 0
-      ? `docmost: sync ${written} page(s), ${deleted} deleted`
-      : `docmost: sync ${written} page(s)`;
-  await git.stageAll();
-  const committed = await git.commit(subject, {
-    authorName: BOT_AUTHOR_NAME,
-    authorEmail: BOT_AUTHOR_EMAIL,
-    trailers: [DOCMOST_SOURCE_TRAILER],
-  });
-
-  // Merge docmost -> main. A CONFLICT must NOT wedge the whole space (the
-  // reported bug: ONE same-line conflict on ONE page froze sync for EVERY page
-  // in both directions because the next cycle's `isMergeInProgress` check kept
-  // skipping the entire space). It must ALSO never commit raw `<<<<<<<`/`>>>>>>>`
-  // markers onto the published `main` (round-1 round-2: external clones would see
-  // the markers AND the body re-conflicts every cycle while git and Docmost
-  // silently diverge). So on a conflict we RESOLVE each conflicted file to a
-  // clean, marker-free form and commit that (DESIGN.md §6):
-  //
-  //   - SPURIOUS conflict — the ROOT CAUSE of the leak: the two sides differ ONLY
-  //     in trailing/empty-line normalization (the engine writes one trailing
-  //     newline; a user pushed extra blank lines). Once both sides are
-  //     `normalizeTrailingWhitespace`d they are IDENTICAL, so this is no real
-  //     conflict at all: write the normalized form. Content stays in sync; git
-  //     and the page never diverge.
-  //   - GENUINE content conflict: resolve PER HUNK — only the hunks BOTH sides
-  //     changed take OURS (the `main`/git side, mirroring the live-doc 3-way "git
-  //     wins" rule); every hunk only Docmost changed is kept. Writing OURS whole
-  //     would make the push (diffed from the `docmost` tip) revert Docmost's
-  //     edits in blocks git never touched. The docmost-side text of the
-  //     conflicting hunks stays on the `docmost` branch and in page history.
-  //     add/add (no common ancestor) keeps the Docmost side and git's version
-  //     as a new sibling file — see below; when both sides carry the SAME
-  //     gitmost_id it is one page and only the Docmost side is kept (DESIGN.md
-  //     §4). No markers ever reach `main`.
-  throwIfAborted(signal, `before merging '${DOCMOST_BRANCH}' into '${DEFAULT_BRANCH}'`);
-  await git.checkout(DEFAULT_BRANCH);
-  // IDENTITY (the gitmost_id), not the path, decides which page a file holds.
-  // The merge below is path-based (rename detection off), so `main` is first
-  // ALIGNED to the paths Docmost gave its pages since the merge base: then each
-  // path holds the same page on both sides, and a path Docmost handed to another
-  // page (a retitle freeing a bare name, a removed page's name reused) never
-  // merges one page's edits into another. Skipped when either side has nothing
-  // of its own since the merge base (a no-op or fast-forward merge).
-  const mergeBaseSha = await git.mergeBase(DOCMOST_BRANCH, DEFAULT_BRANCH);
-  const ident =
-    mergeBaseSha !== null &&
-    mergeBaseSha !== (await git.revParse(DOCMOST_BRANCH)) &&
-    mergeBaseSha !== (await git.revParse(DEFAULT_BRANCH))
-      ? {
-          mb: mergeBaseSha,
-          base: await idPathMap(git, mergeBaseSha),
-          doc: await idPathMap(git, DOCMOST_BRANCH),
-          main: await idPathMap(git, DEFAULT_BRANCH),
-        }
-      : null;
-  if (ident !== null) {
-    await alignToDocmostLayout(deps, ident, vaultRoot, log, warn);
-  }
-  // The `main` side of the merge (after the alignment commit).
-  const oursSha = await git.revParse(DEFAULT_BRANCH);
-  const merge = await git.merge(DOCMOST_BRANCH);
-  let conflictedPaths: string[] = [];
-  let mergeResult = merge;
-  const unmerged = merge.conflict ? await git.listUnmergedPaths() : [];
-  // Pages git moved keep git's path; paths settled there are skipped below.
-  const settled = new Set<string>();
-  const relocated =
-    ident !== null && oursSha !== null && (merge.ok || merge.conflict)
-      ? await relocateGitMovedPages(
-          deps,
-          ident,
-          oursSha,
-          new Set(unmerged),
-          settled,
-          vaultRoot,
-        )
-      : [];
-  if (merge.conflict) {
-    const genuine: string[] = [];
-    const addAdd: string[] = [];
-    const adopted: string[] = [];
-    const samePage: string[] = [];
-    let normalized = 0;
-    // Paths taken in the merge result (lazily listed on the first add/add).
-    let taken: Set<string> | null = null;
-    for (const rel of unmerged) {
-      if (settled.has(rel)) continue;
-      const ours = await git.showStage(2, rel); // main side
-      const theirs = await git.showStage(3, rel); // docmost side
-      if (
-        ours !== null &&
-        theirs !== null &&
-        normalizeTrailingWhitespace(ours) === normalizeTrailingWhitespace(theirs)
-      ) {
-        // SPURIOUS: identical once trailing/empty-line normalization is applied.
-        // Commit the canonical (normalized) form — no conflict, no markers.
-        normalized++;
-        await writeVaultFile(deps, vaultRoot, rel, normalizeTrailingWhitespace(theirs));
-      } else {
-        const base = await git.showStage(1, rel);
-        let resolved: string | null;
-        const pageBase =
-          ours !== null && theirs !== null
-            ? await pageMergeBase(git, ident, base, ours, theirs)
-            : null;
-        if (ours !== null && theirs !== null && pageBase !== null) {
-          // One page, both sides changed it: per hunk, git wins only the
-          // conflicting hunks. The engine writes exactly one trailing newline; a
-          // git side that drops it or adds blank lines would otherwise "change"
-          // the last line and win that hunk over a Docmost edit of the last block.
-          const merged = await git.mergeFileOurs(
-            normalizeTrailingWhitespace(pageBase),
-            normalizeTrailingWhitespace(ours),
-            normalizeTrailingWhitespace(theirs),
-          );
-          resolved = merged.text;
-          // A clean merge of one page (e.g. a path new on both sides after the
-          // alignment) is not a conflict.
-          if (merged.conflicts > 0) genuine.push(rel);
-        } else if (
-          ours !== null &&
-          theirs !== null &&
-          parsePageFile(ours).id !== null &&
-          parsePageFile(ours).id === parsePageFile(theirs).id
-        ) {
-          // add/add of ONE page (the same gitmost_id, no merge-base version):
-          // a push cut off after the page's id reached `main` but before
-          // `docmost` caught up (DESIGN.md §4). The Docmost side is the page;
-          // no copy, so no duplicate page.
-          resolved = theirs;
-          samePage.push(rel);
-        } else if (ours !== null && theirs !== null) {
-          const adoptId = await unfinishedCreateId(
-            client,
-            ident,
-            ours,
-            theirs,
-            warn,
-            signal,
-          );
-          if (adoptId !== null) {
-            // git-sync's own create of git's new file, cut off before its id
-            // write-back: ONE page — git's content under that page's id; the
-            // push then writes git's body into that page.
-            resolved = normalizeTrailingWhitespace(
-              serializePageFile(adoptId, parsePageFile(ours).body),
-            );
-            adopted.push(rel);
-          } else {
-            // add/add, or two different pages at one path: nothing tells which
-            // blocks git changed, and OURS would push git's whole body over the
-            // page. Keep the Docmost side at the path and keep git's version as
-            // a NEW file at a disambiguated sibling path, its gitmost_id
-            // stripped so the push creates it as a new page.
-            genuine.push(rel);
-            resolved = theirs;
-            if (taken === null) taken = new Set(await git.listTrackedFiles());
-            const copy = freeGitSibling(rel, taken);
-            await writeVaultFile(
-              deps,
-              vaultRoot,
-              copy,
-              normalizeTrailingWhitespace(parsePageFile(ours).body),
-            );
-            addAdd.push(`${rel} -> ${copy}`);
-          }
-        } else {
-          // modify/delete: keep the remaining content. delete/delete: nothing to
-          // write; commitMerge's `git add -A` stages the deletion.
-          genuine.push(rel);
-          resolved = ours ?? theirs;
-        }
-        if (resolved !== null) {
-          await writeVaultFile(deps, vaultRoot, rel, resolved);
-        }
-      }
-    }
-    conflictedPaths = genuine;
-    await git.commitMerge(
-      genuine.length > 0
-        ? `docmost: sync, ${genuine.length} page(s) auto-resolved (conflicting hunks to git)`
-        : normalized > 0
-          ? `docmost: sync (trailing-whitespace conflicts normalized)`
-          : `docmost: sync, ${unmerged.length} path(s) merged by page identity`,
-      {
-        authorName: BOT_AUTHOR_NAME,
-        authorEmail: BOT_AUTHOR_EMAIL,
-        trailers: [DOCMOST_SOURCE_TRAILER],
-      },
-    );
-    // The committed tree is CLEAN (every conflicted file was overwritten with a
-    // marker-free resolution). `conflict` now reflects only the GENUINE conflicts
-    // that were auto-resolved (git won); a merge that conflicted ONLY on trailing
-    // whitespace is reported as clean so /status does not cry wolf.
-    mergeResult = { ok: true, conflict: genuine.length > 0, output: merge.output };
-    if (adopted.length > 0) {
-      warn(
-        `pull: git's new file(s) took over the page git-sync had created ` +
-          `for them before an interruption cut off the id write-back (one ` +
-          `page each, no copy): ${adopted.join(", ")}.`,
-      );
-    }
-    if (samePage.length > 0) {
-      warn(
-        `pull: both sides added the same page (same gitmost_id, no common ` +
-          `ancestor) after an interrupted push — kept the Docmost version, ` +
-          `one page each, no copy: ${samePage.join(", ")}.`,
-      );
-    }
-    if (genuine.length > 0) {
-      log(
-        `pull: merge of docmost -> main had ${genuine.length} GENUINE conflict(s) ` +
-          `auto-resolved per hunk — only the conflicting hunks take the git/main ` +
-          `side (git wins): ${genuine.join(", ")}. NO conflict markers ` +
-          `were written to main; the docmost-side text of those hunks is on the ` +
-          `'docmost' branch and recoverable via page history.`,
-      );
-      if (addAdd.length > 0) {
-        warn(
-          `pull: add/add conflict(s) kept the DOCMOST version at the path (no ` +
-            `common ancestor to tell which blocks git changed); the git version ` +
-            `was kept as a new file (created as a new page by the push): ` +
-            `${addAdd.join(", ")}.`,
-        );
-      }
-    } else if (normalized > 0) {
-      log(
-        `pull: merge of docmost -> main conflicted ONLY on trailing/empty-line ` +
-          `normalization (${normalized} file(s)) — auto-normalized, no ` +
-          `markers, content stays in sync.`,
-      );
-    }
-  } else if (!merge.ok) {
-    log(`pull: merge of docmost -> main failed: ${merge.output}`);
-  } else if (await git.isMergeInProgress()) {
-    // A clean non-fast-forward merge stops before committing (VaultGit.merge):
-    // commit it, with the relocations above, as one merge commit.
-    await git.commitMerge(
-      relocated.length > 0
-        ? `docmost: sync, ${relocated.length} page(s) kept at git's path`
-        : `Merge branch '${DOCMOST_BRANCH}'`,
-      {
-        authorName: BOT_AUTHOR_NAME,
-        authorEmail: BOT_AUTHOR_EMAIL,
-        trailers: [DOCMOST_SOURCE_TRAILER],
-      },
-    );
-  }
-  if (relocated.length > 0) {
-    log(
-      `pull: page(s) git moved keep git's path, their Docmost edits merged per ` +
-        `hunk: ${relocated.join(", ")}.`,
-    );
-  }
-
+  for (const { relPath, blob } of placed.values()) changes.set(relPath, blob);
+  const tree = await git.buildTree(
+    plan.start,
+    [...changes].map(([path, sha]) => ({ path, sha })),
+  );
   return {
+    tree,
     written,
     movedApplied,
     deleted,
-    failed,
     failedPageIds: [...failedPageIds],
+    failed,
     ...(firstFailure ? { firstFailure } : {}),
-    committed,
-    merge: mergeResult,
-    conflictedPaths,
   };
-}
-
-/** Write a vault file by relative path, creating its parent directory first. */
-async function writeVaultFile(
-  deps: Pick<ApplyPullActionsDeps, "mkdir" | "writeFile">,
-  vaultRoot: string,
-  rel: string,
-  text: string,
-): Promise<void> {
-  const abs = relToAbs(vaultRoot, rel);
-  await deps.mkdir(dirname(abs));
-  await deps.writeFile(abs, text);
-}
-
-/**
- * Page identity around one pull merge (DESIGN.md §4): the merge base and the
- * id -> path maps of the three commits. An id in `doc` and `main` but not in
- * `base` is ONE page both sides added since the merge base.
- */
-interface MergeIdentity {
-  mb: string;
-  /** Page id -> its file path at the merge base. */
-  base: Map<string, string>;
-  /** Page id -> its file path at the `docmost` tip. */
-  doc: Map<string, string>;
-  /** Page id -> its file path at the `main` tip (before the alignment). */
-  main: Map<string, string>;
-}
-
-/**
- * The id of the Docmost page at an add/add path when that page is git-sync's
- * own unfinished create of git's new file there (cut off before its id
- * write-back, with or without its body written): git's file has no
- * gitmost_id, the page is new since the merge base, and `isOwnUnfinishedCreate`
- * holds for it (the same test the push's retry-adopt uses). `null` otherwise.
- *
- * Taking a page over writes git's body into it, so the body check keeps that
- * from changing anything the page holds: a page that only looks like such a
- * create (restored from the trash, or every page of a re-made vault) keeps its
- * own text, and git's file becomes a copy.
- */
-async function unfinishedCreateId(
-  client: Pick<GitSyncClient, "getPageJson">,
-  ident: MergeIdentity | null,
-  ours: string,
-  theirs: string,
-  warn: (line: string) => void,
-  signal: AbortSignal | undefined,
-): Promise<string | null> {
-  const gitFile = parsePageFile(ours);
-  if (gitFile.id !== null) return null;
-  const page = parsePageFile(theirs);
-  if (page.id === null) return null;
-  if (ident === null || ident.base.has(page.id)) return null;
-  const live = await client.getPageJson(page.id);
-  // A file the converter cannot take (e.g. nesting deep enough to overflow
-  // the stack) is not taken over: it becomes a copy instead of failing the
-  // whole pull.
-  try {
-    return (await isOwnUnfinishedCreate(live, page.body, gitFile.body, signal))
-      ? page.id
-      : null;
-  } catch (err) {
-    if (err instanceof CycleAbortedError) throw err;
-    warn(
-      `pull: could not convert git's new file at page ${page.id}'s path to ` +
-        `compare it with the page; keeping it as a copy: ${
-          err instanceof Error ? (err.stack ?? err.message) : String(err)
-        }`,
-    );
-    return null;
-  }
-}
-
-/** Page id -> file path of every page file at `ref` (first file wins). */
-async function idPathMap(
-  git: Pick<VaultGit, "pageIdsAtRef">,
-  ref: string,
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  for (const { path, id } of await git.pageIdsAtRef(ref)) {
-    if (isPageFile(path) && !out.has(id)) out.set(id, path);
-  }
-  return out;
-}
-
-/**
- * A free `<name> ~git.md` (then `~git-2`, …) sibling of `rel`, following the
- * layout's ` ~<suffix>` disambiguation; reserved in `taken`.
- */
-function freeGitSibling(rel: string, taken: Set<string>): string {
-  const slash = rel.lastIndexOf("/");
-  const dir = slash >= 0 ? rel.slice(0, slash + 1) : "";
-  const stem = rel.slice(dir.length).replace(/\.md$/, "");
-  let out = `${dir}${gitCopyStem(stem, 1)}.md`;
-  for (let n = 2; taken.has(out); n++) {
-    out = `${dir}${gitCopyStem(stem, n)}.md`;
-  }
-  taken.add(out);
-  return out;
-}
-
-/**
- * The 3-way base for the two versions met at a conflicted path, or null when
- * they are not the same page (different gitmost_ids) or the page has no merge-
- * base version. The path's own base (stage 1) is used only when it holds that
- * page; otherwise the page's merge-base file, found by id at any path. A git
- * version without frontmatter counts as the path's page.
- */
-async function pageMergeBase(
-  git: Pick<VaultGit, "showFileAtRef">,
-  ident: MergeIdentity | null,
-  base: string | null,
-  ours: string,
-  theirs: string,
-): Promise<string | null> {
-  const baseId = base !== null ? parsePageFile(base).id : null;
-  const theirsId = parsePageFile(theirs).id;
-  if ((parsePageFile(ours).id ?? baseId) !== theirsId) return null;
-  if (base !== null && baseId === theirsId) return base;
-  const at = theirsId !== null ? ident?.base.get(theirsId) : undefined;
-  return ident !== null && at !== undefined
-    ? git.showFileAtRef(ident.mb, at)
-    : null;
-}
-
-/**
- * Before the path-based merge, move on `main` the file of every page Docmost
- * moved since the merge base to the page's Docmost path, in one commit — only
- * where `main` still has the page at its merge-base path (a page git moved
- * keeps git's path, see `relocateGitMovedPages`). A page BOTH sides added since
- * the merge base (in `doc` and `main`, not in `base`) is one page too: its
- * `main` file moves to its Docmost path, where the merge then meets the two
- * versions as one page (DESIGN.md §4). A file `main` has at a target
- * path that is not itself moving away is git's: dropped when it is unchanged
- * since the merge base (Docmost removed its page), else moved aside to a free
- * `<name> ~git` sibling.
- */
-async function alignToDocmostLayout(
-  deps: ApplyPullActionsDeps,
-  ident: MergeIdentity,
-  vaultRoot: string,
-  log: (line: string) => void,
-  warn: (line: string) => void,
-): Promise<void> {
-  const { git } = deps;
-  const moves: { from: string; to: string; text: string }[] = [];
-  for (const [id, from] of ident.base) {
-    const to = ident.doc.get(id);
-    if (to === undefined || to === from) continue;
-    const text = await git.showFileAtRef("HEAD", from);
-    if (text !== null && parsePageFile(text).id === id) {
-      moves.push({ from, to, text });
-    }
-  }
-  for (const [id, from] of ident.main) {
-    if (ident.base.has(id)) continue;
-    const to = ident.doc.get(id);
-    if (to === undefined || to === from) continue;
-    const text = await git.showFileAtRef("HEAD", from);
-    if (text !== null) moves.push({ from, to, text });
-  }
-  if (moves.length === 0) return;
-  const sources = new Set(moves.map((m) => m.from));
-  const taken = new Set([
-    ...(await git.listTrackedFiles()),
-    ...ident.doc.values(),
-    ...moves.map((m) => m.to),
-  ]);
-  const aside: { from: string; to: string; text: string }[] = [];
-  const dropped: string[] = [];
-  for (const m of moves) {
-    if (sources.has(m.to)) continue;
-    const occupant = await git.showFileAtRef("HEAD", m.to);
-    if (occupant === null) continue;
-    if (occupant === (await git.showFileAtRef(ident.mb, m.to))) {
-      dropped.push(m.to);
-    } else {
-      aside.push({ from: m.to, to: freeGitSibling(m.to, taken), text: occupant });
-    }
-  }
-  // Every target is written before any source goes.
-  const written = new Set<string>();
-  for (const m of [...moves, ...aside]) {
-    await writeVaultFile(deps, vaultRoot, m.to, m.text);
-    written.add(m.to);
-  }
-  for (const m of moves) {
-    if (!written.has(m.from)) await deps.rm(relToAbs(vaultRoot, m.from));
-  }
-  await git.stageAll();
-  await git.commit(
-    `docmost: align ${moves.length} page path(s) to the Docmost layout`,
-    {
-      authorName: BOT_AUTHOR_NAME,
-      authorEmail: BOT_AUTHOR_EMAIL,
-      trailers: [DOCMOST_SOURCE_TRAILER],
-    },
-  );
-  log(
-    `pull: aligned main to the Docmost layout before the merge: ` +
-      moves.map((m) => `${m.from} -> ${m.to}`).join(", ") +
-      (dropped.length > 0
-        ? `; replaced unchanged file(s) of removed page(s): ${dropped.join(", ")}`
-        : "") +
-      ".",
-  );
-  if (aside.length > 0) {
-    warn(
-      `pull: git file(s) at a path Docmost gave to another page were moved ` +
-        `aside: ${aside.map((m) => `${m.from} -> ${m.to}`).join(", ")}.`,
-    );
-  }
-}
-
-/**
- * Pages git moved (on `main` the page's file left its merge-base path) keep
- * GIT's path: the page's Docmost-side edits are merged per hunk into git's file
- * and its Docmost-side file goes. A path-based merge alone would leave the page
- * in two files (Docmost's edits at Docmost's path, git's at its own). If Docmost
- * put another page at git's path, that page keeps it and git's file of the page
- * moves to a free `~git` sibling. When git both moved and copied the page (two
- * files with its id, neither at its merge-base path), the page is the file git
- * paired with that path as a rename (else the first by path); the copies lose
- * the gitmost_id so the push creates them as new pages. Returns
- * "docmost path -> kept path" per page and marks every path it settled.
- */
-async function relocateGitMovedPages(
-  deps: ApplyPullActionsDeps,
-  ident: MergeIdentity,
-  oursSha: string,
-  unmerged: Set<string>,
-  settled: Set<string>,
-  vaultRoot: string,
-): Promise<string[]> {
-  const { git } = deps;
-  const pathsById = new Map<string, string[]>();
-  for (const { path, id } of await git.pageIdsAtRef(oursSha)) {
-    if (isPageFile(path)) pathsById.set(id, [...(pathsById.get(id) ?? []), path]);
-  }
-  const out: string[] = [];
-  let taken: Set<string> | null = null;
-  // git's renames on `main` since the merge base: old path -> new path.
-  let renames: Map<string, string> | null = null;
-  for (const [id, paths] of pathsById) {
-    const basePath = ident.base.get(id);
-    const docPath = ident.doc.get(id);
-    if (basePath === undefined || docPath === undefined) continue;
-    let gitPath = paths[0];
-    let copies: string[] = [];
-    if (paths.length > 1) {
-      // A file still at the page's own path is the page; the push makes the
-      // other files new pages.
-      if (paths.includes(basePath) || paths.includes(docPath)) continue;
-      if (renames === null) {
-        renames = new Map();
-        for (const c of await git.diffNameStatus(ident.mb, oursSha)) {
-          if (c.status === "R" && c.oldPath !== undefined) {
-            renames.set(c.oldPath, c.path);
-          }
-        }
-      }
-      const paired = renames.get(basePath);
-      gitPath =
-        paired !== undefined && paths.includes(paired)
-          ? paired
-          : [...paths].sort()[0];
-      copies = paths.filter((p) => p !== gitPath && !unmerged.has(p));
-    }
-    if (gitPath === basePath || gitPath === docPath) continue;
-    const gitText = await git.showFileAtRef(oursSha, gitPath);
-    const baseText = await git.showFileAtRef(ident.mb, basePath);
-    const docText = await git.showFileAtRef(DOCMOST_BRANCH, docPath);
-    if (
-      gitText === null ||
-      baseText === null ||
-      docText === null ||
-      parsePageFile(gitText).id !== id
-    ) {
-      continue;
-    }
-    // Docmost left the page alone: the merge already carried git's move.
-    if (
-      docPath === basePath &&
-      docText === baseText &&
-      !unmerged.has(gitPath) &&
-      copies.length === 0
-    ) {
-      continue;
-    }
-    let target = gitPath;
-    if (unmerged.has(gitPath)) {
-      const theirsAt = await git.showFileAtRef(DOCMOST_BRANCH, gitPath);
-      if (theirsAt !== null && parsePageFile(theirsAt).id !== id) {
-        await writeVaultFile(deps, vaultRoot, gitPath, theirsAt);
-        settled.add(gitPath);
-        if (taken === null) {
-          taken = new Set([
-            ...(await git.listTrackedFiles()),
-            ...ident.doc.values(),
-          ]);
-        }
-        target = freeGitSibling(gitPath, taken);
-      }
-    }
-    await writeVaultFile(
-      deps,
-      vaultRoot,
-      target,
-      docText === baseText
-        ? gitText
-        : (
-            await git.mergeFileOurs(
-              normalizeTrailingWhitespace(baseText),
-              normalizeTrailingWhitespace(gitText),
-              normalizeTrailingWhitespace(docText),
-            )
-          ).text,
-    );
-    settled.add(target);
-    // The page's Docmost-side file goes; a file git put at that path stays.
-    const gitAtDocPath = await git.showFileAtRef(oursSha, docPath);
-    if (gitAtDocPath !== null && parsePageFile(gitAtDocPath).id !== id) {
-      await writeVaultFile(deps, vaultRoot, docPath, gitAtDocPath);
-    } else {
-      await deps.rm(relToAbs(vaultRoot, docPath));
-    }
-    settled.add(docPath);
-    for (const copy of copies) {
-      const text = await git.showFileAtRef(oursSha, copy);
-      if (text === null) continue;
-      await writeVaultFile(
-        deps,
-        vaultRoot,
-        copy,
-        normalizeTrailingWhitespace(parsePageFile(text).body),
-      );
-      settled.add(copy);
-    }
-    out.push(
-      `${docPath} -> ${target}` +
-        (copies.length > 0 ? ` (copies made new pages: ${copies.join(", ")})` : ""),
-    );
-  }
-  return out;
 }

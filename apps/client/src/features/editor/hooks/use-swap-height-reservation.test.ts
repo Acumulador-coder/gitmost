@@ -146,7 +146,7 @@ describe("useSwapHeightReservation", () => {
     expect(result.current.reservedHeight).toBeNull();
   });
 
-  // (c2) #564 guard 6 — an EARLY (local-first) swap paints the ydoc's content,
+  // (c2) Guard 6 — an EARLY (local-first) swap paints the ydoc's content,
   // whose height may legitimately differ a little from the network-seeded static
   // copy. Demanding an exact height MATCH would pin the reservation to the 4s cap
   // and leave dead space under the body, so early-swap releases at a TOLERANCE

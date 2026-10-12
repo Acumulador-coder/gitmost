@@ -1,23 +1,23 @@
 /**
- * Push cycle — vault -> Docmost (DESIGN.md §7), FIRST increment.
+ * Push cycle — vault -> Docmost (SPEC §6 "FS -> Docmost"), FIRST increment.
  *
  * This module mirrors the structure of `./pull.ts`: a set of VaultGit diff/ref
  * primitives (in `./git.ts`), a PURE planner (`computePushActions`) that turns
  * a git diff into a classified action set with NO IO, and a THIN injectable
  * applier (`applyPushActions`) exercised in tests via fakes only.
  *
- * Direction is vault -> Docmost. The diff is `main` against
- * merge-base(`docmost`, `main`) (DESIGN.md §7); each `A`/`M`/`D`/`R` row is
- * translated into a Docmost mutation by `pageId` identity (DESIGN.md §4):
- *   - A without pageId   -> create_page (then write the assigned pageId back).
+ * Direction is vault -> Docmost. The diff is `main` against the last export
+ * (SPEC §6 step 2); each `A`/`M`/`D`/`R` row is translated into a Docmost
+ * mutation by `pageId` identity (SPEC §4):
+ *   - A without pageId   -> create_page (the next export writes its id).
  *   - A with    pageId   -> update (restored/copied file; the page already exists).
- *   - M                  -> update content (collab/Yjs path, DESIGN.md §7).
+ *   - M                  -> update content (collab/Yjs path, SPEC §2/§15.6).
  *   - D                  -> delete_page (pageId recovered from the PRE-IMAGE meta).
  *   - R                  -> rename/move (CLASSIFIED here, APPLIED in push #3).
  *
  * MOVE/RENAME APPLY (push #3) — DONE here. `classifyRenameMoves` (PURE) resolves
  * each `renamesMoves` entry into the Docmost op(s) it needs, comparing the PATH-
- * derived parent (DESIGN.md §4: the file path is the source of truth for tree
+ * derived parent (SPEC §5: the file path is the source of truth for tree
  * position, NOT stale `meta.parentPageId`) and the meta title; `applyPushActions`
  * then calls `move_page` / `rename_page` (both for a reparent+retitle), or
  * records a NO-OP for a cosmetic local-only file-path rename.
@@ -29,24 +29,14 @@
 import {
   type DocmostMdMeta,
   parsePageFile,
-  serializePageFile,
 } from "@docmost/prosemirror-markdown";
 import type { GitSyncClient } from "./client.types.js";
 import type { DiffEntry } from "./git.js";
-import {
-  VaultGit,
-  DEFAULT_BRANCH,
-  BOT_AUTHOR_NAME,
-  BOT_AUTHOR_EMAIL,
-  DOCMOST_SOURCE_TRAILER,
-} from "./git.js";
+import { VaultGit, DEFAULT_BRANCH, GitStoppedError } from "./git.js";
 import { CycleAbortedError, throwIfAborted } from "./abort.js";
 import { markdownToProseMirror } from "./convert-pool.js";
-import { bodyHash } from "./loop-guard.js";
-import { isGitCopyPath } from "./sanitize.js";
-import { type Settings } from "./settings.js";
 import { stabilizePageBody } from "./stabilize.js";
-import { DOCMOST_BRANCH, PUSH_REF, RECORD_REF } from "./vault-refs.js";
+import { type Settings } from "./settings.js";
 
 // Re-export so callers/tests can import the diff row shape from either module.
 export type { DiffEntry } from "./git.js";
@@ -66,7 +56,7 @@ export interface UpdateAction {
    * Path in the push's diff-base commit (`ApplyPushDeps.baseRef`) to resolve the
    * 3-way merge BASE from; defaults to `path`. Set to the OLD path for
    * RENAME-derived updates: a renamed
-   * file lives at its NEW `path` in the working tree, but in the base tree
+   * file lives at its NEW `path` on `main`, but in the base tree
    * the file was at its OLD path — so the merge base must be looked up there, or
    * it resolves to `null` and the merge degrades to a 2-way (clobbering concurrent
    * Docmost-side edits). For a plain `M` update this is undefined -> uses `path`,
@@ -75,7 +65,7 @@ export interface UpdateAction {
   basePath?: string;
 }
 
-/** A page to soft-delete in Docmost (Trash, DESIGN.md §7). */
+/** A page to soft-delete in Docmost (Trash, SPEC §8). */
 export interface DeleteAction {
   pageId: string;
   /** Vault-relative path of the deleted file. */
@@ -92,7 +82,7 @@ export interface RenameMoveAction {
 /**
  * A CLASSIFIED rename/move (push #3): a `RenameMoveAction` resolved into the
  * Docmost op(s) it actually needs. The file PATH is the source of truth for tree
- * position (DESIGN.md §4: "the identity is the pageId, not the path" — the path is COSMETIC and
+ * position (SPEC §5: "the identity is the pageId, not the path" — the path is COSMETIC and
  * LOCAL, the page identity is its pageId), so we compare the RESOLVED parent of
  * the new path against the resolved parent of the old path, and the title in the
  * current meta against the title in the previous meta. Each sub-op is emitted
@@ -121,7 +111,7 @@ export interface RenameMoveActionClassified {
  * Injected resolvers for the PURE `classifyRenameMoves` (push #3). Both are PURE
  * given a path + side; the real `main` (a follow-up) wires them to the file tree
  * (`readFile` for `current`, `git.showFileAtRef` for `prev`), tests pass plain
- * lookups. DESIGN.md §4 path-as-truth:
+ * lookups. SPEC §5 path-as-truth:
  *   - `metaAt`: the file's synthetic native meta at that side (title from the
  *     filename, pageId from the `gitmost_id` frontmatter).
  *   - `resolveParentPageId`: the pageId of the page whose FILE is the parent
@@ -134,10 +124,10 @@ export interface ClassifyRenameMovesDeps {
 
 /**
  * PURE classifier for the `renamesMoves` produced by `computePushActions`
- * (push #3, DESIGN.md §4, §7). Resolves each `{pageId, oldPath, newPath}` into the
+ * (push #3, SPEC §5/§6/§8). Resolves each `{pageId, oldPath, newPath}` into the
  * Docmost op(s) it needs, with NO IO (both resolvers are injected).
  *
- * DESIGN.md §4 — the file PATH is the source of truth for tree position, NOT the
+ * SPEC §5 — the file PATH is the source of truth for tree position, NOT the
  * (possibly stale) `meta.parentPageId`. So the NEW parent is resolved from
  * `newPath`'s enclosing folder, and the OLD parent from `oldPath`'s enclosing
  * folder, via `deps.resolveParentPageId`. The title comes from the meta.
@@ -216,7 +206,7 @@ export interface PushActions {
   /**
    * Diff rows that could NOT be classified into an action, with a reason — e.g.
    * a deleted file whose PRE-IMAGE meta carried no recoverable pageId (the
-   * untracked-file guard, DESIGN.md §7: only files that were tracked with a pageId
+   * untracked-file guard, SPEC §8: only files that were tracked with a pageId
    * are deleted in Docmost). Carried so the caller can log them.
    */
   skipped: { path: string; status: DiffEntry["status"]; reason: string }[];
@@ -228,19 +218,18 @@ export interface PushActions {
  *     A/M/R, where the file still exists.
  *   - `prev`: the PRE-IMAGE at the push's diff base (`git show <base>:<path>`)
  *     — used for D, where the file is gone from `main` but its pageId must be
- *     recovered from the version Docmost last knew (DESIGN.md §7).
+ *     recovered from the version Docmost last knew (SPEC §6/§8).
  */
 export type MetaSide = "current" | "prev";
 
 /** Input to the PURE planner. `metaAt` is injected (no IO inside the planner). */
 export interface PushActionsInput {
-  /** Diff rows of `main` vs merge-base(`docmost`, `main`) (DESIGN.md §7). */
+  /** Diff rows of `main` vs the last export (SPEC §6 step 2). */
   changes: DiffEntry[];
   /**
    * Resolve a file's synthetic native meta at a given side, or `null` if the file is
-   * absent there / has no parseable meta. PURE injection: the real `main` reads
-   * the working tree (current) or `git show <base>:<path>` (prev); tests
-   * pass a plain lookup.
+   * absent there / has no parseable meta. PURE injection: `runPush` reads
+   * `main` (current) or the last export (prev); tests pass a plain lookup.
    */
   metaAt: (path: string, side: MetaSide) => DocmostMdMeta | null;
   /**
@@ -265,7 +254,7 @@ export interface PushActionsInput {
  * body `updates` entry for the NEW path, so a body edit riding along in the SAME
  * diff is not lost. `importPageMarkdown` targets by pageId and is a near-no-op for
  * a pure relocation. The merge BASE is taken from the OLD path (`basePath`): the
- * file lives at its NEW `path` in the working tree, but at the base it was at
+ * file lives at its NEW `path` on `main`, but at the base it was at
  * `oldPath`, so the 3-way base must be looked up THERE — otherwise it resolves to
  * null and the merge degrades to a 2-way, clobbering a concurrent Docmost-side
  * edit. A PURE relocation is then a no-op that PRESERVES the live page. Shared by
@@ -282,7 +271,7 @@ function emitMoveWithBody(
 }
 
 /**
- * PURE push planner (DESIGN.md §4, §7). Classifies each diff row into a Docmost
+ * PURE push planner (SPEC §4/§6/§8). Classifies each diff row into a Docmost
  * action by `pageId` identity, with NO IO (the `metaAt` resolver is injected).
  *
  * Classification rules:
@@ -293,13 +282,13 @@ function emitMoveWithBody(
  *         brand-new local file; the page does not exist in Docmost yet).
  *       - current meta has NO pageId and NO usable spaceId -> SKIP with reason
  *         `create-without-spaceId`: Docmost `create_page` REQUIRES a spaceId
- *         (DESIGN.md §4), and a new local file may carry only partial human meta. We
- *         refuse to create rather than guess a space (DESIGN.md §7).
+ *         (§16), and a new local file may carry only partial human meta. We
+ *         refuse to create rather than guess a space (SPEC §8 guard spirit).
  *   - `M` (modified): current meta has a pageId -> UPDATE content. (If a modified
  *       file somehow lost its pageId it is skipped — there is nothing to target.)
  *   - `D` (deleted): recover the pageId from the PRE-IMAGE meta (`metaAt(path,
  *       'prev')`) -> DELETE. If no pageId can be recovered, SKIP with a reason
- *       (untracked-file guard, DESIGN.md §7: never delete an untracked page).
+ *       (untracked-file guard, SPEC §8: never delete an untracked page).
  *   - `R` (renamed/moved): same pageId (from current meta), path changed ->
  *       RENAME/MOVE. Resolution of move-vs-rename + the new parentPageId is
  *       DEFERRED to the next increment; here we only record oldPath/newPath/
@@ -387,14 +376,14 @@ export function computePushActions(input: PushActionsInput): PushActions {
           // exists in Docmost, so push content as an UPDATE — never a duplicate.
           actions.updates.push({ pageId, path: change.path });
         } else if (meta?.spaceId) {
-          // Brand-new local file with a target space -> create the page, then
-          // write the assigned pageId back into its meta (in `applyPushActions`).
+          // Brand-new local file with a target space -> create the page; the
+          // export then writes the file again with the assigned id.
           // `meta.spaceId` is truthy here, so empty-string is also rejected.
           actions.creates.push({ path: change.path });
         } else {
-          // A create needs a spaceId (Docmost `create_page` requires it). A
+          // A create needs a spaceId (Docmost `create_page` requires it, §16). A
           // new file with partial meta and no usable spaceId is SKIPPED rather
-          // than created into a guessed space (DESIGN.md §7).
+          // than created into a guessed space (SPEC §8 guard spirit).
           actions.skipped.push({
             path: change.path,
             status: "A",
@@ -425,9 +414,9 @@ export function computePushActions(input: PushActionsInput): PushActions {
           // (the base version at the same path, which still carried the id),
           // mirroring the `D` branch. Without this, an edit that also dropped the
           // frontmatter (e.g. a tool that rewrote the whole file) is silently
-          // skipped and then reverted by the next Docmost->git push — the edit is
-          // lost (bug C10-D1). The pushed-back re-serialize restores the frontmatter
-          // next cycle, so the file self-heals. If the pre-image ALSO lacked an id
+          // skipped and then reverted by the next export — the edit is lost (bug
+          // C10-D1). The export writes the file back with its frontmatter, so the
+          // file self-heals. If the pre-image ALSO lacked an id
           // (a page never tracked), there is genuinely nothing to update -> skip.
           const prevPageId = metaAt(change.path, "prev")?.pageId;
           if (prevPageId && !ghostMove.has(prevPageId)) {
@@ -444,7 +433,7 @@ export function computePushActions(input: PushActionsInput): PushActions {
       }
       case "D": {
         // The file is gone from `main`; recover its pageId from the PRE-IMAGE
-        // (the version last pushed to Docmost) so we delete the RIGHT page.
+        // (the version at the last export) so we delete the RIGHT page.
         const prevMeta = metaAt(change.path, "prev");
         const pageId = prevMeta?.pageId;
         if (pageId && ghostMove.has(pageId)) {
@@ -469,7 +458,7 @@ export function computePushActions(input: PushActionsInput): PushActions {
         } else if (pageId) {
           actions.deletes.push({ pageId, path: change.path });
         } else {
-          // Untracked-file guard (DESIGN.md §7): a file with no recoverable pageId was
+          // Untracked-file guard (SPEC §8): a file with no recoverable pageId was
           // never a Docmost page — do NOT translate its removal into a delete.
           actions.skipped.push({
             path: change.path,
@@ -517,20 +506,17 @@ export function computePushActions(input: PushActionsInput): PushActions {
   return actions;
 }
 
-// --- thin apply (create/update/delete) ---------------------------------------
+// --- thin apply (create/update/delete/move/rename) ---------------------------
 
 /**
  * Injectable IO for `applyPushActions`. In production these are wired to the live
- * client (the native GitmostDataSource), `node:fs/promises`, and the vault git
- * wrapper — `applyPushActions` runs LIVE via runPush -> runCycle -> the
- * orchestrator's driveCycle. Tests substitute FAKES through the same seam.
+ * client (the native GitmostDataSource) and the vault git wrapper —
+ * `applyPushActions` runs LIVE via runPush -> runCycle -> the orchestrator's
+ * driveCycle. Tests substitute FAKES through the same seam.
  *   - `client`: the create/update/delete/move/rename subset of `GitSyncClient`,
- *     plus `getPageJson` to tell git-sync's own cut-off create (retry-adopt).
- *   - `readFile`/`writeFile`: read a changed file's body / write a file back
- *     (by vault-relative path; the applier does not resolve absolute paths so
- *     fakes stay trivial).
- *   - `git`: `fastForwardBranch` (advance the `docmost` mirror after a clean
- *     push, the loop-close — DESIGN.md §7).
+ *     plus `getPageJson` for the retry-adopt check.
+ *   - `readFile`: read a changed file at the `main` commit the diff ends at (by
+ *     vault-relative path; rejects when the file is not there).
  */
 export interface ApplyPushDeps {
   client: Pick<
@@ -545,8 +531,6 @@ export interface ApplyPushDeps {
   >;
   /** Read a changed file's full text by its vault-relative path. */
   readFile: (path: string) => Promise<string>;
-  /** Write a file's full text by its vault-relative path. */
-  writeFile: (path: string, text: string) => Promise<void>;
   /**
    * The Docmost spaceId this vault mirrors. A CREATE targets this space (the
    * native file carries no spaceId — every file in the vault belongs to it), and
@@ -554,78 +538,41 @@ export interface ApplyPushDeps {
    */
   spaceId: string;
   /**
-   * `fastForwardBranch` advances the `docmost` mirror after a clean push.
    * `showFileAtRef` reads a file's text at `baseRef` (the 3-way merge base of an
    * update, and the PREVIOUS parent folder's `.md` / meta for the move/rename
-   * classifier — the path is the truth for tree position, DESIGN.md §4).
-   * `commitAddingPath` finds where git created or moved a file whose folder
-   * note is gone (its parent, see `formerFolderPageId`).
+   * classifier, SPEC §5 path-as-truth). `commitAddingPath` finds where git
+   * created or moved a file whose folder note is gone (its parent, see
+   * `formerFolderPageId`). `pageIdsAtRef` lists the pages the base holds (the
+   * retry-adopt check).
    */
-  git: Pick<
-    VaultGit,
-    "fastForwardBranch" | "showFileAtRef" | "commitAddingPath"
-  >;
+  git: Pick<VaultGit, "showFileAtRef" | "commitAddingPath" | "pageIdsAtRef">;
   /**
-   * The commit the push diff was computed from (runPush: merge-base of `docmost`
-   * and `main` — what Docmost already holds). Every pre-image read comes from it,
-   * so the planner and the applier agree on "before".
+   * The commit the push diff was computed from (the last export — what Docmost
+   * held when it was exported). Every pre-image read comes from it, so the
+   * planner and the applier agree on "before".
    */
   baseRef: string;
-  /**
-   * Per-space PUSH policy for a page body that still carries unresolved git
-   * conflict markers (DESIGN.md §7). When TRUE, the marker lines are stripped and both
-   * sides' content is pushed (the legacy `stripConflictMarkers` behavior). When
-   * FALSE/undefined (the SAFE DEFAULT), the conflicted page is NOT pushed: it is
-   * recorded as a per-page FAILURE (so its paths stay out of the advanced base
-   * and the page is retried) and the user resolves the git conflict first.
-   */
-  autoMergeConflicts?: boolean;
+  /** Warning channel (a create that could not be compared for adoption). */
+  warn?: (line: string) => void;
   /**
    * The cycle's AbortSignal (lost lock, deadline). Checked before every page
    * operation and handed to every conversion: aborted, the apply stops with a
-   * `CycleAbortedError` and the next cycle's recovery repairs the vault.
+   * `CycleAbortedError`.
    */
   signal?: AbortSignal;
 }
 
-/**
- * Reason recorded on a per-page push FAILURE when a page is skipped because its
- * body still carries unresolved git conflict markers and `autoMergeConflicts` is
- * off (the SAFE default). Recorded as a failure (not a soft skip) on purpose: the
- * page is never marked as pushed and is retried until the human resolves the
- * conflict in git (DESIGN.md §7).
- */
-export const CONFLICT_MARKERS_FAILURE_REASON =
-  "unresolved conflict markers — resolve in git first";
-
-/** A file whose meta was rewritten with a freshly-assigned pageId (post-create). */
-export interface WrittenBackPage {
+/** A file a create gave a page (a fresh page or an adopted one). */
+export interface CreatedPage {
   path: string;
   pageId: string;
 }
 
 /**
- * The per-page push record consulted by a FUTURE poll-suppression (DESIGN.md §11): a
- * pulled page whose body hash + `updatedAt` match a record here is OUR OWN write
- * and must not be re-pulled. PRODUCED here; CONSUMED on the pull side later.
- */
-export interface PushedPageRecord {
-  /** The Docmost pageId that was updated/created. */
-  pageId: string;
-  /**
-   * The `updatedAt` from the create/update client result, when the result
-   * exposed one. Absent when the (fake) client did not return it.
-   */
-  updatedAt?: string;
-  /** Stable hash of the markdown BODY that was pushed (DESIGN.md §11). */
-  bodyHash: string;
-}
-
-/**
- * One page whose operation FAILED during apply (DESIGN.md §8). The bad
- * page is isolated — recorded here — and the rest of the batch still runs. Its
- * paths stay at their `docmost` version in the advanced base
- * (`recordPushedPages`), so the next push retries this page alone.
+ * One page whose operation FAILED during apply (SPEC §12 resumability). The bad
+ * page is isolated — recorded here — and the rest of the batch still runs. The
+ * cycle keeps its paths at their last-export version in the recorded base, so
+ * the next cycle retries this page alone.
  */
 export interface PushFailure {
   kind: "update" | "create" | "delete" | "move" | "rename";
@@ -640,7 +587,7 @@ export interface PushFailure {
 }
 
 /**
- * A rename/move action that resolved to a NO-OP (push #3, DESIGN.md §4): a purely
+ * A rename/move action that resolved to a NO-OP (push #3, SPEC §5): a purely
  * LOCAL file-path rename whose resolved parent AND title are both unchanged. The
  * page identity is its pageId and the path is COSMETIC/local-only, so Docmost is
  * NOT called — the skip is recorded here (with the reason) for logging.
@@ -653,201 +600,89 @@ export interface PushNoop {
   reason: "path-only-rename";
 }
 
-/** Structured outcome of `applyPushActions` (counts + write-backs + noops). */
+/** Structured outcome of `applyPushActions` (counts + created pages + noops). */
 export interface ApplyPushResult {
   created: number;
   updated: number;
   deleted: number;
-  /** Pages reparented in Docmost via `move_page` (push #3, DESIGN.md §4). */
+  /** Pages reparented in Docmost via `move_page` (push #3, SPEC §5/§16). */
   moved: number;
-  /** Pages retitled in Docmost via `rename_page` (push #3, DESIGN.md §4). */
+  /** Pages retitled in Docmost via `rename_page` (push #3, SPEC §5/§6). */
   renamed: number;
-  /**
-   * Files whose `gitmost_id` frontmatter was written with the pageId Docmost assigned on
-   * create — these now need a FOLLOW-UP commit (the meta on disk changed). The
-   * commit itself is the caller's job (NEXT increment); recorded here so it is
-   * not lost.
-   */
-  writtenBack: WrittenBackPage[];
-  /**
-   * Per-page push records (pageId + optional `updatedAt` + body hash) for every
-   * page successfully updated/created — the loop-guard data (DESIGN.md §11) a future
-   * poll-suppression (pull side) will consult so it does not re-pull our own
-   * write. Deletes are not included (no body was pushed).
-   */
-  pushed: PushedPageRecord[];
-  /**
-   * Pages whose operation threw — isolated and recorded, the batch continued
-   * (DESIGN.md §7). Non-empty here means the applier advanced no ref: `runPush`
-   * records per page what reached Docmost (`recordPushedPages`).
-   */
+  /** The file -> page of every create; the export writes each one's id. */
+  createdPages: CreatedPage[];
+  /** Pages whose operation threw — isolated and recorded, the batch continued. */
   failures: PushFailure[];
   /**
    * Rename/move actions that resolved to a NO-OP — a purely LOCAL file-path
-   * rename (same parent, same title). NO Docmost call was made for these
-   * (DESIGN.md §4: the page is its pageId, the path is local-only). Recorded for logging.
+   * rename (same parent, same title). NO Docmost call was made for these (SPEC
+   * §5: the page is its pageId, the path is local-only). Recorded for logging.
    */
   noops: PushNoop[];
   /** Diff rows the planner could not classify (carried through for logging). */
   skipped: PushActions["skipped"];
-  /**
-   * True when the push was CLEAN — every action reached Docmost (no failures)
-   * and a `pushedCommit` was given — so the `docmost` mirror was advanced to it
-   * (see `docmostFastForward`). A push with failures is recorded per page by
-   * `runPush` instead.
-   */
-  clean: boolean;
-  /**
-   * Result of fast-forwarding the `docmost` mirror branch after a CLEAN push
-   * (the loop-close, DESIGN.md §7). `null` when no advance was attempted (no
-   * `pushedCommit`, or there were failures). `{ ok:false, reason }` when a
-   * non-fast-forward was REFUSED (divergent `docmost` history is never clobbered).
-   */
-  docmostFastForward: { ok: boolean; reason?: string } | null;
 }
 
 /**
- * THIN IO applier for the COMMON push cases (create/update/delete). Runs LIVE in
- * production (via runPush -> runCycle -> orchestrator); tests drive it with FAKES.
+ * THIN IO applier. Runs LIVE in production (via runPush -> runCycle ->
+ * orchestrator); tests drive it with FAKES.
  *
- *   - UPDATE: read the file body, then `client.importPageMarkdown(pageId, body)`.
- *     This is the collab/Yjs write path — NEVER a raw jsonb overwrite.
- *   - CREATE: derive title/spaceId/parentPageId from the file's current meta,
- *     `client.createPage(...)`, take the assigned pageId from the result, and
- *     write it BACK as the file's `gitmost_id` frontmatter (re-serialized via
- *     `serializePageFile`, body preserved) so the file becomes
- *     tracked. The write-back is recorded in `writtenBack`; `runPush` commits it.
- *   - DELETE: `client.deletePage(pageId)` — soft-delete to Trash.
- *   - RENAME/MOVE: classify each `renamesMoves` entry with
- *     `classifyRenameMoves` (resolvers read the parent FOLDER's `.md` for the
- *     parent pageId — path-as-truth — and the meta for the title), then:
- *       - `move`   -> `client.movePage(pageId, parentPageId, position?)` (reparent;
- *         `position` is UNDEFINED for now — the client supplies a default),
- *       - `rename` -> `client.renamePage(pageId, title)` (title-only),
- *       - BOTH     -> move (reparent) THEN rename (title), in that order,
- *       - `noop`   -> NO client call; recorded in `noops` (a cosmetic local-only
- *         file-path rename: the page is its pageId, the path is local).
+ *   - UPDATE: `client.importPageMarkdown(pageId, body, baseBody)` — the
+ *     collab/Yjs block 3-way merge (SPEC §2/§15.6), never a raw overwrite; the
+ *     base is the file at `baseRef` (the old path for a rename-derived update).
+ *   - CREATE: title from the filename, parent from the enclosing folder's
+ *     folder-note, space from the run; `client.createPage(...)`. The assigned
+ *     id is reported in `createdPages` (the export writes it into the file).
+ *   - DELETE: `client.deletePage(pageId)` — soft-delete to Trash (SPEC §8).
+ *   - RENAME/MOVE (push #3, SPEC §5/§6/§16): classify each `renamesMoves` entry
+ *     with `classifyRenameMoves`, then `move` -> `client.movePage`, `rename` ->
+ *     `client.renamePage` (both: move first), `noop` -> no call, recorded.
  *
- * FAIL-SAFE / per-page isolation (DESIGN.md §7). Each page's operation
+ * FAIL-SAFE / per-page isolation (SPEC §12 resumability). Each page's operation
  * is wrapped in its own try/catch: a single failing page is recorded in
- * `failures[]` (with its kind + pageId/path(s) + error) and the batch CONTINUES —
- * one bad page must never block the rest. This applier advances `docmost` only
- * when `failures.length === 0`. A re-applied page is NOT a harmless no-op — the
- * pull moves the merge base every cycle, so a page re-sent from an old base
- * reverts Docmost edits made since and duplicates created pages — so after a
- * PARTIAL push `runPush` records per page what reached Docmost
- * (`recordPushedPages`) and only the failed pages are retried.
+ * `failures[]` (with its kind + pageId/path(s) + error) and the batch CONTINUES.
  *
- * LOOP-CLOSE (DESIGN.md §7). After a fully-successful push, when a
- * `pushedCommit` is supplied, the `docmost` mirror branch is fast-forwarded to
- * it via `git.fastForwardBranch('docmost', pushedCommit)` — so the mirror
- * reflects what Docmost now contains and the NEXT pull diffs EMPTY for these
- * pages (it does not re-pull our own write). The ff is REFUSED (not forced) if
- * `docmost` is not an ancestor of the pushed commit; the result is surfaced in
- * `docmostFastForward`, and `clean` says the push was clean. On ANY failure
- * this applier does not move `docmost`.
- *
- * LOOP-GUARD DATA (DESIGN.md §11). For every page successfully updated/created
- * the result carries a `pushed` record `{ pageId, updatedAt?, bodyHash }` — the
- * body hash of what was pushed plus the write's `updatedAt` (when the client
- * returned one). Produced here; nothing consumes it yet.
- *
- * CANCELLATION (DESIGN.md §9). `deps.signal` is checked before every page
- * operation; an abort throws a `CycleAbortedError` out of the batch (it is not
- * a per-page failure), leaving the pages applied so far and their write-backs
- * for the next cycle's recovery.
- *
- * @param pushedCommit The `main` commit just reflected into Docmost (SHA or
- *   commit-ish). When omitted, `docmost` is not advanced (e.g. a dry plan).
+ * CANCELLATION. `deps.signal` is checked before every page operation; an abort
+ * throws a `CycleAbortedError` out of the batch (it is not a per-page failure).
+ * No ref has moved yet, so the next cycle applies the same changes again.
  */
 export async function applyPushActions(
   deps: ApplyPushDeps,
   actions: PushActions,
-  pushedCommit?: string,
 ): Promise<ApplyPushResult> {
-  const { client, git } = deps;
+  const { client } = deps;
 
   let created = 0;
   let updated = 0;
   let deleted = 0;
   let moved = 0;
   let renamed = 0;
-  const writtenBack: WrittenBackPage[] = [];
-  const pushed: PushedPageRecord[] = [];
+  const createdPages: CreatedPage[] = [];
   const failures: PushFailure[] = [];
   const noops: PushNoop[] = [];
 
-  // 1. UPDATES — collab/Yjs write path, never a raw overwrite.
+  // 1. UPDATES — collab/Yjs write path (SPEC §2/§15.6), never a raw overwrite.
   //    Each update is isolated: a thrown page is recorded and the batch goes on.
   for (const u of actions.updates) {
     throwIfAborted(deps.signal, `before pushing the update of ${u.path}`);
     try {
       // Push the CLEAN body only (no `gitmost_id` frontmatter): the frontmatter
-      // is engine metadata, never page content. The server converts the markdown
-      // it receives verbatim, so stripping here keeps the id out of Docmost.
-      const rawBody = parsePageFile(await deps.readFile(u.path)).body;
-      // Git conflict markers must NEVER reach Docmost (red-team #13).
-      // Per-space policy (`autoMergeConflicts`): when OFF (the SAFE default), a
-      // still-conflicted body is NOT pushed — record a failure so the refs are
-      // held and the page is retried once the human resolves the conflict in git.
-      // When ON, strip the marker lines and push both sides' content.
-      if (!deps.autoMergeConflicts && hasConflictMarkers(rawBody)) {
-        failures.push({
-          kind: "update",
-          pageId: u.pageId,
-          path: u.path,
-          ...(u.basePath !== undefined ? { oldPath: u.basePath } : {}),
-          error: CONFLICT_MARKERS_FAILURE_REASON,
-        });
-        continue;
-      }
-      const conflicted = hasConflictMarkers(rawBody);
-      const body = stripConflictMarkers(rawBody);
-      // The version Docmost already holds (pre-image at `baseRef`) is the common
-      // ancestor for a 3-way merge against the live page, so concurrent human
-      // edits are not clobbered (review #5). Null when the file is new there. Its
-      // body is stripped the SAME way (frontmatter AND conflict markers) so the
-      // merge compares clean body-to-body: a base that itself carried markers
-      // (from a prior conflict commit) must never reintroduce marker syntax or a
-      // stale diff3 base region into the 3-way merge.
-      // Resolve the merge base from `basePath` when set (the OLD path for a
-      // rename-derived update), falling back to `u.path` for a plain `M` update —
-      // identical behavior to before for non-renames. The BODY is still read from
-      // `u.path` (the new working-tree location); only the BASE lookup changes.
+      // is engine metadata, never page content.
+      const body = parsePageFile(await deps.readFile(u.path)).body;
+      // The version Docmost held at the last export is the common ancestor of
+      // the block 3-way merge against the live page, so concurrent human edits
+      // are not clobbered (review #5). Null when the file is new there. Resolved
+      // from `basePath` (the OLD path of a rename-derived update) when set.
       const baseFull = await deps.git.showFileAtRef(
         deps.baseRef,
         u.basePath ?? u.path,
       );
-      const baseMarkdown =
-        baseFull === null
-          ? null
-          : stripConflictMarkers(parsePageFile(baseFull).body);
-      const result = await client.importPageMarkdown(
+      await client.importPageMarkdown(
         u.pageId,
         body,
-        baseMarkdown,
+        baseFull === null ? null : parsePageFile(baseFull).body,
       );
       updated++;
-      // CONFLICT VAULT-CLEAN (autoMergeConflicts ON, marker leak). On ON a
-      // conflicted page is auto-merged INTO Docmost (the clean `body` above),
-      // but the file on `main` still carries the raw `<<<<<<<`/`>>>>>>>` markers
-      // a human committed. Left as-is they would (1) stay in the PUBLISHED vault
-      // forever (external clones see raw markers) and (2) re-conflict every
-      // cycle. So write the CLEAN body back to the vault file (`writeBack`, the
-      // form recovery recognizes) and record it in `writtenBack` — `runPush`
-      // step 7a commits it on `main` and re-advances `docmost`, so the published
-      // vault converges to the merged content. Only conflicted files are
-      // rewritten (no churn for clean updates).
-      if (conflicted) {
-        await deps.writeFile(u.path, writeBack(u.pageId, rawBody));
-        writtenBack.push({ path: u.path, pageId: u.pageId });
-      }
-      // Loop-guard data: hash the BODY we pushed + capture `updatedAt`.
-      pushed.push({
-        pageId: u.pageId,
-        ...extractUpdatedAt(result),
-        bodyHash: bodyHash(body),
-      });
     } catch (err: unknown) {
       failures.push({
         kind: "update",
@@ -859,22 +694,16 @@ export async function applyPushActions(
     }
   }
 
-  // 2. CREATES — create the page, then write the assigned pageId back to meta so
-  //    the file becomes tracked. Isolated per page like updates.
+  // 2. CREATES — create the page; the export writes its id into the file.
+  //    Isolated per page like updates.
   //
-  // RETRY-ADOPT (#1 idempotency): create is NOT atomic with the pageId write-back
-  // (createPage runs, then writeFile, then the write-back commit at runPush 7a). If
-  // the write-back dies in between, the file on disk still has no pageId and the
-  // next cycle re-classifies it as a CREATE -> a DUPLICATE page would be created.
-  // The pull takes such a page over when its export lands at git's path (an
-  // add/add, see pull.ts); a page whose export lands elsewhere (its title
-  // sanitizes to another file name) is found here instead: a (parentPageId|root,
-  // title) -> existing pageId map built ONCE from the LIVE Docmost tree (only when
-  // there is at least one create). A match is ADOPTED only when it is provably
-  // git-sync's own cut-off create of this file (`isOwnUnfinishedCreate`: last
-  // written by git-sync, nobody edited it since, and empty or already holding
-  // this body) — any other page that merely shares the title is never written
-  // over (GL-4); the file is then created as a page of its own.
+  // RETRY-ADOPT (#1 idempotency): a create is not atomic with the export that
+  // records its id. If a cycle dies in between, the next cycle sees the file as
+  // a create again. A live page with the file's (parentPageId|root, title) that
+  // git-sync itself created since the last export, still empty or holding the
+  // file's body, is that create: it is ADOPTED instead of duplicated. Any other
+  // match — a page a user made meanwhile — keeps its text, and git's file
+  // becomes a new page.
   let liveByParentTitle: Map<string, string> | null = null;
   // A (parentPageId, title) that more than ONE live page shares is AMBIGUOUS:
   // adopting one of them would silently overwrite an arbitrary, possibly-unrelated
@@ -896,6 +725,14 @@ export async function applyPushActions(
       );
     }
     return liveParentIds;
+  };
+  // The pages the last export held, listed on the first adoption candidate.
+  let baseIds: Set<string> | null = null;
+  const getBaseIds = async (): Promise<Set<string>> => {
+    baseIds ??= new Set(
+      (await deps.git.pageIdsAtRef(deps.baseRef)).map((e) => e.id),
+    );
+    return baseIds;
   };
   if (actions.creates.length > 0) {
     const live = await client.listSpaceTree(deps.spaceId);
@@ -920,43 +757,25 @@ export async function applyPushActions(
   // pageId is available to parent it (otherwise it is placed at the space ROOT).
   const orderedCreates = orderCreatesParentFirst(actions.creates);
   // Track pageIds assigned (or adopted) to each create's PATH in THIS batch, so a
-  // child can resolve its freshly-created parent's id without depending on the
-  // on-disk write-back being observable yet (red-team #12).
+  // child can resolve its freshly-created parent's id (red-team #12).
   const createdIdByPath = new Map<string, string>();
   const createPaths = new Set(actions.creates.map((x) => x.path));
   for (const c of orderedCreates) {
     throwIfAborted(deps.signal, `before pushing the create of ${c.path}`);
     try {
-      const text = await deps.readFile(c.path);
-      const rawBody = parsePageFile(text).body;
-      // Conflict markers must never reach Docmost (red-team #13). Honor
-      // the per-space `autoMergeConflicts` policy on the create path too: OFF (the
-      // SAFE default) records a failure (refs held, retried) rather than creating
-      // a page from conflicted content; ON strips the markers and pushes both
-      // sides' content.
-      if (!deps.autoMergeConflicts && hasConflictMarkers(rawBody)) {
-        failures.push({
-          kind: "create",
-          path: c.path,
-          error: CONFLICT_MARKERS_FAILURE_REASON,
-        });
-        continue;
-      }
-      const body = stripConflictMarkers(rawBody);
-      // Derive create args from the PATH (native-Obsidian, DESIGN.md §4): title
-      // from the filename, parent from the enclosing folder's folder-note, space
-      // from the run (the vault's space). `parentPageId: null` -> created at ROOT.
+      const body = parsePageFile(await deps.readFile(c.path)).body;
+      // Derive create args from the PATH (native-Obsidian, SPEC §5): title from
+      // the filename, parent from the enclosing folder's folder-note, space from
+      // the run (the vault's space). `parentPageId: null` -> created at ROOT.
       const title = titleFromPath(c.path);
-      // Resolve the parent from the PATH. Prefer an id assigned to the
-      // parent's folder-note EARLIER in this same batch — a freshly-created parent
-      // whose on-disk write-back may not be observable yet (red-team #12; creates
+      // Resolve the parent from the PATH (SPEC §5). Prefer an id assigned to the
+      // parent's folder-note EARLIER in this same batch (red-team #12; creates
       // are ordered parent-before-child so the parent already ran).
       const parentFile = parentFolderFile(c.path);
       // The parent is a create of this same batch that did not get a page (it
-      // failed or was refused): fail the child too instead of creating it at the
-      // root. Its path then stays out of the recorded base and both creates are
-      // retried in order next cycle — a root page would be recorded as nested
-      // and the next pull would move the file to the root for good.
+      // failed): fail the child too instead of creating it at the root. Both
+      // paths then stay out of the recorded base and both creates are retried
+      // in order next cycle.
       if (
         parentFile !== null &&
         createPaths.has(parentFile) &&
@@ -974,39 +793,20 @@ export async function applyPushActions(
         (await resolveParentPageIdViaTree(deps, c.path, "current")) ??
         (await formerFolderPageId(deps, c.path, getLiveParentIds)) ??
         undefined;
-      // Retry-adopt (#1 idempotency): a prior cycle already created this page in
-      // Docmost but failed to persist the pageId back to the file, so it was
-      // re-seen as a create. Adopt the existing page instead of duplicating it:
-      // write the id back (file becomes tracked) and push the body as an UPDATE
-      // (idempotent — targets by pageId). Do NOT call createPage again. SKIP
-      // adoption when the (parent, title) is AMBIGUOUS — adopting an arbitrary
-      // duplicate-title sibling would silently overwrite it (red-team #6) — and
-      // when the page is not provably git-sync's own cut-off create of this file
-      // (GL-4: an unrelated page that only shares the title).
+      // Retry-adopt (#1 idempotency), see above. SKIP adoption when the (parent,
+      // title) is AMBIGUOUS — adopting an arbitrary duplicate-title sibling
+      // would silently overwrite it (red-team #6).
       const adoptKey = `${parentPageId ?? " root"} ${title}`;
-      const candidateId = ambiguousAdoptKeys.has(adoptKey)
+      const candidate = ambiguousAdoptKeys.has(adoptKey)
         ? undefined
         : liveByParentTitle?.get(adoptKey);
-      const existingId =
-        candidateId !== undefined &&
-        (await isOwnUnfinishedCreate(
-          await client.getPageJson(candidateId),
-          null,
-          body,
-          deps.signal,
-        ))
-          ? candidateId
-          : undefined;
-      if (existingId) {
-        await deps.writeFile(c.path, writeBack(existingId, rawBody));
-        writtenBack.push({ path: c.path, pageId: existingId });
-        createdIdByPath.set(c.path, existingId);
-        const adopted = await client.importPageMarkdown(existingId, body, null);
-        pushed.push({
-          pageId: existingId,
-          ...extractUpdatedAt(adopted),
-          bodyHash: bodyHash(body),
-        });
+      if (
+        candidate !== undefined &&
+        (await isUnfinishedCreate(deps, candidate, c.path, body, getBaseIds))
+      ) {
+        await client.importPageMarkdown(candidate, body, null);
+        createdIdByPath.set(c.path, candidate);
+        createdPages.push({ path: c.path, pageId: candidate });
         created++;
         continue;
       }
@@ -1020,17 +820,8 @@ export async function applyPushActions(
       // pageId is at `result.data.id`.
       const assignedPageId: string | undefined = result?.data?.id;
       if (assignedPageId) {
-        // Write the assigned pageId back as the `gitmost_id` frontmatter, body
-        // preserved — the file becomes engine-tracked.
-        await deps.writeFile(c.path, writeBack(assignedPageId, rawBody));
-        writtenBack.push({ path: c.path, pageId: assignedPageId });
         createdIdByPath.set(c.path, assignedPageId);
-        // Loop-guard data for the created page (hash the pushed BODY).
-        pushed.push({
-          pageId: assignedPageId,
-          ...extractUpdatedAt(result),
-          bodyHash: bodyHash(body),
-        });
+        createdPages.push({ path: c.path, pageId: assignedPageId });
       }
       created++;
     } catch (err: unknown) {
@@ -1041,7 +832,7 @@ export async function applyPushActions(
     }
   }
 
-  // 3. DELETES — soft-delete to Trash, reversible. Isolated per page.
+  // 3. DELETES — soft-delete to Trash (SPEC §8), reversible. Isolated per page.
   for (const d of actions.deletes) {
     throwIfAborted(deps.signal, `before pushing the delete of ${d.path}`);
     try {
@@ -1057,7 +848,7 @@ export async function applyPushActions(
     }
   }
 
-  // 4. RENAME/MOVE. Classify each entry against the
+  // 4. RENAME/MOVE (push #3, SPEC §5/§6/§16). Classify each entry against the
   //    tree-backed resolvers (the NEW parent comes from the new path's enclosing
   //    folder `.md`, the OLD parent from the old path's at the base — PATH is
   //    the truth, not stale `meta.parentPageId`; the title from the meta), then
@@ -1070,7 +861,7 @@ export async function applyPushActions(
     const parentTable = new Map<string, string | null>();
     const metaTable = new Map<string, DocmostMdMeta | null>();
     // A tree read (readFile / git.showFileAtRef) throwing must isolate THAT page
-    // into `failures`, NOT abort the whole batch (resumability). The helpers
+    // into `failures`, NOT abort the whole batch (§12 resumability). The helpers
     // already swallow their own errors, but this per-entry try/catch keeps the
     // batch-isolation invariant holding regardless of future changes to them.
     const prefetchFailed = new Set<string>();
@@ -1117,7 +908,7 @@ export async function applyPushActions(
 
     for (const c of classified) {
       if (c.noop) {
-        // Cosmetic local-only file-path rename — no Docmost op.
+        // Cosmetic local-only file-path rename — no Docmost op (SPEC §5).
         noops.push({
           pageId: c.pageId,
           oldPath: c.oldPath,
@@ -1135,8 +926,8 @@ export async function applyPushActions(
         // Reparent FIRST so the page is in its new tree position, THEN retitle.
         if (c.move) {
           failingKind = "move";
-          // TODO(next): compute a fractional-index position between siblings.
-          // `position` is UNDEFINED here; the client supplies a valid
+          // TODO(next): compute a fractional-index position between siblings
+          // (SPEC §16). `position` is UNDEFINED here; the client supplies a valid
           // default. Pass `parentPageId: null` for a move to the space ROOT.
           await client.movePage(c.pageId, c.move.parentPageId);
           moved++;
@@ -1161,36 +952,73 @@ export async function applyPushActions(
     }
   }
 
-  // 5. On a CLEAN push (no failures) with a pushed commit, close the loop
-  //    (DESIGN.md §7): fast-forward the `docmost` mirror, so Docmost's new
-  //    content is mirrored and the next pull diffs empty. A partial push is
-  //    recorded per page by `runPush`.
-  throwIfAborted(deps.signal, `before advancing '${DOCMOST_BRANCH}'`);
-  const clean = Boolean(pushedCommit) && failures.length === 0;
-  let docmostFastForward: { ok: boolean; reason?: string } | null = null;
-  if (clean) {
-    // Fast-forward the mirror (refused, not forced, on a non-fast-forward — the
-    // caller logs the reason). Surfaced in the result.
-    docmostFastForward = await git.fastForwardBranch(
-      DOCMOST_BRANCH,
-      pushedCommit!,
-    );
-  }
-
   return {
     created,
     updated,
     deleted,
     moved,
     renamed,
-    writtenBack,
-    pushed,
+    createdPages,
     failures,
     noops,
     skipped: actions.skipped,
-    clean,
-    docmostFastForward,
   };
+}
+
+/**
+ * Canonicalize a file's TRAILING whitespace: drop trailing blank /
+ * whitespace-only lines and end with exactly one newline (an empty body becomes
+ * "\n"), the trailing form `serializePageFile` writes.
+ */
+function normalizeTrailingWhitespace(text: string): string {
+  // `trimEnd` strips exactly the regex `\s` set (U+FEFF included) in linear
+  // time; a `/[\s\uFEFF]+$/` replace retries its whitespace run from every
+  // start position, quadratic on a long whitespace run followed by more text.
+  const body = text.trimEnd();
+  return body.length > 0 ? `${body}\n` : "\n";
+}
+
+/**
+ * Whether live page `pageId` is git-sync's own create of the file at `path`,
+ * cut off before the export recorded its id (with or without its body
+ * written): the page is not in the last export, git-sync made its last write,
+ * and it is still empty or already holds the file's body in canonical form.
+ *
+ * Adopting a page writes the file's body into it, so the body check keeps that
+ * from changing anything the page holds: a page that only looks like such a
+ * create (restored from the trash, or every page of a re-made vault) keeps its
+ * own text. A body the converter cannot take is never adopted. The
+ * conversions run on the converter pool and honour `deps.signal`.
+ */
+async function isUnfinishedCreate(
+  deps: Pick<ApplyPushDeps, "client" | "warn" | "signal">,
+  pageId: string,
+  path: string,
+  body: string,
+  baseIds: () => Promise<Set<string>>,
+): Promise<boolean> {
+  if ((await baseIds()).has(pageId)) return false;
+  const live = await deps.client.getPageJson(pageId);
+  if (live.lastUpdatedSource !== "git-sync") return false;
+  try {
+    const pageBody = await stabilizePageBody(live.content, deps.signal);
+    if (pageBody.trim().length === 0) return true;
+    const gitBody = await stabilizePageBody(
+      await markdownToProseMirror(body, undefined, deps.signal),
+      deps.signal,
+    );
+    return (
+      normalizeTrailingWhitespace(gitBody) === normalizeTrailingWhitespace(pageBody)
+    );
+  } catch (err) {
+    // An abort is not "cannot compare": it must not turn into a new page.
+    if (err instanceof CycleAbortedError) throw err;
+    deps.warn?.(
+      `push: could not compare ${path} with page ${pageId}; creating a new ` +
+        `page for it: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+    );
+    return false;
+  }
 }
 
 /** Stringify a thrown value into a stable error message. */
@@ -1199,56 +1027,7 @@ function errMessage(err: unknown): string {
 }
 
 /**
- * The file text the push writes back over a page file whose body was `rawBody`
- * when the push read it: the page's id as its `gitmost_id`, the body without
- * conflict markers. The ONE definition of a write-back — `isCompleteWriteBack`
- * recognizes a finished one by it.
- */
-function writeBack(pageId: string, rawBody: string): string {
-  return serializePageFile(pageId, stripConflictMarkers(rawBody));
-}
-
-/**
- * Whether `work`, a page file left uncommitted by an interrupted push, is a
- * COMPLETE write-back of `head` (its committed text): exactly what `writeBack`
- * makes of it. A write cut off part-way (an empty or truncated file) is not.
- */
-export function isCompleteWriteBack(work: string, head: string): boolean {
-  const id = parsePageFile(work).id;
-  return id !== null && work === writeBack(id, parsePageFile(head).body);
-}
-
-/**
- * Whether a Docmost page is git-sync's own create of a git file whose body is
- * `gitBody`, cut off before the file got the page's id: the page's last write
- * was git-sync's (nobody edited it since) and the page is still empty or
- * already holds git's body as it would export after git-sync wrote it. Taking
- * such a page over writes git's body into it, so the body check keeps a page
- * that only looks like one — restored from the trash, every page of a re-made
- * vault, an unrelated page with the same title — from changing.
- *
- * `pageBody` is the page's export when the caller already has it; otherwise it
- * is made from `page.content`. Conversions run on the pool and honour `signal`;
- * a conversion error rejects.
- */
-export async function isOwnUnfinishedCreate(
-  page: { lastUpdatedSource?: string | null; content: unknown },
-  pageBody: string | null,
-  gitBody: string,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  if (page.lastUpdatedSource !== "git-sync") return false;
-  const exported = pageBody ?? (await stabilizePageBody(page.content, signal));
-  if (exported.trim().length === 0) return true;
-  const gitExport = await stabilizePageBody(
-    await markdownToProseMirror(gitBody, undefined, signal),
-    signal,
-  );
-  return gitExport.trimEnd() === exported.trimEnd();
-}
-
-/**
- * DESIGN.md §4 path-as-truth: the parent FOLDER's `.md` file for a vault-relative
+ * SPEC §5 path-as-truth: the parent FOLDER's `.md` file for a vault-relative
  * (forward-slash) path. `buildVaultLayout` puts a page with children at
  * `<...>/Title.md` and nests its children under `<...>/Title/`, so for
  * `newPath = <dir>/Child.md` the parent page's file is `<dir>.md` (the enclosing
@@ -1316,104 +1095,6 @@ export function isPageFile(path: string): boolean {
   return !path.split("/").some((seg) => seg.startsWith("."));
 }
 
-/**
- * Git conflict-marker scan + strip (DESIGN.md §7 — conflict markers must NEVER reach
- * Docmost). Only a REAL conflict block counts, the shape git writes: a
- * `<<<<<<< <label>` line, optionally a diff3 `||||||| <label>` base section, a
- * `=======` line, then a `>>>>>>> <label>` line — in that order, each at a line
- * start, outside fenced code blocks. Lines that merely start with `<<<<<<<`,
- * `=======` or `>>>>>>>` (a page quoting a conflict in prose, a setext heading
- * underline) are ordinary text: flagging them used to hold such a page back
- * forever (autoMergeConflicts off) or strip its legitimate lines (on). Stripping
- * removes each real block's marker lines while both sides' content is kept (no
- * data loss: the conflict is visible and fixable in Docmost).
- *
- * `diff3`/`zdiff3` style: such a block adds a `|||||||` base section (the
- * `|||||||` line + the merge-BASE content, up to `=======`). `ensureRepo` pins
- * `merge.conflictStyle=merge` so the engine never produces it, but a vault that
- * predates the pin — or content arriving via an external push that a human
- * committed in diff3 style — could still carry it. The strip DROPS that base
- * region: the base text is neither side's current content, so keeping it would
- * inject obsolete lines.
- */
-const CONFLICT_BEGIN_LINE_RE = /^<{7} /;
-const CONFLICT_BASE_LINE_RE = /^\|{7} /;
-const CONFLICT_SEP_LINE_RE = /^={7}\r?$/;
-const CONFLICT_END_LINE_RE = /^>{7} /;
-
-// A code-fence open/close line (``` or ~~~), matching markdown-to-prosemirror's
-// CODE_FENCE_RE. Used to make conflict-marker detection fence-aware.
-const CONFLICT_CODE_FENCE_RE = /^(\s*)(`{3,}|~{3,})/;
-
-/**
- * Indices of the lines that belong to a real conflict block's syntax: its
- * marker lines and its diff3 base region. Fence-aware (review #9): a page
- * documenting git (a ```-fenced block that literally contains a conflict) is not
- * a conflict, so everything inside a fence is inert.
- */
-function conflictSyntaxLines(lines: string[]): Set<number> {
-  const syntax = new Set<number>();
-  let inFence = false;
-  let fenceMarker = "";
-  // The open candidate block: its begin, base and separator line indices.
-  let begin = -1;
-  let base = -1;
-  let sep = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const fence = line.match(CONFLICT_CODE_FENCE_RE);
-    if (inFence) {
-      // Close on a fence line of the same marker char, length >= the opener.
-      if (
-        fence &&
-        fence[2][0] === fenceMarker[0] &&
-        fence[2].length >= fenceMarker.length
-      ) {
-        inFence = false;
-        fenceMarker = "";
-      }
-      continue;
-    }
-    if (fence) {
-      inFence = true;
-      fenceMarker = fence[2];
-      continue;
-    }
-    if (CONFLICT_BEGIN_LINE_RE.test(line)) {
-      begin = i;
-      base = -1;
-      sep = -1;
-    } else if (begin < 0) {
-      continue;
-    } else if (sep < 0 && base < 0 && CONFLICT_BASE_LINE_RE.test(line)) {
-      base = i;
-    } else if (sep < 0 && CONFLICT_SEP_LINE_RE.test(line)) {
-      sep = i;
-    } else if (CONFLICT_END_LINE_RE.test(line)) {
-      if (sep >= 0) {
-        syntax.add(begin);
-        for (let j = base; j >= 0 && j < sep; j++) syntax.add(j);
-        syntax.add(sep);
-        syntax.add(i);
-      }
-      // An end without a separator closes no real block either.
-      begin = -1;
-    }
-  }
-  return syntax;
-}
-
-export function hasConflictMarkers(body: string): boolean {
-  return conflictSyntaxLines(body.split("\n")).size > 0;
-}
-
-function stripConflictMarkers(body: string): string {
-  const lines = body.split("\n");
-  const syntax = conflictSyntaxLines(lines);
-  if (syntax.size === 0) return body;
-  return lines.filter((_, i) => !syntax.has(i)).join("\n");
-}
-
 /** The last path segment of a forward-slash path (the folder/file base name). */
 function baseSegment(path: string): string {
   const slash = path.lastIndexOf("/");
@@ -1452,7 +1133,7 @@ function stripDisambiguationSuffix(title: string): string {
  * NATIVE format: `pageId` from the `gitmost_id` frontmatter, `title` from the
  * filename, `spaceId` from the run (the vault's space — every file belongs to
  * it). `parentPageId` is intentionally absent: tree position is resolved from the
- * PATH (`resolveParentPageId`), never from a stored field (DESIGN.md §4).
+ * PATH (`resolveParentPageId`), never from a stored field (SPEC §5).
  */
 function nativeMeta(
   text: string,
@@ -1467,14 +1148,14 @@ function nativeMeta(
 
 /**
  * Build the `resolveParentPageId(path, side)` resolver `classifyRenameMoves`
- * needs, reading the PARENT FOLDER's `.md` (DESIGN.md §4 path-as-truth):
- *   - `current` -> `deps.readFile(<dir>.md)` (the live working tree),
+ * needs, reading the PARENT FOLDER's `.md` (SPEC §5 path-as-truth):
+ *   - `current` -> `deps.readFile(<dir>.md)` (`main`),
  *   - `prev`    -> `git.showFileAtRef(deps.baseRef, <dir>.md)` (the pre-image
  *     the push diff was computed from),
  * then read its `gitmost_id` frontmatter and return that page's pageId. A root-level path
  * (no enclosing folder), a missing/unreadable parent file, or a parent file with
  * no parseable pageId all resolve to `null` (parent is ROOT / unknown ->
- * `parentPageId: null`, i.e. at the root).
+ * `parentPageId: null`, SPEC §16 "parentPageId: null -> to root").
  *
  * The IO is async, so this returns an ASYNC resolver; the call sites prefetch the
  * parent pageIds (the classifier itself stays pure/sync over a plain table).
@@ -1492,8 +1173,9 @@ async function resolveParentPageIdViaTree(
       side === "current"
         ? await deps.readFile(parentFile)
         : await deps.git.showFileAtRef(deps.baseRef, parentFile);
-  } catch {
-    // Parent folder file missing/unreadable at that side -> treat as ROOT.
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
+    // Parent folder file missing at that side -> treat as ROOT.
     return null;
   }
   if (text === null) return null; // showFileAtRef returns null when absent.
@@ -1504,9 +1186,9 @@ async function resolveParentPageIdViaTree(
 
 /**
  * The parent of a file git created or moved into a folder whose folder note is
- * gone from the working tree: the page that held that folder note when git put
+ * gone from `main`: the page that held that folder note when git put
  * the file at `path`. Docmost renamed or moved that folder page meanwhile and
- * the pull moved its note away, so the path alone no longer names it. `null`
+ * an export moved its note away, so the path alone no longer names it. `null`
  * when the note is still there, the folder had no note then, or that page is
  * not in `liveIds()`.
  */
@@ -1520,7 +1202,8 @@ async function formerFolderPageId(
   try {
     await deps.readFile(parentFile);
     return null;
-  } catch {
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
     // The folder note is gone: read it where git added the file.
   }
   const added = await deps.git.commitAddingPath(DEFAULT_BRANCH, path);
@@ -1533,7 +1216,7 @@ async function formerFolderPageId(
 /**
  * Resolve the synthetic native meta at a side for the rename/move classifier (the
  * title — derived from the path — comes from here). Mirrors
- * `resolveParentPageIdViaTree`'s IO sides: `current` reads the working tree,
+ * `resolveParentPageIdViaTree`'s IO sides: `current` reads `main`,
  * `prev` reads `deps.baseRef`. Returns `null` only when the file is
  * missing/unreadable at that side (a real absence the classifier must see).
  */
@@ -1549,128 +1232,29 @@ async function metaAtViaTree(
       side === "current"
         ? await deps.readFile(path)
         : await deps.git.showFileAtRef(deps.baseRef, path);
-  } catch {
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
     return null;
   }
   if (text === null) return null;
   return nativeMeta(text, path, spaceId);
 }
 
-/**
- * Pull an `updatedAt` out of a create/update client result, if present. The
- * shape is `{ data: { updatedAt? }, ... }` (createPage) or a flatter object;
- * absent in the simple fakes, so the field is omitted rather than `undefined`.
- */
-function extractUpdatedAt(result: unknown): { updatedAt?: string } {
-  const r = result as
-    | { updatedAt?: unknown; data?: { updatedAt?: unknown } }
-    | null
-    | undefined;
-  const raw = r?.data?.updatedAt ?? r?.updatedAt;
-  return typeof raw === "string" ? { updatedAt: raw } : {};
-}
-
 // --- runnable push orchestration (`runPush`) ---------------------------------
 //
-// `runPush` is the FS->Docmost twin of the pull direction: it wires the VaultGit
-// diff/ref primitives + the PURE `computePushActions` planner + the THIN
-// `applyPushActions` applier into one runnable cycle. It is driven IN-PROCESS by
-// the NestJS server (there is no standalone CLI). SAFE BY DEFAULT — a cycle
-// defaults to DRY-RUN (plan only, NO Docmost writes, NO ref advance) unless the
-// caller passes `opts.dryRun === false`; that apply path is the ONLY one that
-// builds a client and mutates Docmost.
-//
-// Every external effect is injected (`PushDeps`): production wires the live
-// Docmost client, git, and fs; tests substitute FAKES through the same seam.
+// `runPush` wires the VaultGit diff/ref primitives + the PURE
+// `computePushActions` planner + the THIN `applyPushActions` applier into the
+// cycle's apply step: the user's commits since the last export, applied to
+// Docmost. It is driven IN-PROCESS by the NestJS server. SAFE BY DEFAULT — it
+// defaults to DRY-RUN (plan only, NO Docmost writes) unless the caller passes
+// `opts.dryRun === false`; that apply path is the ONLY one that builds a client
+// and mutates Docmost.
 
 /**
- * The human ("local") git identity used for engine-made commits on `main` in the
- * push direction (DESIGN.md §11). The provenance is carried by the trailer
- * (below); the identity is for history readability only.
- * When the vault repo already has a configured `user.name`/`user.email`, git
- * uses that for the working-tree commit; this is the fallback the engine stamps.
- */
-export const LOCAL_AUTHOR_NAME = "Local";
-export const LOCAL_AUTHOR_EMAIL = "local@local";
-
-/** The provenance trailer marking a `main`-side (human/local) commit. */
-export const LOCAL_SOURCE_TRAILER = "Docmost-Sync-Source: local";
-
-/**
- * Stage EVERYTHING in the working tree (modified, deleted and untracked files)
- * and commit it on the current branch as `local: working-tree changes` with the
- * `local` identity + provenance trailer. Returns `false` when there
- * was nothing to commit. Shared by `runPush` step 3 and the cycle preflight's
- * dirty-`main` recovery so both record pending `main` content identically.
- */
-export async function commitLocalWorkingTree(
-  git: Pick<VaultGit, "stageAll" | "commit">,
-): Promise<boolean> {
-  await git.stageAll();
-  return git.commit("local: working-tree changes", {
-    authorName: LOCAL_AUTHOR_NAME,
-    authorEmail: LOCAL_AUTHOR_EMAIL,
-    trailers: [LOCAL_SOURCE_TRAILER],
-  });
-}
-
-/**
- * Commit the push's write-backs on `main` as `local: record created pageIds`
- * (the `local` identity + trailer). Returns `false` when there was nothing to
- * commit. Shared by `runPush` step 7a and `finishPushWrites`.
- */
-async function commitWriteBacks(
-  git: Pick<VaultGit, "stageAll" | "commit">,
-): Promise<boolean> {
-  await git.stageAll();
-  return git.commit("local: record created pageIds", {
-    authorName: LOCAL_AUTHOR_NAME,
-    authorEmail: LOCAL_AUTHOR_EMAIL,
-    trailers: [LOCAL_SOURCE_TRAILER],
-  });
-}
-
-/**
- * Finish the writes of a push cut off between its first write on `main` and
- * their commit (PUSH_REF set; `recoverVault`, DESIGN.md §8). Every uncommitted
- * path holding a COMPLETE write-back (`isCompleteWriteBack`) is committed, as
- * step 7a would have; every other one — a write cut off part-way (an empty or
- * truncated file), anything else — is put back to its HEAD state. An
- * interrupted engine write is never committed as content, so an emptied file
- * never clears its page. The caller deletes PUSH_REF afterwards.
- */
-export async function finishPushWrites(
-  git: Pick<
-    VaultGit,
-    | "listDirtyPaths"
-    | "readWorkingFile"
-    | "showFileAtRef"
-    | "restorePathFromHead"
-    | "stageAll"
-    | "commit"
-  >,
-): Promise<{ kept: string[]; restored: string[] }> {
-  const kept: string[] = [];
-  const restored: string[] = [];
-  for (const path of await git.listDirtyPaths()) {
-    const work = await git.readWorkingFile(path);
-    const head = await git.showFileAtRef("HEAD", path);
-    if (work !== null && head !== null && isCompleteWriteBack(work, head)) {
-      kept.push(path);
-    } else {
-      await git.restorePathFromHead(path);
-      restored.push(path);
-    }
-  }
-  if (kept.length > 0) await commitWriteBacks(git);
-  return { kept, restored };
-}
-
-/**
- * Injectable deps for `runPush` (mirrors `pull.ts`'s wiring; everything that
- * touches the outside world is here so tests pass fakes). `makeClient` is a
- * FACTORY, not a client — a dry-run must build NO client at all (it is never
- * called), and only the apply path (`opts.dryRun === false`) invokes it.
+ * Injectable deps for `runPush` (everything that touches the outside world is
+ * here so tests pass fakes). `makeClient` is a FACTORY, not a client — a dry-run
+ * must build NO client at all (it is never called), and only the apply path
+ * (`opts.dryRun === false`) invokes it.
  */
 export interface PushDeps {
   settings: Settings;
@@ -1678,31 +1262,21 @@ export interface PushDeps {
     VaultGit,
     | "assertGitAvailable"
     | "ensureRepo"
-    | "isMergeInProgress"
-    | "checkout"
-    | "stageAll"
-    | "commit"
-    | "mergeBase"
-    | "revParse"
     | "diffNameStatus"
     | "pageIdsAtRef"
     | "showFileAtRef"
-    | "updateRef"
-    | "fastForwardBranch"
-    | "listTrackedFiles"
+    | "readFilesAtRef"
     | "commitAddingPath"
-    | "isAncestor"
-    | "treeWithPathsFrom"
-    | "commitTree"
-    | "deleteRef"
   >;
   /** Build a real client — called ONLY on the apply path, never on dry-run. */
   makeClient: (settings: Settings) => ApplyPushDeps["client"];
-  /** Read a file's full text by its vault-relative (forward-slash) path. */
-  readFile: (path: string) => Promise<string>;
-  /** Write a file's full text by its vault-relative path. */
-  writeFile: (path: string, text: string) => Promise<void>;
-  /** Structured logger (defaults to console in `main`; a recorder in tests). */
+  /** The last export: what Docmost held when it was exported (the diff base). */
+  baseRef: string;
+  /** The `main` commit the user's changes end at. */
+  headRef: string;
+  /** Paths that are symlinks at `headRef`: never pages. */
+  symlinks?: ReadonlySet<string>;
+  /** Structured logger (a recorder in tests). */
   log: (line: string) => void;
   /** The cycle's AbortSignal, handed to `applyPushActions` (see there). */
   signal?: AbortSignal;
@@ -1712,14 +1286,12 @@ export interface PushDeps {
 export interface PushRunResult {
   /** Which path ran: `dry-run` (plan only) or `apply` (Docmost mutated). */
   mode: "dry-run" | "apply";
-  /** Why the cycle stopped before planning, if it did (e.g. a left-over merge). */
-  aborted?: "merge-in-progress";
-  /** The diff base the plan was computed against: merge-base(`docmost`, `main`). */
-  base?: { sha: string };
-  /** The `main` commit the plan targets (the would-be pushed commit). */
-  pushedCommit?: string;
-  /** Planned action counts from the PURE planner (present once a plan was built). */
-  planned?: {
+  /** The diff base the plan was computed against: the last export. */
+  base: { sha: string };
+  /** The `main` commit the plan targets. */
+  pushedCommit: string;
+  /** Planned action counts from the PURE planner. */
+  planned: {
     creates: number;
     updates: number;
     deletes: number;
@@ -1728,49 +1300,26 @@ export interface PushRunResult {
   };
   /** The applier's structured result — ONLY present on the apply path. */
   applied?: ApplyPushResult;
-  /**
-   * True when `applyPushActions` REFUSED to fast-forward a divergent `docmost`
-   * mirror (the mirror invariant of DESIGN.md §3 is broken). Logged prominently
-   * and surfaced on this result so the caller (the server orchestrator)
-   * escalates it.
-   */
-  divergentDocmost?: boolean;
   /** Per-page failures from the applier (empty/absent on a clean run). */
   failures?: PushFailure[];
+  /** The file -> page of every create (apply path). */
+  created?: CreatedPage[];
 }
 
 /**
- * Run one FS->Docmost push cycle (DESIGN.md §7), DRY-RUN BY DEFAULT
- * (the apply path runs only when `opts.dryRun === false`).
+ * Apply the user's changes since the last export to Docmost (SPEC §6 "FS ->
+ * Docmost"), DRY-RUN BY DEFAULT (the apply path runs only when
+ * `opts.dryRun === false`).
  *
- * Steps (mirrors `pull.ts`):
- *   1. Preflight git: `assertGitAvailable` + `ensureRepo`; ABORT (clear message +
- *      an `aborted: "merge-in-progress"` result) if a merge is in progress —
- *      never push on top of an unresolved conflict. Conflict markers must NEVER
- *      reach Docmost.
- *   2. Checkout `main` (the human-facing branch the push reads from).
- *   3. Commit the human's pending working-tree changes on `main` with the
- *      `local` provenance trailer. A no-op when nothing changed.
- *   4. Resolve `main` and the diff BASE: merge-base(`docmost`, `main`), the
- *      newest commit whose content Docmost already holds (throws if none).
- *   5. `diffNameStatus(base, main)` -> changes; build the `metaAt(path, side)`
- *      resolver (current = working tree, prev = `git show <base>:<path>`); run
- *      the PURE `computePushActions`.
- *   6. DRY-RUN (default): LOG the full plan and RETURN — NO client, NO Docmost
- *      calls, NO ref advance.
- *   7. Apply path (`opts.dryRun === false`): build the client, set PUSH_REF
- *      (the push's writes on `main` begin), run
- *      `applyPushActions(..., pushedCommit=main)`, then (a) if any pageIds were
- *      written back (creates), commit them on `main` with the `local` trailer,
- *      fast-forward `docmost` to that commit after a clean push, and drop
- *      PUSH_REF; (b) after a push with failures, record per page what reached
- *      Docmost (`recordPushedPages`); (c) ESCALATE a divergent-`docmost`
- *      refusal with a prominent WARNING and the `divergentDocmost` result flag.
- *      Then log a one-line summary.
- *
- * Refuses (throws) before any Docmost write when the plan would create more
- * than `MAX_GIT_COPY_CREATES` `~git` copy pages (see there). An abort of
- * `deps.signal` stops it with a `CycleAbortedError` (DESIGN.md §9).
+ * Steps:
+ *   1. Preflight git: `assertGitAvailable` + `ensureRepo`.
+ *   2. `diffNameStatus(baseRef, headRef)` -> changes (symlinks dropped: never
+ *      pages); build the `metaAt(path, side)` resolver (current = `headRef`,
+ *      prev = `baseRef`); run the PURE `computePushActions`.
+ *   3. DRY-RUN (default): LOG the full plan and RETURN — NO client, NO Docmost
+ *      calls.
+ *   4. Apply path: build the client, run `applyPushActions`, log a one-line
+ *      summary, and return the failures and created pages to the cycle.
  */
 export async function runPush(
   deps: PushDeps,
@@ -1784,73 +1333,24 @@ export async function runPush(
   await git.assertGitAvailable();
   await git.ensureRepo();
 
-  // 1b. Refuse to push on top of an unresolved merge. A merge left half-done
-  //     could leak conflict markers into Docmost (the cardinal invariant).
-  //     Detect it BEFORE any checkout/diff and stop with a clear, actionable
-  //     message so re-runs converge once the human resolves (or aborts) the merge.
-  if (await git.isMergeInProgress()) {
-    log(
-      `push: vault has an unresolved merge at ${settings.vaultPath} — resolve ` +
-        `it (or 'git merge --abort') and re-run. Nothing was pushed to Docmost ` +
-        `(conflict markers must never reach Docmost).`,
-    );
-    return { mode: dryRun ? "dry-run" : "apply", aborted: "merge-in-progress" };
-  }
+  const base = { sha: deps.baseRef };
+  const pushedCommit = deps.headRef;
+  const readFile = async (path: string): Promise<string> => {
+    const text = await git.showFileAtRef(pushedCommit, path);
+    if (text === null) throw new Error(`${path} is not in ${pushedCommit}`);
+    return text;
+  };
 
-  // 2. Work on `main` — the human-facing branch the push diffs FROM.
-  await git.checkout(DEFAULT_BRANCH);
-
-  // 3. Commit the human's pending working-tree changes on `main` with the `local`
-  //    provenance trailer. A no-op commit when nothing changed is
-  //    fine (`commit` returns false).
-  //    Even on a "plan only" dry-run this commits the working tree (it is the
-  //    only way to diff `base..main`) — so make that
-  //    LOCAL git mutation VISIBLE, never silent: a created commit is local-only
-  //    and nothing is sent to Docmost.
-  const committedWorkingTree = await commitLocalWorkingTree(git);
-  if (committedWorkingTree) {
-    const sha = await git.revParse(DEFAULT_BRANCH);
-    log(
-      `push: committed local working-tree changes on main` +
-        (sha ? ` as ${sha.slice(0, 8)}` : "") +
-        ` (local git only — nothing sent to Docmost).`,
-    );
-  } else {
-    log("push: working tree clean (no local changes to push).");
-  }
-
-  const pushedCommit = await git.revParse(DEFAULT_BRANCH);
-  if (!pushedCommit) {
-    // `main` has no commit — `ensureRepo` always makes an initial one, so this is
-    // defensive. Nothing to diff.
-    log("push: `main` has no commit to push — nothing to do.");
-    return { mode: dryRun ? "dry-run" : "apply" };
-  }
-
-  // 4. The diff BASE is merge-base(`docmost`, `main`): the newest commit whose
-  //    content Docmost already holds. After this cycle's pull merged `docmost`
-  //    into `main` it is the `docmost` tip, so the diff carries only what `main`
-  //    has and Docmost lacks (human commits, git-won merge resolutions) — never
-  //    the pull's own export, which would echo a stale DB body back into the
-  //    live document.
-  const mergeBase = await git.mergeBase(DOCMOST_BRANCH, DEFAULT_BRANCH);
-  if (!mergeBase) {
-    throw new Error(
-      `push: '${DOCMOST_BRANCH}' and '${DEFAULT_BRANCH}' share no history in ` +
-        `${settings.vaultPath} — cannot tell what Docmost already holds, so ` +
-        `nothing was pushed.`,
-    );
-  }
-  const base = { sha: mergeBase };
-
-  // 5. Diff the base against `main` and build the `metaAt` resolver (PURE planner
-  //    input). `current` reads the live working tree; `prev` reads the base
-  //    commit's pre-image via `git show <base>:<path>` (so a DELETE recovers its
-  //    pageId).
-  const changes = await git.diffNameStatus(base.sha, DEFAULT_BRANCH);
+  // 2. Diff the base against `main` and build the `metaAt` resolver (PURE planner
+  //    input). `current` reads `main`; `prev` reads the base commit's pre-image
+  //    (so a DELETE recovers its pageId). A symlink is never a page.
+  const symlinks = deps.symlinks ?? new Set<string>();
+  const changes = (await git.diffNameStatus(base.sha, pushedCommit)).filter(
+    (c) => c.status === "D" || !symlinks.has(c.path),
+  );
   // Synchronous resolver over PREFETCHED meta tables: `computePushActions` is
-  // PURE/sync, but the file/ref reads are async — so we prefetch every (path,
-  // side) the diff will ask for into a table first, then resolve from it.
+  // PURE/sync, but the reads are async — so we prefetch every (path, side) the
+  // diff will ask for into a table first, then resolve from it.
   const metaTable = new Map<string, DocmostMdMeta | null>();
   for (const change of changes) {
     // `current`: A/M/R/C still have the file on `main`. `prev`: D needs the
@@ -1860,7 +1360,7 @@ export async function runPush(
     if (!metaTable.has(`${currentPath}|current`)) {
       metaTable.set(
         `${currentPath}|current`,
-        await readMetaCurrent(deps, currentPath, settings.docmostSpaceId),
+        await readMetaCurrent(readFile, currentPath, settings.docmostSpaceId),
       );
     }
     if (!metaTable.has(`${prevPath}|prev`)) {
@@ -1879,12 +1379,21 @@ export async function runPush(
   // reshuffle of `_`-fallback names, whose two halves can even land in separate
   // cycles), never a deletion. Built only when the diff contains deletes — the
   // guard's whole job is to stop a phantom delete from trashing a live page.
+  // `git grep` finds each file's first `gitmost_id:` line; one batch read
+  // confirms it is the file's frontmatter id.
   let currentPageIds: Set<string> | undefined;
   if (changes.some((c) => c.status === "D")) {
+    const hits = (await git.pageIdsAtRef(pushedCommit)).filter(
+      (h) => !symlinks.has(h.path),
+    );
+    const texts = await git.readFilesAtRef(
+      pushedCommit,
+      hits.map((h) => h.path),
+    );
     currentPageIds = new Set<string>();
-    for (const relPath of await git.listTrackedFiles("*.md")) {
-      const pid = (await readMetaCurrent(deps, relPath, settings.docmostSpaceId))
-        ?.pageId;
+    for (const h of hits) {
+      const text = texts.get(h.path);
+      const pid = text === undefined ? null : parsePageFile(text).id;
       if (pid) currentPageIds.add(pid);
     }
   }
@@ -1910,15 +1419,15 @@ export async function runPush(
   const pageBasePath = new Map<string, string>();
   if (changedIds.size > 0) {
     const pathsById = new Map<string, string[]>();
-    for (const { path, id } of await git.pageIdsAtRef(DEFAULT_BRANCH)) {
-      if (!changedIds.has(id) || !isPageFile(path)) continue;
+    for (const { path, id } of await git.pageIdsAtRef(pushedCommit)) {
+      if (!changedIds.has(id) || !isPageFile(path) || symlinks.has(path)) continue;
       pathsById.set(id, [...(pathsById.get(id) ?? []), path]);
     }
     for (const [id, paths] of pathsById) {
       if (paths.length < 2) continue;
       const files: string[] = [];
       for (const path of paths.sort()) {
-        const meta = await readMetaCurrent(deps, path, settings.docmostSpaceId);
+        const meta = await readMetaCurrent(readFile, path, settings.docmostSpaceId);
         if (meta?.pageId === id) files.push(path);
       }
       if (files.length < 2) continue;
@@ -1973,136 +1482,34 @@ export async function runPush(
     skipped: actions.skipped.length,
   };
 
-  // 6. DRY-RUN (default): log the full plan and RETURN — build NO client, make
-  //    ZERO Docmost calls, advance NO refs. This is the SAFE default.
+  // 3. DRY-RUN (default): log the full plan and RETURN — build NO client, make
+  //    ZERO Docmost calls. This is the SAFE default.
   logPlan(log, base, pushedCommit, actions, planned, dryRun);
   if (dryRun) {
     return { mode: "dry-run", base, pushedCommit, planned };
   }
 
-  // GROWTH BREAKER (invariants #1/#10). A `~git` file is git's side of a page
-  // the pull could not merge, kept as a new page. A burst of them in one cycle
-  // is a loop duplicating pages, not editing: fail the space loudly instead.
-  const gitCopies = actions.creates.filter((c) => isGitCopyPath(c.path));
-  if (gitCopies.length > MAX_GIT_COPY_CREATES) {
-    throw new Error(
-      `push refused: it would create ${gitCopies.length} '~git' copy pages in ` +
-        `one cycle (limit ${MAX_GIT_COPY_CREATES}) — git's side of that many ` +
-        `pages could not be merged, which points at pages being duplicated ` +
-        `every cycle. Nothing was pushed to Docmost. Delete or merge the '~git' ` +
-        `files on main (${gitCopies
-          .slice(0, 3)
-          .map((c) => c.path)
-          .join(", ")}${gitCopies.length > 3 ? ", …" : ""}).`,
-    );
-  }
-
-  // 7. Apply path: build the REAL client and execute. This is the ONLY write path.
+  // 4. Apply path: build the REAL client and execute. This is the ONLY write path.
   const client = deps.makeClient(settings);
-  // From here until the write-backs are committed (7a), whatever is left
-  // uncommitted on `main` is the push's own writing: PUSH_REF tells recovery.
-  await git.updateRef(PUSH_REF, DEFAULT_BRANCH);
   const applied = await applyPushActions(
     {
       client,
-      // Pass the WHOLE `git` object (it satisfies the applier's
-      // `Pick<VaultGit, ...>` deps surface). Passing bare method references
-      // (`git.updateRef`, …) would lose their `this` binding, so on a REAL
-      // `VaultGit` they would throw `this.runRaw is not a function`. Hand over
-      // the object so the methods keep their receiver — exactly as `pull.ts`
-      // does for `applyPullActions`.
+      // Pass the WHOLE `git` object so its methods keep their `this` binding.
       git,
-      readFile: deps.readFile,
-      writeFile: deps.writeFile,
+      readFile,
       spaceId: settings.docmostSpaceId,
       baseRef: base.sha,
-      // Per-space PUSH policy for still-conflicted bodies. Default OFF:
-      // a conflicted page is skipped (recorded as a failure) instead of pushed.
-      autoMergeConflicts: settings.autoMergeConflicts ?? false,
+      warn: log,
       signal: deps.signal,
     },
     actions,
-    pushedCommit,
   );
 
-  // 7a. Persist freshly-assigned pageIds (creates) back into git. `applyPushActions`
-  //     rewrote those files on disk; commit them on `main` with the `local` trailer
-  //     so the new pageIds are recorded, then fast-forward `docmost` to the new
-  //     commit after a clean push (the write-back commit is part of `main` now,
-  //     and Docmost holds it). The push's writes are then committed: PUSH_REF goes.
-  // Track a divergent-`docmost` mirror across BOTH ff sites (the applier's main
-  // push ff in 7b, and the write-back ff here). A divergent mirror is the same
-  // invariant breach in EITHER branch and must escalate identically.
-  throwIfAborted(deps.signal, "before committing the push's write-backs");
-  let divergentDocmost = false;
-  if (applied.writtenBack.length > 0) {
-    const recorded = await commitWriteBacks(git);
-    if (recorded) {
-      const newCommit = await git.revParse(DEFAULT_BRANCH);
-      // Only advance when the original push was CLEAN (the applier advanced
-      // `docmost` to the pushed commit); a partial push is recorded per page in
-      // 7b, after this commit.
-      if (newCommit && applied.clean) {
-        const ff = await git.fastForwardBranch(DOCMOST_BRANCH, newCommit);
-        if (!ff.ok) {
-          // SYMMETRIC with the main escalation (7c): a divergent mirror in the
-          // write-back branch is the SAME invariant breach and must escalate,
-          // not just log a soft warning.
-          divergentDocmost = true;
-          log(
-            `push: WARNING — the 'docmost' mirror branch DIVERGED and was NOT ` +
-              `fast-forwarded to the pageId write-back commit ` +
-              `(${ff.reason ?? "not-fast-forward"}). The mirror invariant ` +
-              `('docmost' mirrors what Docmost contains) is broken: reconcile ` +
-              `'docmost' against the live Docmost tree before the next cycle.`,
-          );
-        }
-      }
-    }
-  }
-  await git.deleteRef(PUSH_REF);
-
-  // 7b. A push with failures: advance the base over every page that reached
-  //     Docmost, so only the failed pages stay in the next push's diff.
-  throwIfAborted(deps.signal, "before recording the pushed pages");
-  const pageRecord =
-    applied.failures.length > 0
-      ? await recordPushedPages(git, applied.failures)
-      : null;
-  if (pageRecord?.ok) {
-    log(
-      `push: ${applied.failures.length} failure(s) — recorded what reached ` +
-        `Docmost on '${DOCMOST_BRANCH}'; the failed page(s) are retried next cycle.`,
-    );
-  }
-
-  // 7c. ESCALATE a divergent-`docmost` refusal (the mirror invariant is broken).
-  //     The applier and the record refuse to clobber a divergent mirror; make
-  //     it LOUD (not silent) so the operator notices, and fold it into the result.
-  const refused =
-    applied.docmostFastForward && !applied.docmostFastForward.ok
-      ? applied.docmostFastForward
-      : pageRecord && !pageRecord.ok
-        ? pageRecord
-        : null;
-  if (refused) {
-    divergentDocmost = true;
-    log(
-      `push: WARNING — the 'docmost' mirror branch DIVERGED and was NOT ` +
-        `advanced (${refused.reason ?? "not-fast-forward"}). ` +
-        `The mirror invariant ('docmost' mirrors what Docmost contains) is ` +
-        `broken: reconcile 'docmost' against the live Docmost tree before the ` +
-        `next cycle.`,
-    );
-  }
-
-  // 7d. One-line summary (mirrors pull.ts's summary line).
   log(
     `push complete: ${applied.created} created, ${applied.updated} updated, ` +
       `${applied.deleted} deleted, ${applied.moved} moved, ${applied.renamed} ` +
       `renamed, ${applied.noops.length} no-op(s), ${applied.skipped.length} ` +
-      `skipped, ${applied.failures.length} failure(s)` +
-      (divergentDocmost ? " [DIVERGENT docmost mirror]" : ""),
+      `skipped, ${applied.failures.length} failure(s)`,
   );
 
   return {
@@ -2111,116 +1518,23 @@ export async function runPush(
     pushedCommit,
     planned,
     applied,
-    divergentDocmost,
     failures: applied.failures,
+    created: applied.createdPages,
   };
 }
 
-/**
- * The most `~git` copy pages (`isGitCopyPath`) one push may create. More means
- * the pull kept git's side of that many pages as new files in one cycle — a
- * duplication loop, not an edit — so `runPush` refuses the whole push instead.
- */
-export const MAX_GIT_COPY_CREATES = 20;
-
-/** The git surface of `recordPushedPages` / `finishPushRecord`. */
-type RecordGit = Pick<
-  VaultGit,
-  | "revParse"
-  | "isAncestor"
-  | "treeWithPathsFrom"
-  | "commitTree"
-  | "updateRef"
-  | "fastForwardBranch"
-  | "deleteRef"
->;
-
-/**
- * After a push with per-page `failures`, advance the base over every page that
- * DID reach Docmost: commit on `docmost` (a child of its tip) the tree of `main`
- * with only the failed operations' paths kept at their `docmost` version, then
- * merge that record into `main` keeping `main`'s tree (`-s ours`). The merge
- * base then covers every pushed page, and the failed ones stay in the next
- * push's diff, retried on their own. `RECORD_REF` names the record until `main`
- * has it, so a crash in between is finished by `recoverVault`.
- *
- * Returns null when nothing reached Docmost (no record, no new commits), else
- * the `docmost` advance result — refused, like the clean push's fast-forward,
- * when `docmost` is not an ancestor of `main`.
- */
-async function recordPushedPages(
-  git: RecordGit,
-  failures: PushFailure[],
-): Promise<{ ok: boolean; reason?: string } | null> {
-  const tip = await git.revParse(DOCMOST_BRANCH);
-  const main = await git.revParse(DEFAULT_BRANCH);
-  if (tip === null || main === null) {
-    return { ok: false, reason: `'${DOCMOST_BRANCH}' or '${DEFAULT_BRANCH}' is missing` };
-  }
-  if (!(await git.isAncestor(tip, main))) {
-    return { ok: false, reason: "not-fast-forward" };
-  }
-  const failedPaths = failures.flatMap((f) =>
-    f.oldPath !== undefined ? [f.path, f.oldPath] : [f.path],
-  );
-  const tree = await git.treeWithPathsFrom(main, tip, failedPaths);
-  if (tree === (await git.revParse(`${tip}^{tree}`))) return null;
-  const record = await git.commitTree(
-    tree,
-    [tip],
-    `docmost: record pushed pages (${failures.length} failed, kept back)`,
-    {
-      authorName: BOT_AUTHOR_NAME,
-      authorEmail: BOT_AUTHOR_EMAIL,
-      trailers: [DOCMOST_SOURCE_TRAILER],
-    },
-  );
-  await git.updateRef(RECORD_REF, record);
-  return finishPushRecord(git, record);
-}
-
-/**
- * Finish a per-page record (`recordPushedPages`): move `docmost` to it, merge
- * it into `main` with `main`'s own tree (no working-tree change), then drop
- * `RECORD_REF`. Every step is skipped when already done, so `recoverVault`
- * re-runs it after a crash. `HEAD` must not be on `docmost`.
- */
-export async function finishPushRecord(
-  git: RecordGit,
-  record: string,
-): Promise<{ ok: boolean; reason?: string }> {
-  const ff = await git.fastForwardBranch(DOCMOST_BRANCH, record);
-  if (ff.ok) {
-    const main = await git.revParse(DEFAULT_BRANCH);
-    if (main !== null && !(await git.isAncestor(record, main))) {
-      const merged = await git.commitTree(
-        `${main}^{tree}`,
-        [main, record],
-        `Merge the pushed pages record into ${DEFAULT_BRANCH}`,
-        {
-          authorName: BOT_AUTHOR_NAME,
-          authorEmail: BOT_AUTHOR_EMAIL,
-          trailers: [DOCMOST_SOURCE_TRAILER],
-        },
-      );
-      await git.updateRef(`refs/heads/${DEFAULT_BRANCH}`, merged, main);
-    }
-  }
-  await git.deleteRef(RECORD_REF);
-  return ff;
-}
-
-/** Synthetic native meta from the live working tree (`current` side). */
+/** Synthetic native meta from `main` (`current` side). */
 async function readMetaCurrent(
-  deps: Pick<PushDeps, "readFile">,
+  readFile: (path: string) => Promise<string>,
   path: string,
   spaceId: string,
 ): Promise<DocmostMdMeta | null> {
   let text: string;
   try {
-    text = await deps.readFile(path);
-  } catch {
-    return null; // absent on disk (e.g. a D row's path) -> no current meta.
+    text = await readFile(path);
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
+    return null; // absent on `main` (e.g. a D row's path) -> no current meta.
   }
   return nativeMeta(text, path, spaceId);
 }
@@ -2235,7 +1549,8 @@ async function readMetaPrev(
   let text: string | null;
   try {
     text = await deps.git.showFileAtRef(baseRef, path);
-  } catch {
+  } catch (err) {
+    if (err instanceof GitStoppedError) throw err;
     return null;
   }
   if (text === null) return null; // path absent at the base ref.
@@ -2253,7 +1568,7 @@ function logPlan(
 ): void {
   log(
     `push plan (${dryRun ? "DRY-RUN — no Docmost writes" : "APPLY"}): base=` +
-      `merge-base(docmost, main) ${base.sha.slice(0, 8)} ` +
+      `last-export ${base.sha.slice(0, 8)} ` +
       `-> main ${pushedCommit.slice(0, 8)}`,
   );
   log(

@@ -148,8 +148,8 @@ describe('getInternalLinkPageName', () => {
 
   it('keeps the full basename when the path has no extension (#204)', () => {
     // An extensionless link target must NOT be stripped to an empty string —
-    // there is no extension to drop. Previously `.split('.').slice(0,-1)`
-    // collapsed "My Page" to "" and the internal link rendered with no text.
+    // there is no extension to drop (`.split('.').slice(0,-1)` would collapse
+    // "My Page" to "").
     expect(getInternalLinkPageName('Parent/My%20Page')).toBe('My Page');
     expect(getInternalLinkPageName('Just A Name')).toBe('Just A Name');
   });
