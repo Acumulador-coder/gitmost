@@ -1,6 +1,9 @@
 import * as Y from 'yjs';
 
-import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
+import {
+  mergeXmlFragments,
+  mergeXmlFragments3WayWithStats,
+} from './yjs-body-merge';
 
 /**
  * Regression for the HIGH-severity runaway whole-body duplication: a page body
@@ -15,14 +18,12 @@ import { mergeXmlFragments, mergeXmlFragments3Way } from './yjs-body-merge';
  * the same block coming back from git; the three-way merge could anchor on
  * NOTHING, and the trailing unit that git's export already contained (but the
  * merge could not match against the byte-identical live tail) was re-appended
- * each cycle. Each grown export then diverged from the last-pushed base by one
+ * each cycle. Each grown export then diverged from the last-synced base by one
  * more unit — a self-sustaining loop.
  *
- * The fix normalizes the materialized default (`indent: 0`) out of the block key
- * (the schema-derived `serializeXmlNode` normalization in yjs-body-merge.ts drops
- * every attr equal to its ProseMirror-schema default; `indent: 0` is one such),
- * so a live block compares equal to its git-round-tripped twin and the resync is
- * a true no-op. The sibling `yjs-body-merge.schema-defaults.spec.ts` covers the
+ * The fix keys every block by its markdown projection (`blockKey` in
+ * yjs-body-merge.ts), which carries no `indent` at all, so a live block
+ * compares equal to its git-round-tripped twin and the resync is a true no-op. The sibling `yjs-body-merge.schema-defaults.spec.ts` covers the
  * rest of the bug class (image.align, link mark internal, …).
  *
  * These tests model that EXACTLY at the Yjs level: a LIVE fragment whose blocks
@@ -108,7 +109,7 @@ describe('git-sync reconcile import is idempotent (no whole-body duplication)', 
     const { frag: incoming } = fragmentOf(
       Array.from({ length: UNITS }, (_, i) => unit(false, i)),
     );
-    // BASE = last-pushed file, lagging by ONE unit (the realistic divergence
+    // BASE = last-synced file, lagging by ONE unit (the realistic divergence
     // that drives the trailing insert-vs-insert).
     const { frag: base } = fragmentOf(
       Array.from({ length: UNITS - 1 }, (_, i) => unit(false, i)),
@@ -117,7 +118,7 @@ describe('git-sync reconcile import is idempotent (no whole-body duplication)', 
     const before = blockCount(live);
     let applied = -1;
     liveDoc.transact(() => {
-      applied = mergeXmlFragments3Way(live, incoming, base);
+      applied = mergeXmlFragments3WayWithStats(live, incoming, base).applied;
     });
 
     expect(applied).toBe(0);
@@ -138,7 +139,11 @@ describe('git-sync reconcile import is idempotent (no whole-body duplication)', 
     for (let cycle = 0; cycle < 5; cycle++) {
       let applied = -1;
       liveDoc.transact(() => {
-        applied = mergeXmlFragments3Way(live, incomingUnits(), baseUnits());
+        applied = mergeXmlFragments3WayWithStats(
+          live,
+          incomingUnits(),
+          baseUnits(),
+        ).applied;
       });
       expect(applied).toBe(0);
       expect(blockCount(live)).toBe(before);
@@ -179,7 +184,7 @@ describe('git-sync reconcile import is idempotent (no whole-body duplication)', 
 
     const before = blockCount(live);
     liveDoc.transact(() => {
-      mergeXmlFragments3Way(live, incoming, base);
+      mergeXmlFragments3WayWithStats(live, incoming, base);
     });
 
     // The edit landed, and the body did NOT grow (one block changed in place).

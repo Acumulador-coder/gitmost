@@ -11,6 +11,7 @@ import * as Y from 'yjs';
 import { Injectable, Logger } from '@nestjs/common';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import {
+  flushPendingStore,
   getPageId,
   isEmptyParagraphDoc,
   jsonToText,
@@ -202,6 +203,14 @@ export class PersistenceExtension implements Extension {
   // per-connection context cannot provide (a clear is an edit event, but the
   // store is debounced and connection context is fixed at authentication).
   private intentionalClear: Map<string, number> = new Map();
+  // CO-5 — per-document context of the latest human/agent edit not yet stored.
+  // Hocuspocus keeps ONE pending store per document and an immediate git-sync
+  // store replaces it, so an edit that lands while git-sync writes would be
+  // stored under the git-sync context: attributed to the service user and
+  // skipped by the git-sync loop-guard (never exported). Set by onChange (git
+  // writes carry no user, so they never set it), consumed by every store,
+  // dropped on unload like the maps above.
+  private lastEditContext: Map<string, any> = new Map();
 
   constructor(
     private readonly pageRepo: PageRepo,
@@ -302,19 +311,20 @@ export class PersistenceExtension implements Extension {
    * scheduled (preserving the edit's context/actor) and clears the timer.
    */
   async onDisconnect(data: onDisconnectPayload) {
-    // Git-sync only: without it, keep develop's debounced-store behavior.
+    // Gated on git-sync: the flush exists for git-sync (the vault must not
+    // mirror a stale DB body), and git-sync is fully inert when it is off, so
+    // the debounced store keeps its stock behavior then.
     if (!this.environmentService.isGitSyncEnabled()) return;
     const { instance, document, documentName, clientsCount } = data;
     if (clientsCount > 0) return;
     if (!document || document.isLoading) return;
-    const debounceId = `onStoreDocument-${documentName}`;
-    if (!instance?.debouncer?.isDebounced(debounceId)) return;
     try {
-      await instance.debouncer.executeNow(debounceId);
+      await flushPendingStore(instance, documentName);
     } catch (err) {
       this.logger.error(
         `onDisconnect flush failed for ${documentName}: ` +
           (err instanceof Error ? err.message : String(err)),
+        err instanceof Error ? err.stack : undefined,
       );
     }
   }
@@ -359,6 +369,14 @@ export class PersistenceExtension implements Extension {
 
     let page: Page = null;
     const editingUserIds = this.consumeContributors(documentName);
+    // CO-5 — who this store is attributed to. A git-sync store that also
+    // carries a human/agent edit made since the last store (it replaced that
+    // edit's pending store) is attributed to that edit's author, so the edit is
+    // neither credited to the git-sync service user nor hidden from the git
+    // export by the loop-guard. Every other store keeps its own context.
+    const pendingEdit = this.consumeLastEditContext(documentName);
+    const attribution =
+      context?.actor === 'git-sync' && pendingEdit ? pendingEdit : context;
     // Sticky agent marker: 'agent' if any agent edit landed in this window, OR
     // if the current writer is the agent (covers a store with no prior onChange
     // agent event in the same window). §15 H2.
@@ -369,7 +387,7 @@ export class PersistenceExtension implements Extension {
     // import that would warrant its own immediate snapshot).
     const lastUpdatedSource = resolveSource(
       this.consumeAgentTouched(documentName),
-      context?.actor,
+      attribution?.actor,
     );
     // #251 — consume the intentional-clear flag ONCE, BEFORE the retry loop
     // (like consumeContributors / consumeAgentTouched above). consumeIntentional-
@@ -493,10 +511,14 @@ export class PersistenceExtension implements Extension {
           // beyond the old user→agent special-case also covers git-sync for free:
           // a git-sync write over a differently-sourced page pins the pre-merge
           // state so a same-block human edit "lost" to git stays recoverable
-          // (SPEC §9 observable-loss guard).
+          // (SPEC §9 observable-loss guard). A git-sync merge store attributed
+          // to a pending human/agent edit (CO-5) is still a git merge over that
+          // baseline, so it pins too.
           if (
             page.lastUpdatedSource &&
-            page.lastUpdatedSource !== lastUpdatedSource
+            (page.lastUpdatedSource !== lastUpdatedSource ||
+              (context?.actor === 'git-sync' &&
+                page.lastUpdatedSource !== 'git-sync'))
           ) {
             // pageHistory.pageId is uuid-typed; use page.id (never the doc-name
             // slugId) so a `page.<slugId>` doc cannot throw 22P02 here (#260).
@@ -521,17 +543,17 @@ export class PersistenceExtension implements Extension {
               content: tiptapJson,
               textContent: textContent,
               ydoc: ydocState,
-              lastUpdatedById: context.user.id,
+              lastUpdatedById: attribution.user.id,
               // Human stays the responsible author; these annotate the source.
               lastUpdatedSource,
-              lastUpdatedAiChatId: context?.aiChatId ?? null,
+              lastUpdatedAiChatId: attribution?.aiChatId ?? null,
               // #559 — the external-MCP api_key behind this content edit (null for
               // a human or the internal AI agent). The review flagged that apiKeyId
               // is LOST on the collab/page path unless it is threaded all the way
               // here from the connection context (set in authentication.extension);
               // without it the persona always falls back for the common page-edit
               // case. saveHistory copies this onto every snapshot of this page.
-              lastUpdatedApiKeyId: context?.apiKeyId ?? null,
+              lastUpdatedApiKeyId: attribution?.apiKeyId ?? null,
               contributorIds: contributorIds,
             },
             pageId,
@@ -563,12 +585,12 @@ export class PersistenceExtension implements Extension {
           updatedAt: new Date().toISOString(),
           // Provenance for a future live badge; 'user' for human edits.
           source: lastUpdatedSource,
-          lastUpdatedById: context?.user?.id,
-          lastUpdatedBy: context?.user
+          lastUpdatedById: attribution?.user?.id,
+          lastUpdatedBy: attribution?.user
             ? {
-                id: context.user?.id,
-                name: context.user?.name,
-                avatarUrl: context.user?.avatarUrl,
+                id: attribution.user?.id,
+                name: attribution.user?.name,
+                avatarUrl: attribution.user?.avatarUrl,
               }
             : undefined,
         }),
@@ -885,6 +907,9 @@ export class PersistenceExtension implements Extension {
 
     this.contributors.get(documentName).add(userId);
 
+    // CO-5 — remember who made the latest not-yet-stored edit (see the map).
+    this.lastEditContext.set(documentName, data.context);
+
     // Sticky agent marker: once an agent connection touches the document in the
     // coalescing window, keep it marked until the next snapshot consumes it.
     if (data.context?.actor === 'agent') {
@@ -897,6 +922,7 @@ export class PersistenceExtension implements Extension {
     this.contributors.delete(documentName);
     this.agentTouched.delete(documentName);
     this.intentionalClear.delete(documentName);
+    this.lastEditContext.delete(documentName);
     // #370 — drop the idle-burst marker with the other per-document maps so it
     // cannot accumulate across the process lifetime for never-manually-saved
     // pages. The pending idle job (if any) is a self-expiring BullMQ delayed job.
@@ -909,6 +935,13 @@ export class PersistenceExtension implements Extension {
     const userIds = [...contributorSet];
     this.contributors.delete(documentName);
     return userIds;
+  }
+
+  /** Read and clear the context of the latest not-yet-stored edit (CO-5). */
+  private consumeLastEditContext(documentName: string): any {
+    const editContext = this.lastEditContext.get(documentName);
+    this.lastEditContext.delete(documentName);
+    return editContext;
   }
 
   /** Read and clear the sticky agent-touched flag for this coalescing window. */

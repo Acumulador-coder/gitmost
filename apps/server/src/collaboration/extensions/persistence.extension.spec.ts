@@ -148,22 +148,60 @@ describe('PersistenceExtension.onStoreDocument — provenance precedence (#2)', 
     expect(sourceOf(pageRepo)).toBe('git-sync');
   });
 
-  it("keeps 'git-sync' for an explicit git-sync store even with a sticky agent marker (#14 loop-guard)", async () => {
+  it("keeps 'git-sync' for git-sync's own edits (#14 loop-guard)", async () => {
     const { ext, pageRepo } = build();
 
-    // An agent edit landed earlier in the coalescing window (sticky marker),
-    // then a git-sync writer performs the store. Red-team finding #14: an
-    // EXPLICIT current-write actor is authoritative for THIS write, so the
-    // store must stay 'git-sync' — otherwise the PageChangeListener loop-guard
-    // (keyed on lastUpdatedSource === 'git-sync') fails to recognize git-sync's
-    // own write and re-exports it. Explicit 'agent' still wins (see below); the
-    // sticky marker only promotes a plain human writer to 'agent'.
-    await ext.onChange(makeChangePayload('agent'));
+    // The merge's own updates reach onChange with no connection context (a
+    // direct-connection transact has no origin), so the store stays 'git-sync'
+    // and the PageChangeListener loop-guard recognizes git-sync's own write.
+    await ext.onChange({ documentName: DOCUMENT_NAME, context: {} } as any);
     await ext.onStoreDocument(
       makeStorePayload({ user: { id: 'svc-user' }, actor: 'git-sync' }),
     );
 
     expect(sourceOf(pageRepo)).toBe('git-sync');
+  });
+
+  it.each([
+    ['user', 'user'],
+    ['agent', 'agent'],
+  ])(
+    "CO-5: a %s edit not yet stored when the git-sync store runs is attributed to its author",
+    async (actor, source) => {
+      const { ext, pageRepo, pageHistoryRepo } = build({
+        lastUpdatedSource: 'user',
+      });
+
+      // The edit's debounced store was replaced by git-sync's immediate store,
+      // so that store carries the edit: crediting it to git-sync would hide it
+      // from the git export (loop-guard) and from its author.
+      await ext.onChange(makeChangePayload(actor));
+      await ext.onStoreDocument(
+        makeStorePayload({ user: { id: 'svc-user' }, actor: 'git-sync' }),
+      );
+
+      const written = pageRepo.updatePage.mock.calls[0][0];
+      expect(written.lastUpdatedSource).toBe(source);
+      expect(written.lastUpdatedById).toBe('user-1');
+      // Still a git merge over the human baseline: the boundary is pinned.
+      expect(pageHistoryRepo.saveHistory).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('CO-5: an edit already stored before the git-sync store is not re-attributed', async () => {
+    const { ext, pageRepo } = build();
+
+    await ext.onChange(makeChangePayload('user'));
+    await ext.onStoreDocument(
+      makeStorePayload({ user: { id: 'user-1' }, actor: 'user' }),
+    );
+    await ext.onStoreDocument(
+      makeStorePayload({ user: { id: 'svc-user' }, actor: 'git-sync' }),
+    );
+
+    const second = pageRepo.updatePage.mock.calls[1][0];
+    expect(second.lastUpdatedSource).toBe('git-sync');
+    expect(second.lastUpdatedById).toBe('svc-user');
   });
 
   it("tags 'agent' when the storing writer itself is the agent (no prior onChange)", async () => {

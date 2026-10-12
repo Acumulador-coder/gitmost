@@ -101,7 +101,11 @@ describe('RedisSyncExtension.readLiveIfLoaded (#647 §B)', () => {
       content: { type: 'doc', content: [] },
       hash: 'h1',
     });
-    expect(readLiveContent).toHaveBeenCalledWith('page.uuid-1', undefined);
+    expect(readLiveContent).toHaveBeenCalledWith(
+      'page.uuid-1',
+      undefined,
+      undefined,
+    );
     // Loaded here: no ownership probe needed.
     expect(pub.get).not.toHaveBeenCalled();
     expect(pub.set).not.toHaveBeenCalled();

@@ -3,11 +3,11 @@
  * `@docmost/git-sync` converter (not a mock). The package is now ESM, which jest
  * cannot `require()` nor `import()` without --experimental-vm-modules, so the
  * server jest config `moduleNameMapper`s `@docmost/git-sync` to its TS SOURCE and
- * strips the ESM `.js` import suffixes. ts-jest then type-checks that source under
- * the server's (looser) tsconfig and trips a benign narrowing; the global
- * `isolatedModules: true` on the ts-jest transform (apps/server/package.json)
- * makes it transpile-only so this spec loads. Full type-checking of the package
- * is still enforced by its own `tsc`/vitest gates and the server `tsc --noEmit`.
+ * strips the ESM `.js` import suffixes. ts-jest would type-check that source under
+ * the server's (looser) tsconfig and trip a benign narrowing, so the ts-jest
+ * transform (apps/server/package.json) excludes `packages/git-sync/**` from its
+ * diagnostics; every other source stays type-checked. Full type-checking of the
+ * package is enforced by its own `tsc`/vitest gates and the server `tsc --noEmit`.
  *
  * §13.1 IDEMPOTENCY GATE — the blocking gate for git-sync Phase B.
  *
@@ -446,6 +446,10 @@ const CORPUS: Record<string, any> = {
 };
 
 describe('git-sync converter §13.1 idempotency gate (editor-ext schema)', () => {
+  // markdownToProseMirror runs on a converter worker thread; its cold start
+  // (jsdom + the converter) is paid here, not inside the first case's timeout.
+  beforeAll(() => markdownToProseMirror(''), 120_000);
+
   for (const [name, original] of Object.entries(CORPUS)) {
     it(`round-trips losslessly: ${name}`, async () => {
       const { md, canonOriginal, canonNormalized } = await runGate(original);
