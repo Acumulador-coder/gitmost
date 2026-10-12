@@ -431,24 +431,19 @@ server.registerTool(
 );
 
 // Tool: search
-// INTENTIONAL per-transport divergence (not shared): the in-app `searchPages`
-// runs a semantic + keyword hybrid (RRF) with in-process access control and a
-// different schema; this transport is the #443 agent-lookup search — a hybrid
-// substring + full-text search that also returns each hit's location (`path`)
-// and a windowed `snippet`, so one call answers "where is it and what's in it".
-// The in-app hybrid-RRF search is deliberately NOT touched. Different behaviour
-// AND schema, so kept per-layer.
+// INTENTIONAL per-transport divergence (not shared), SCHEMA-ONLY: this tool and
+// the in-app `searchPages` run the SAME engine — the server's SearchService, as
+// the calling user (scoped to their spaces, page permissions applied). They
+// differ only in schema: this tool takes a limit up to 50 plus offset
+// pagination and returns the full envelope (path, snippet, score,
+// matchedTerms/matchedFields, total/hasMore/truncatedAtCap, related); the
+// in-app tool takes a limit of 1-20 and returns a compact
+// { results, related, total }. Different schema, so kept per-layer.
 //
 // STANDALONE-vs-STOCK-UPSTREAM: the client sends the opt-in `substring`/
 // `parentPageId`/`titleOnly` DTO fields. A stock upstream server validates the
 // DTO with `whitelist: true` and silently strips these unknown fields, so the
 // request degrades gracefully to plain FTS (no path/snippet, current shape).
-//
-// EE/TYPESENSE DEGRADATION (#443): on an instance whose SEARCH_DRIVER is
-// `typesense`, the server routes this request to the Typesense backend, which
-// does NOT implement agent-lookup — the substring/path/snippet/tiering is
-// ignored and the response degrades to plain Typesense FTS. The rich lookup
-// shape is only produced by the native Postgres search driver.
 server.registerTool(
   "search",
   {

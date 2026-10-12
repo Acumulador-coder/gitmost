@@ -38,10 +38,7 @@
 
 import { Node } from "@tiptap/pm/model";
 import { ChangeSet, simplifyChanges } from "@tiptap/pm/changeset";
-// Subpath import of recreateTransform. The editor-ext barrel (React, react-dom,
-// prosemirror-view) is loaded anyway through the schema from
-// @docmost/prosemirror-markdown; that is accepted because Docker and CI run Node 22.
-import { recreateTransform } from "@docmost/editor-ext/dist/lib/recreate-transform/index.js";
+import { recreateTransform } from "@docmost/editor-ext";
 import { docmostSchema } from "./docmost-schema.js";
 
 /** A single inserted/deleted change with its containing-block context. */
