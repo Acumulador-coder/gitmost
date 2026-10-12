@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-12
+
+Git sync: a space is mirrored to a git repository of Markdown files both ways, with a built-in
+`git clone` / `push` host, and edits from both sides merge block by block. The modes 0.96.0 kept
+behind switches are now the only ones: the wiki is always local-first and every AI-chat turn is a
+detached server-side run. Search reports real matches and similar pages separately, so it can say
+"not found". Large pages open and edit much faster. A release-wide review closed security and
+stability issues in share search, collaboration access checks, share links, the AI chat and git sync.
+
 ### Added
 
 - **Git sync: a space mirrored to a git repository of Markdown files, both ways.** Off by default:
@@ -496,7 +505,8 @@ the in-app AI agent chat, a RAG knowledge layer, an embedded MCP server and the 
 
 - CI builds to GHCR; the private EE submodule is dropped.
 
-[Unreleased]: https://github.com/vvzvlad/gitmost/compare/v0.96.0...HEAD
+[Unreleased]: https://github.com/vvzvlad/gitmost/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/vvzvlad/gitmost/compare/v0.96.0...v1.0.0
 [0.96.0]: https://github.com/vvzvlad/gitmost/compare/v0.94.0...v0.96.0
 [0.94.0]: https://github.com/vvzvlad/gitmost/compare/v0.93.0...v0.94.0
 [0.93.0]: https://github.com/vvzvlad/gitmost/compare/v0.91.0...v0.93.0
