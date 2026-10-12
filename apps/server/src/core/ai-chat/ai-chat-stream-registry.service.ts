@@ -82,6 +82,9 @@ export const RUN_STREAM_RETAIN_FINISHED_MS = 30_000;
  * the seed). The ring rotates on every confirmed persist; this cap only bounds
  * the un-persisted tail between rotations. Env-tunable via
  * AI_CHAT_RUN_STREAM_MAX_BUFFER_BYTES (bytes); a 0/invalid value falls back to this.
+ * The cap is memory-critical: a 32MB per-run ring (about 2x in V8 memory) plus a
+ * synchronous full-buffer write on attach OOM'd a 1GB container with a few long
+ * runs. Keep it at a few MB, and keep the attach tail written respecting drain.
  */
 export const AI_CHAT_RUN_STREAM_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 

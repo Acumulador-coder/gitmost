@@ -513,8 +513,8 @@ describe('git-sync converter §13.1 image layout attrs round-trip (align via sch
 
 // ---------------------------------------------------------------------------
 // HEADING text alignment round-trips. A heading's non-default `textAlign` is
-// exported as a styled `<hN style="text-align:…">` and re-parsed by the heading
-// + textAlign parseHTML on import.
+// exported as an ATX heading with a trailing `<!--attrs {"textAlign":…}-->`
+// comment (canon #9) and restored from that comment on import.
 // ---------------------------------------------------------------------------
 describe('git-sync converter §13.1 heading text alignment round-trips', () => {
   it('preserves a heading textAlign across the markdown round trip', async () => {

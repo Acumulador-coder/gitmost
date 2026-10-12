@@ -113,6 +113,9 @@ read = fetch, Manage = push; a non-member gets the same 404 as a missing space.
 
 ## Conventions
 
+- Feature design (a raw idea, «спроектируй», an issue to draft) starts with the
+  `orchestrator-feature-designer` skill. After a task ships, delete its plan from
+  `docs/backlog/<task>.md`.
 - Code comments in English. Never swallow an error or show a generic message: log it in full and
   show the specific reason (server: `describeProviderError` in `integrations/ai/ai-error.util.ts`).
 - Server TS is permissive (`strictNullChecks`, `noImplicitAny` off); follow that style.
@@ -136,6 +139,8 @@ read = fetch, Manage = push; a non-member gets the same 404 as a missing space.
   mirror of Gitea where CI runs, `upstream` is Docmost: never push to either.
 - Push credentials are in Vaultwarden (`rbw`) and the macOS keychain; pass one to a single push
   via `-c credential.helper=…`, never into the remote URL or git config.
+- Before a release, run the test-coverage, code-review and red-team orchestrator skills on
+  `develop` and fix their findings.
 - Release: on `develop`, bump `version` in the root, `apps/client` and `apps/server` `package.json`
   (not `packages/mcp`), turn `[Unreleased]` into `## [X.Y.Z] - YYYY-MM-DD` with its compare link,
   commit as `X.Y.Z`, tag it `vX.Y.Z` (lightweight), push both (the mirror carries the tag to GitHub

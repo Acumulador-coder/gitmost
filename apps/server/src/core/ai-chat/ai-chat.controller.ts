@@ -562,9 +562,10 @@ export class AiChatController {
         // deliberately NO Connection/Keep-Alive (hop-by-hop; Safari/HTTP2)
       });
       res.raw.flushHeaders?.();
-      // Write the tail in chunks respecting drain (not a synchronous blast, which
-      // was half the OOM). Frames the paused subscriber buffers meanwhile are
-      // drained by start() below; its cap is the backstop for a stalled socket.
+      // Write the tail in chunks respecting drain, not in one synchronous write
+      // (see the OOM note at AI_CHAT_RUN_STREAM_MAX_BUFFER_BYTES). Frames the paused
+      // subscriber buffers meanwhile are drained by start() below; its cap is the
+      // backstop for a stalled socket.
       const tail = await writeTailRespectingDrain(res.raw, attachment.replay);
       if (tail !== 'written') {
         // The socket closed mid-tail, or the reader never drained within the

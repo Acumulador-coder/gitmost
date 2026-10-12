@@ -1933,8 +1933,8 @@ export function convertProseMirrorToMarkdown(
               break;
             case "link": {
               // Mirror the top-level link path: emit the optional `title` too
-              // (the schema's link mark carries a `title` attr — see
-              // DocmostAttributes link globals — so <a title> round-trips). A
+              // (the schema's link mark — editor-ext LinkExtension over Tiptap
+              // Link — carries a `title` attr, so <a title> round-trips). A
               // link with a title inside a column/spanned cell would otherwise
               // drop it on re-import.
               const linkTitle = mark.attrs?.title;

@@ -12,9 +12,9 @@ import { httpStatusOf } from "@/lib/http-error";
 // the page CHROME (title, breadcrumbs, header) WITHOUT waiting for that page's
 // `/pages/info` round-trip, then reconciles with the server in the background.
 //
-// The chrome does still wait on `/me` (UserProvider renders nothing until the
-// current user resolves and it wraps all authenticated routing), so this removes
-// the SECOND of two sequential round-trips, not the first.
+// The `/me` wait is lifted separately: useCurrentUser seeds `initialData` from
+// the persisted current user, so UserProvider renders before `/me` answers. This
+// cache removes the remaining `/pages/info` wait.
 //
 // This is a deliberate CLONE of the sidebar tree boot-cache
 // (features/page/tree/atoms/tree-data-atom.ts): same `atomWithStorage` +
