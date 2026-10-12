@@ -170,9 +170,9 @@ git clone https://wiki.example.com/git/<space-slug>.git
 ```
 
 Anyone who can read the space can clone and fetch; pushing needs permission to edit its pages.
-A push that leaves conflict markers (`<<<<<<<` / `>>>>>>>`) in a page is held back until you
-resolve the conflict in git, unless **Auto-merge conflicts on push** is enabled for the space —
-then the marker lines are stripped and both sides' text goes to the page.
+A push based on an older `main` is refused as non-fast-forward: pull, merge locally and push
+again. A page edited both in the wiki and in git is merged block by block; in a block both
+sides changed, git's version wins and the wiki's text stays in page history.
 
 The repositories live in `GIT_SYNC_DATA_DIR` (default `<DATA_DIR or ./data>/git-sync`, relative
 to the server's working directory). In Docker that default is outside the `/app/data/storage`
