@@ -68,12 +68,11 @@ export class BoundChatDto {
 }
 
 /**
- * Move (or clear) the page->chat binding for the requesting user (#665). `pageId`
- * accepts a slugId OR a uuid (resolved server-side before touching a uuid column,
- * #312). `chatId: null` clears the binding ("New chat"); a string re-binds the
+ * Move (or clear) the page->chat binding for the requesting user. `pageId`
+ * accepts a slugId OR a uuid (resolved server-side before touching a uuid column).
+ * `chatId: null` clears the binding ("New chat"); a string re-binds the
  * page to that chat (history select). `@IsOptional()` accepts BOTH `null` and a
- * missing field (idiom: create-api-key.dto), so `null` reaches the service as an
- * explicit clear.
+ * missing field, so `null` reaches the service as an explicit clear.
  */
 export class BindPageDto {
   @IsString()

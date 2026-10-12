@@ -1,8 +1,7 @@
 import { McpClientsService } from './mcp-clients.service';
 
 /**
- * #204 (Phase 1, highest-value MCP gap) — external MCP client lease / refcount /
- * eviction lifecycle.
+ * External MCP client lease / refcount / eviction lifecycle.
  *
  * `toolsFor` hands the streaming turn a release handle; the real transports must
  * be closed EXACTLY once and only when (a) the cache entry has been evicted AND

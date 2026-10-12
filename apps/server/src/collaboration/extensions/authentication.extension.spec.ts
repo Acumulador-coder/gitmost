@@ -221,12 +221,9 @@ describe('AuthenticationExtension.onAuthenticate', () => {
   });
 
   it('is_agent user with NO claim → actor=agent (collab seam consults the signed identity)', async () => {
-    // Arch A regression guard: a flagged agent user editing page CONTENT over the
-    // collab websocket carries a plain COLLAB token (no actor claim). Before the
-    // shared resolveProvenance() wiring this seam derived actor from the claim
-    // alone, so such edits persisted as lastUpdatedSource='user' — drifting from
-    // the REST seam. The seam must now stamp 'agent' from the is_agent flag,
-    // matching jwt.strategy.
+    // A flagged agent user editing page content over the collab websocket
+    // carries a plain COLLAB token (no actor claim). The seam must stamp 'agent'
+    // from the is_agent flag via resolveProvenance(), matching jwt.strategy.
     userRepo.findById.mockResolvedValue(buildUser({ isAgent: true }));
     const ctx = await ext.onAuthenticate(buildData() as any);
 

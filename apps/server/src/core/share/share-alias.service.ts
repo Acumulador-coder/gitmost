@@ -57,7 +57,7 @@ export class ShareAliasService {
    *     `/l/<old>` link survives
    *   - name already points at pageId    -> no-op (idempotent)
    *   - name points at ANOTHER page      -> the "swap". Without confirmReassign
-   *     we throw 409 so the client can confirm. SECURITY (#495): the 409 reveals
+   *     we throw 409 so the client can confirm. SECURITY: the 409 reveals
    *     the current target's title ONLY when `user` may VIEW that page, and never
    *     its id — otherwise any member with one editable+shared page could iterate
    *     alias names with confirmReassign=false and map them to (id, title) of
@@ -258,14 +258,12 @@ export class ShareAliasService {
       alias,
       workspaceId,
     );
-    // SECURITY (#495): return ONLY the boolean availability. The previous shape
-    // leaked `currentPageId` — the id of whatever page the alias already targets —
-    // to ANY authenticated workspace member, with no view-permission check on that
-    // page. An attacker could enumerate alias names and map them to page ids they
-    // have no access to. The taken/free bit is all the "is this address free"
-    // probe needs. The reassign flow (setAlias 409) may surface the target's
-    // TITLE, but only behind a `validateCanView` on that page (see setAlias); it
-    // never returns the page id.
+    // SECURITY: return ONLY the boolean availability, never the id of the page
+    // the alias already targets — any authenticated workspace member can call
+    // this with no view-permission check on that page, so an id would let them
+    // map alias names to pages they cannot access. The reassign flow (setAlias
+    // 409) may surface the target's TITLE, but only behind a `validateCanView` on
+    // that page (see setAlias); it never returns the page id.
     return {
       alias,
       valid: true,

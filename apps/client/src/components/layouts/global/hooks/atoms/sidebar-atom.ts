@@ -9,9 +9,7 @@ export const APP_NAVBAR_ID = "app-shell-navbar";
 
 // Single source of truth for the navbar collapse breakpoint. The AppShell navbar
 // `breakpoint` and BOTH burger toggles' `hiddenFrom`/`visibleFrom` MUST use this
-// exact value: if they drift, the sidebar becomes unreachable on tablet widths
-// (the round-1 regression of #292). Kept here so the shell and the header share
-// one constant the compiler enforces, instead of three hand-synced string literals.
+// exact value: if they drift, the sidebar becomes unreachable on tablet widths.
 export const NAVBAR_COLLAPSE_BREAKPOINT = "md";
 
 // Space-sidebar resize bounds. Single source of truth: BOTH resizers

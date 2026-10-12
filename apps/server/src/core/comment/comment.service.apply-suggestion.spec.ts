@@ -26,7 +26,7 @@ const markJob = (generalQueue: any, action: string) =>
  * settle (ephemeral delete vs. resolve), audit, ws broadcast, and error mapping
  * that follow from it.
  *
- * Ephemeral rule (#329): once applied a suggestion DISAPPEARS (hard-delete +
+ * Ephemeral rule: once applied a suggestion DISAPPEARS (hard-delete +
  * strip the inline anchor mark) UNLESS the thread has replies, in which case it
  * is resolved to preserve the discussion. `hasChildren` selects the branch.
  */
@@ -122,8 +122,8 @@ describe('CommentService — applySuggestion', () => {
     );
 
     // Ephemeral: the redundant comment is hard-deleted (atomic-conditional) and
-    // its inline anchor mark removal is ENQUEUED (#399), no longer a sync gateway
-    // call. The gateway was only touched for the applyCommentSuggestion text edit.
+    // its inline anchor mark removal is ENQUEUED, not a sync gateway call. The
+    // gateway was only touched for the applyCommentSuggestion text edit.
     expect(commentRepo.deleteCommentIfChildless).toHaveBeenCalledWith('c-1');
     const del = markJob(generalQueue, 'delete');
     expect(del).toBeDefined();

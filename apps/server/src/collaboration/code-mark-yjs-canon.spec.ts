@@ -7,28 +7,24 @@ import { Code } from '@docmost/editor-ext';
 import { tiptapExtensions } from './collaboration.util';
 
 /**
- * #515 — the Yjs KEY canon of the inline `code` mark, on the SERVER schema that
- * actually reads and writes Y.Docs (`tiptapExtensions`, used by
- * persistence.extension.ts via TiptapTransformer.toYdoc / .fromYdoc).
+ * The Yjs KEY canon of the inline `code` mark, on the SERVER schema that reads
+ * and writes Y.Docs (`tiptapExtensions`, used by persistence.extension.ts via
+ * TiptapTransformer.toYdoc / .fromYdoc).
  *
- * y-prosemirror derives the Yjs text-attribute key from the mark's SELF-exclusion
- * (`marksToAttributes`, y-prosemirror 1.3.7):
+ * y-prosemirror derives the Yjs text-attribute key from the mark's
+ * self-exclusion (`marksToAttributes`, y-prosemirror 1.3.7):
  *
  *   const isOverlapping = !mark.type.excludes(mark.type);
  *   pattrs[isOverlapping ? `${name}--${hashOfJSON(mark.toJSON())}` : name] = mark.attrs;
  *
- * A mark that does not exclude itself is assumed to be able to occur SEVERAL times
- * on one text run with different attrs (like `comment`) and is keyed by a hash.
- * #515 originally shipped `excludes: ""` ("exclude nothing, not even myself"), which
- * dropped inline code into that branch: every write persisted `code--<hash>` — a
- * second canon for a mark that has no attrs at all. `excludes: "code"` (exclude only
- * myself, ProseMirror's default) keeps the #515 behavior — code coexists with bold /
- * italic / … — on the stock Yjs representation.
+ * A mark that does not exclude itself is keyed by a hash (like `comment`).
+ * `excludes: ""` would key inline code as `code--<hash>`; `excludes: "code"`
+ * (exclude only itself) lets code coexist with bold / italic / … on the stock
+ * `code` key.
  *
  * The markdown converter builds its schema from the same `documentExtensions`;
- * this spec pins the two things only the server can see:
- * the assembled `tiptapExtensions` schema, and the READ-BACK of documents that were
- * already persisted with the hashed key.
+ * this spec pins what only the server can see: the assembled `tiptapExtensions`
+ * schema, and the read-back of documents persisted with the hashed key.
  */
 
 const CODE_TEXT = 'inline code';
@@ -90,12 +86,9 @@ describe('#515 server `code` mark: Yjs key canon (tiptapExtensions)', () => {
 });
 
 describe('#515 back-compat: documents persisted with the hashed `code--<hash>` key', () => {
-  // The `code` mark exactly as it was while the `excludes: ""` regression was live, so
-  // the legacy key is REPRODUCED rather than hardcoded (a hand-copied hash would rot,
-  // and would not prove that the hashed key was ever real). This is a MINIMAL schema,
-  // not the full `tiptapExtensions` — equivalent for this purpose, because the hash
-  // input is `mark.toJSON()` (`{type:'code'}`, no attrs), independent of which other
-  // extensions are registered.
+  // The `code` mark with `excludes: ""`, so the hashed key is REPRODUCED rather
+  // than hardcoded. A minimal schema suffices: the hash input is `mark.toJSON()`
+  // (`{type:'code'}`, no attrs), independent of the other extensions.
   const legacyExtensions = [
     StarterKit.configure({
       codeBlock: false,

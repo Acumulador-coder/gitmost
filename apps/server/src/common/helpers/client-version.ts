@@ -22,8 +22,7 @@ export function resolveClientDistPath(): string {
  *
  * Fail-safe: any error (missing file, unreadable, bad JSON, non-string
  * version) yields `''`. The caller treats an empty version as "unknown" and
- * the whole version-coherence feature stays silently inert — existing deploys
- * without the file keep working unchanged.
+ * the version-coherence feature stays inert.
  */
 export function readClientBuildVersion(clientDistPath: string): string {
   try {

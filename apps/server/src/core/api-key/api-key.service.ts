@@ -122,7 +122,7 @@ export class ApiKeyService {
    * identical). An UNEXPECTED (infra) error is NOT caught here: it propagates so
    * the surface returns 5xx, never a masked 401 (deny-on-decision / 5xx-on-infra).
    * There is NO validate cache: it is 2–3 PK lookups (~1ms), two orders of
-   * magnitude cheaper than the bcrypt it replaces; a cache would only add a
+   * magnitude cheaper than a bcrypt check; a cache would only add a
    * Date-serialization trap and a revocation lag. Revocation is immediate.
    */
   async validate(
@@ -174,14 +174,13 @@ export class ApiKeyService {
   }
 
   /**
-   * #558 — deny-observability for validate(). Records EVERY definite deny to the
+   * Deny-observability for validate(). Records EVERY definite deny to the
    * prom counter (`api_key_auth_denied_total{reason}`, unthrottled) AND emits a
    * rate-limited operator WARN keyed on (apiKeyId, reason). Returns the bare,
    * generic `UnauthorizedException` the caller throws — the response body stays a
    * uniform 401 (anti-enumeration): the WARN is operator-log-only and never
-   * surfaced to the client. It replaces the visibility the deleted /mcp Basic
-   * brute-force limiter used to give, so a revoked/dead key hammering the
-   * endpoint is no longer totally silent.
+   * surfaced to the client, so a revoked/dead key hammering the endpoint is not
+   * silent.
    *
    * `apiKeyId` is safe to log here: validate() is only ever reached AFTER the JWT
    * signature was verified by the caller (jwt.strategy / the /mcp Bearer router),

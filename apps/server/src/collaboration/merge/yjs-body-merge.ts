@@ -7,26 +7,21 @@ import { diff3PlanWithConflicts } from './three-way-merge';
 import { buildLcsTable } from './lcs';
 
 /**
- * Block-level merge of an incoming (git) page body into a LIVE Yjs document,
- * replacing the previous full-body "delete everything + re-insert" write that
- * clobbered concurrent human edits on every sync (review #5 — "do the write as a
- * merge").
+ * Block-level merge of an incoming (git) page body into a LIVE Yjs document.
  *
- * Strategy: diff the two documents at TOP-LEVEL BLOCK granularity (an LCS over a
- * canonical structural serialization of each block) and apply only the minimal
- * insert/delete operations. Blocks that are byte-identical on both sides are
- * left UNTOUCHED in the live doc — so a human editing one paragraph is unaffected
- * when git changes a different paragraph, and an unchanged re-sync is a complete
- * no-op (zero Yjs operations). Yjs then CRDT-merges the minimal ops with any
- * concurrent edits.
+ * Diff the two documents at TOP-LEVEL BLOCK granularity (an LCS over a canonical
+ * structural serialization of each block) and apply only the minimal
+ * insert/delete operations. Blocks identical on both sides are left UNTOUCHED, so
+ * a human editing one paragraph is unaffected when git changes another, and an
+ * unchanged re-sync is a no-op (zero Yjs operations). Yjs then CRDT-merges the
+ * minimal ops with any concurrent edits.
  *
- * Merge mode: a THREE-WAY merge (live vs incoming vs base) runs whenever the
- * engine passes the body at the last export (`baseMarkdown` from
- * refs/docmost/last-export), so a block both sides changed is a genuine
- * conflict resolved deterministically (git wins that block; the prior state is
- * preserved in page history). Only when NO base is available (a brand-new file)
- * does it fall back to a 2-way merge (live vs incoming). Common cases — unchanged
- * resync and edits to DIFFERENT blocks — are lossless in both modes.
+ * A THREE-WAY merge (live vs incoming vs base) runs whenever the engine passes
+ * the body at the last export (`baseMarkdown` from refs/docmost/last-export): a
+ * block both sides changed is a conflict resolved to git, with the prior state
+ * preserved in page history. Without a base (a brand-new file) it falls back to
+ * a 2-way merge. Unchanged resyncs and edits to different blocks are lossless in
+ * both modes.
  */
 
 type XmlNode = Y.XmlElement | Y.XmlText | Y.XmlHook;
@@ -36,30 +31,21 @@ type XmlNode = Y.XmlElement | Y.XmlText | Y.XmlHook;
  * excluded from the block comparison key.
  *
  * `id` is the per-block UniqueID the editor stamps on every heading/paragraph
- * (and transclusionSource). It exists ONLY in the live Yjs document — a body
- * arriving from git is parsed from clean markdown, which carries no block ids
- * (`markdownToProseMirror` materializes `id: null`, which the Yjs transform then
- * drops). If `id` were part of the key, an UNCHANGED live block (id "abc123")
- * would never match the SAME block coming from git (no id), so the three-way
- * merge's LCS could not anchor on it. The merge would then treat every live
- * block as deleted-and-reinserted and, when an incoming block has no matching
- * anchor (e.g. content inserted at the very TOP of the page), RE-ADD a copy of
- * it on every sync cycle — a non-convergent, unbounded duplication loop
- * (start-of-document content duplicating each push/pull cycle).
+ * (and transclusionSource). It exists only in the live Yjs document — a body
+ * from git carries no block ids (`markdownToProseMirror` materializes
+ * `id: null`, which the Yjs transform drops). With `id` in the key an unchanged
+ * live block would never match its git twin, the LCS could not anchor on it,
+ * and an unanchored incoming block (e.g. content at the TOP of the page) would
+ * be re-added on every sync cycle.
  *
- * Excluding `id` makes blocks compare by CONTENT, so an unchanged block matches
- * across the git round-trip and the reconciliation is idempotent. Block identity
- * is still preserved in the merged output: `diff3Plan` keeps the LIVE block
- * INSTANCE (with its id) for an anchor — picks are by index, not by key — so the
- * stable Yjs block (and any in-flight human edit on it) stays put. This mirrors
- * `canonicalize.ts`, which already strips the regenerated block `id` from the
- * round-trip idempotency comparison for exactly the same reason.
+ * Block identity is still preserved in the output: `diff3Plan` keeps the LIVE
+ * block INSTANCE (with its id) for an anchor — picks are by index, not by key.
+ * `canonicalize.ts` strips the regenerated block `id` for the same reason.
  *
- * Known limitation (accepted trade-off of content-based matching): two GENUINELY
- * DISTINCT blocks whose content is byte-identical now collapse to the same content
- * key, so when git deletes one of the duplicates the LCS may drop the OTHER live
- * instance instead. The visible result is identical (one copy removed, one kept),
- * but a concurrent in-flight human edit on the dropped instance could be lost.
+ * Known limitation: two distinct blocks with byte-identical content share a key,
+ * so when git deletes one of them the LCS may drop the OTHER live instance. The
+ * visible result is identical, but an in-flight human edit on the dropped
+ * instance could be lost.
  */
 const VOLATILE_KEY_ATTRS = new Set(['id']);
 
@@ -75,18 +61,12 @@ const VOLATILE_KEY_ATTRS = new Set(['id']);
  * a pdf's `width: 800`, and so on. A body re-imported from git can carry null
  * instead (the converter defaults pdf and youtube sizes to null), and null attrs
  * are DROPPED by `y-prosemirror`'s toYdoc. Unnormalized, the same block would key
- * differently on the two sides, the three-way merge would anchor on NOTHING, and
- * the whole body would be RE-APPENDED every reconcile cycle — an unbounded
- * duplication loop with no client connected.
+ * differently on the two sides and the merge would anchor on nothing.
  *
- * Deriving the defaults from the actual schema normalizes ALL such attributes
- * generally (it is not another per-attribute denylist): any attribute whose value
- * equals the schema default — or is null/undefined — is dropped from the key, on
- * BOTH element attributes and the mark attributes inside each XmlText delta, so a
- * live block compares equal to its git-round-tripped twin and an unchanged resync
- * applies zero ops. Genuinely non-default values (a real `indent: 2`, an
- * `align: "left"`, a real `link.href`, a real highlight color) are content and
- * stay in the key, so real edits still diff and land.
+ * Any attribute equal to its schema default — or null/undefined — is dropped
+ * from the key, on element attributes and on the mark attributes inside each
+ * XmlText delta. Non-default values (a real `indent: 2`, `align: "left"`,
+ * `link.href`, highlight color) are content and stay in the key.
  */
 let memoSchema: Schema | null = null;
 let memoSchemaTried = false;
@@ -131,7 +111,7 @@ function isDefaultAttr(
  * Normalize one XmlText delta op's mark attributes: drop every mark-attr whose
  * value equals the mark's schema default (or is null/undefined), so the link
  * mark's materialized `internal: false`/`target: "_blank"` and a highlight's
- * `colorName: null` no longer diverge from a git round-trip that carries neither.
+ * `colorName: null` match a git round-trip that carries neither.
  * The text (op.insert) and genuinely-set mark attrs (a real `href`, a real
  * highlight color) are preserved verbatim. `attributes` maps markName -> mark
  * attrs object (or `true`/boolean for attr-less marks); each is handled safely.
@@ -347,8 +327,8 @@ export interface Merge3WayResult {
 /**
  * THREE-WAY block merge: reconcile `live` toward `target` using `base` (the
  * last-synced common ancestor) so a block only the human changed is KEPT and a
- * block only git changed is taken — instead of git's version always winning
- * (review #5). Conflicts (both changed the same block) resolve to git.
+ * block only git changed is taken. Conflicts (both changed the same block)
+ * resolve to git.
  *
  * Implementation: diff3Plan computes the merged block ORDER (picks from live or
  * target); we materialize that as a virtual target fragment and reuse the 2-way

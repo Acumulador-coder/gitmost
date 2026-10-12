@@ -4,8 +4,8 @@ import { Matches, ValidationOptions } from 'class-validator';
 /**
  * A page identity at the API boundary is EITHER the internal page UUID or the
  * public 10-char slugId (page.repo.findById matches a non-UUID input as a
- * slugId). Both arrive as bare strings, which is exactly how the two got swapped
- * silently (incident family #435). This regex pins the two accepted FORMATS so a
+ * slugId). Both arrive as bare strings, so they are easy to cross-wire. This
+ * regex pins the two accepted FORMATS so a
  * malformed / cross-wired identity (a truncated slug, a full URL, an email, an
  * id from another entity kind that isn't even shaped like either) is rejected at
  * the boundary instead of falling through to a confusing 404.

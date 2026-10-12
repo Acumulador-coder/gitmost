@@ -257,9 +257,10 @@ describe('computeWorkTime', () => {
 
   // F1 — cross-class double-count. On the DEFAULT config agentTGap (7m) < pIn+pOut
   // (10m), so a `work` session ending in an agent segment and a nearby separate
-  // `agent_only` run (gap in (7m,10m]) used to produce OVERLAPPING padded
-  // intervals — the same wall-clock counted into BOTH workMs and agentOnlyMs. The
-  // cross-class padding clip must make the two per-class unions disjoint.
+  // `agent_only` run (gap in (7m,10m]) would produce OVERLAPPING padded intervals
+  // without the clip — the same wall-clock counted into BOTH workMs and
+  // agentOnlyMs. The cross-class padding clip must make the two per-class unions
+  // disjoint.
   it('does NOT double-count wall-clock across work/agent_only (§F1)', () => {
     // user@0s ; agent(chatX)@60s (breaks into a work session with the human) ;
     // agent(chatY)@560s,590s (a separate agent_only run). Raw gap between the work

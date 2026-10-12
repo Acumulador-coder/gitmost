@@ -135,7 +135,7 @@ describe('VaultRegistryService', () => {
         ['receive.denyNonFastForwards', 'true'],
         ['http.receivepack', 'true'],
         ['http.uploadpack', 'true'],
-        // Security-critical (PR #119 review): a checkout of the vault never
+        // Security-critical: a checkout of the vault never
         // materializes a pushed symlink as a real link.
         ['core.symlinks', 'false'],
       ]);

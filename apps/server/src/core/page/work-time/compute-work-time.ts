@@ -160,7 +160,7 @@ function unionDuration(intervals: Array<[number, number]>): number {
 }
 
 /**
- * #395 core — estimate time worked on a page from its history timeline (§5).
+ * Estimate time worked on a page from its history timeline (§5).
  * Pure and deterministic: no DB, no clock, no I/O.
  *
  * Pipeline: normalize+dedup → collapse agent bursts → ONE sessionization pass
@@ -242,9 +242,9 @@ export function computeWorkTime(
   // padded interval then ends ≤ midpoint and the later one starts ≥ midpoint, so
   // the two are disjoint (they touch at most at the midpoint). This makes the
   // per-class unions (workMs / agentOnlyMs) cross-class-disjoint BY CONSTRUCTION
-  // — closing the double-count where a work session ending in an agent segment
-  // and a nearby agent_only session (gap in (agentTGap, pIn+pOut]) overlapped and
-  // were counted into both metrics (§5, §9). Within-class adjacency is left
+  // — so a work session ending in an agent segment and a nearby agent_only
+  // session (gap in (agentTGap, pIn+pOut]) are never counted into both metrics
+  // (§5, §9). Within-class adjacency is left
   // untouched: `unionDuration` already dedups it, and clipping there could perturb
   // the per-class metric value.
   for (let i = 1; i < built.length; i++) {

@@ -1,7 +1,7 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * #530 Search Phase B (PR-1): add the embedding FINGERPRINT column.
+ * Add the embedding FINGERPRINT column.
  *
  * The fingerprint is a deterministic id of the embedding configuration that
  * produced a row — model id + revision + query/doc prefix scheme + dimensions
@@ -9,14 +9,12 @@ import { type Kysely, sql } from 'kysely';
  * by the workspace's ACTIVE fingerprint so a revision bump or a prefix-scheme
  * change never fuses incompatible vectors into results.
  *
- * PR-1 scope: this migration only ADDS the column (nullable — existing rows stay
- * NULL = legacy) and the composite index the vector-candidate scan uses. The full
- * generational swap / GC lifecycle (target-fingerprint reindex, atomic flip,
- * old-generation GC) is deliberately deferred to PR-2.
+ * Adds the column (nullable — existing rows stay NULL) and the composite index
+ * the vector-candidate scan uses.
  *
- * Independent migration (per the #363 crash-loop net): it creates ONLY its own
- * objects and never touches another migration's tables/indexes, so a partial
- * failure cannot leave a shared object half-built.
+ * Independent migration: it creates only its own objects and never touches
+ * another migration's tables/indexes, so a partial failure cannot leave a
+ * shared object half-built.
  */
 export async function up(db: Kysely<any>): Promise<void> {
   // Nullable text column. Existing rows keep NULL (legacy generation) and are

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { SharedToolSpec } from './docmost-client.loader';
 
 /**
- * Deferred tool loading for the in-app AI chat (#332).
+ * Deferred tool loading for the in-app AI chat.
  *
  * The agent otherwise sends ALL ~41 tool definitions on EVERY model call every
  * step, bloating context. Instead we split the in-app tools into two tiers:
@@ -39,11 +39,11 @@ export interface ToolCatalogEntry {
 
 /**
  * CORE (always-active) in-app tool keys — 13 frequent/tiny tools + `searchInPage`
- * (#330) + `insertFootnote` (#410) + `getTree`/`getPageContext` (#443).
+ * + `insertFootnote` + `getTree`/`getPageContext`.
  * `searchInPage` is core because it is frequent for the editorial roles this
  * feature targets; `insertFootnote` is core so the footnote tool is NOT hidden
- * while its natural sibling `editPageText` is always active (that asymmetry is
- * exactly what pushed the agent to write literal `^[...]`). `getTree` and
+ * while its natural sibling `editPageText` is always active (otherwise the agent
+ * writes literal `^[...]`). `getTree` and
  * `getPageContext` are the single-call navigation/lookup tools — core so the
  * agent never has to loadTools just to orient itself. `loadTools` is active too
  * but is not a normal tool key (it is added to activeTools separately).
@@ -82,7 +82,7 @@ export const CORE_TOOL_SET: ReadonlySet<string> = new Set(CORE_TOOL_KEYS);
 export const LOAD_TOOLS_NAME = 'loadTools';
 
 /**
- * loadTools description — VERBATIM from issue #332. Tells the model that the
+ * loadTools description. Tells the model that the
  * catalog names EXIST, that loadTools only ACTIVATES them (callable next step),
  * and to load several at once.
  */
@@ -129,11 +129,6 @@ export const INLINE_TOOL_TIERS: Record<
   },
 
   // --- deferred inline ---
-  // NOTE: createPage, renamePage, movePage, deletePage, updatePageJson and
-  // exportPageMarkdown moved to @docmost/mcp's SHARED_TOOL_SPECS (#294); they
-  // carry their own deferred tier + catalogLine there. updatePageContent moved
-  // there too as updatePageMarkdown (#411) — a shared registry spec now, so it
-  // is no longer an inline tier entry.
   listSidebarPages: {
     tier: 'deferred',
     catalogLine:

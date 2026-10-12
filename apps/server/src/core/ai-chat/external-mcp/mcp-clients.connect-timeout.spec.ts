@@ -1,24 +1,20 @@
 import { McpClientsService } from './mcp-clients.service';
 
 /**
- * D1 — a HUNG MCP handshake must not POISON the per-workspace build cache.
+ * A HUNG MCP handshake must not POISON the per-workspace build cache.
  *
- * THE BUG (production hang): `createMCPClient` (inside the private `connect`) is
- * NOT bounded by a timeout and — like @ai-sdk/mcp's tool calls — its promise does
- * NOT settle on abort. A transient network blip mid-handshake made connect hang
- * FOREVER. Because getOrBuildEntry caches the build PROMISE, that never-settling
- * connect wedged EVERY later turn for the workspace (each awaited the same pending
- * build) — step_count stuck at 0, run row leaking 'running', chat 409ing forever.
+ * `createMCPClient` (inside the private `connect`) is not bounded by a timeout
+ * and, like @ai-sdk/mcp's tool calls, its promise does not settle on abort.
+ * getOrBuildEntry caches the build PROMISE, so a never-settling connect would
+ * wedge every later turn for the workspace (each awaits the same pending build).
+ * `connectWithTimeout` races `connect` against a SETTLING timeout
+ * (CONNECT_TIMEOUT_MS): on timeout it REJECTS, buildEntry records the server
+ * `ok:false`, and the build completes with that server skipped, so a subsequent
+ * `toolsFor` returns instead of hanging.
  *
- * THE FIX: `connectWithTimeout` races `connect` against a SETTLING timeout
- * (CONNECT_TIMEOUT_MS). On timeout it REJECTS, so buildEntry catches it, records
- * the server `ok:false`, and the build COMPLETES with that server skipped — the
- * cache is never poisoned and a subsequent `toolsFor` returns instead of hanging.
- *
- * REACHABILITY NOTE: the smallest network-free path that exercises the fix is to
- * spy on the private `connect` (the same harness the namespacing spec uses) —
+ * The test spies on the private `connect` (the namespacing spec's harness):
  * `connectWithTimeout` wraps exactly that call, so a never-resolving `connect`
- * models a never-settling `createMCPClient` precisely, without DNS/sockets.
+ * models a never-settling `createMCPClient` without DNS/sockets.
  *
  * Fake timers prove the timeout fires WITHOUT real waiting.
  */

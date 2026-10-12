@@ -59,9 +59,8 @@ export default function GlobalAppShell({
   // is never fetched.
   //
   // The `ai.chat` kill-switch must SUPPRESS mounting (gate BOTH the latch and the
-  // render). The latch is one-way, so gating the effect alone can never unmount:
-  // now that the open-state is persisted, a user who left the chat open reloads
-  // with `currentUser` hydrated from disk carrying a STALE `ai.chat: true`; the
+  // render). The latch is one-way: the open-state is persisted, so a reload
+  // hydrates `currentUser` from disk carrying a STALE `ai.chat: true`; the
   // child-first passive effects arm the latch on that stale tick before
   // UserProvider's `setCurrentUser(/me)` lands, so the render gate is what tears
   // the window down when the fresh `ai.chat: false` arrives. Suppress only on a
@@ -106,11 +105,9 @@ export default function GlobalAppShell({
   );
 
   useEffect(() => {
-    // Attach the global mousemove/mouseup only WHILE resizing (started on the
-    // handle's mousedown via startResizing → isResizing=true) and detach on
-    // mouseup (stopResizing → isResizing=false). Previously these listeners were
-    // attached for the whole app lifetime, so every mouse move over the app ran
-    // the resize handler.
+    // Attach the global mousemove/mouseup only WHILE resizing (startResizing sets
+    // isResizing on the handle's mousedown, stopResizing clears it on mouseup), so
+    // mouse moves outside a resize do not run the handler.
     // https://codesandbox.io/p/sandbox/kz9de
     if (!isResizing) return;
     window.addEventListener("mousemove", resize);

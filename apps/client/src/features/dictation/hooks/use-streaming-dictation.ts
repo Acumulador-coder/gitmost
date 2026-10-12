@@ -249,13 +249,10 @@ export function useStreamingDictation(
     resetLevel();
 
     // Create and resume the AudioContext NOW, inside the click gesture, before
-    // the (first-time-slow) model load below. A context first touched outside a
-    // user gesture stays "suspended" and the VAD audio worklet never runs — that
-    // is exactly why the first click did nothing and only the second (model
-    // already cached, so MicVAD.new was fast enough to create the context inside
-    // the gesture) started recording. We own this context and inject it into
-    // MicVAD (which then will NOT close it); it is reused across start/stop and
-    // closed only on unmount.
+    // the (first-time-slow) model load below: a context first touched outside a
+    // user gesture stays "suspended" and the VAD audio worklet never runs. We own
+    // this context and inject it into MicVAD (which then will NOT close it); it is
+    // reused across start/stop and closed only on unmount.
     const AudioCtor =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext?: typeof AudioContext })

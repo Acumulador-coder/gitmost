@@ -1,5 +1,5 @@
 /**
- * Unit tests for the in-app `viewImage` vision tool (#588, Phase B of #585).
+ * Unit tests for the in-app `viewImage` vision tool.
  *
  * Two layers are covered WITHOUT a live LLM/provider or a running Docmost:
  *   (1) `runViewImage` — the pure core: node resolution, attachment fetch, MIME
@@ -10,13 +10,13 @@
  *       execute wires straight into runViewImage.
  *
  * The SVG->PNG branch is exercised against a MOCKED rasterizer: the real
- * `@resvg/resvg-wasm` worker path is covered by rasterize.spec.ts (Phase A) and
+ * `@resvg/resvg-wasm` worker path is covered by rasterize.spec.ts and
  * is not runnable wherever the native wasm dep is absent, so here we assert only
  * the classification/wiring — that the SVG branch calls rasterizeSvgToPng, emits
  * mediaType 'image/png', and caches the returned PNG bytes.
  */
 
-// Mock the #586 rasterizer module the service imports (SAME relative id, since
+// Mock the rasterizer module the service imports (SAME relative id, since
 // both this spec and ai-chat-tools.service.ts live in tools/). Hoisted by jest.
 jest.mock('../../../integrations/ai/rasterize', () => ({
   rasterizeSvgToPng: jest.fn(),

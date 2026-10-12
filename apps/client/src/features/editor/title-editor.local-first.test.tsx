@@ -5,11 +5,11 @@ import { MemoryRouter } from "react-router-dom";
 import { Provider, createStore } from "jotai";
 
 /**
- * Ф7 (#643), part 2 — TitleEditor's two title-destroying operations (the
- * canonicalizing navigate and the force-save-on-unmount) are gated on the LIVE
- * page resolving, and `saveTitle` treats `undefined` like `null`. Mounted on the
- * #563 meta cache before `/pages/info`, an ungated version erases the title for
- * everyone (crit 3) or rewrites the URL to `untitled-undefined` (crit 4).
+ * TitleEditor's two title-destroying operations (the canonicalizing navigate
+ * and the force-save-on-unmount) are gated on the LIVE page resolving, and
+ * `saveTitle` treats `undefined` like `null`. Mounted on the meta cache before
+ * `/pages/info`, an ungated version erases the title for everyone or rewrites
+ * the URL to `untitled-undefined`.
  *
  * Tested through the REAL TitleEditor + real tiptap. Only the write edges are
  * faked so they are observable: the title mutation, the router navigate, and the
@@ -123,9 +123,9 @@ describe("Ф7 use-title-autofocus — the autofocus is gated on the LIVE page", 
   // a focused field, so the cached/empty title stays and a navigate-away persists
   // it over everyone's real title. The gate must suppress that focus.
   //
-  // Uses FAKE timers and advances PAST the 300ms delay — the previous test used
-  // real timers and never advanced them, so `isFocused` stayed false regardless of
-  // the guard (it passed even with the guard removed). These assert the focus CALL.
+  // Uses FAKE timers and advances PAST the 300ms delay: with real timers that
+  // never advance, `isFocused` stays false regardless of the guard. These assert
+  // the focus CALL.
   it("unresolved → advancing past the 300ms delay does NOT focus (the gate holds)", () => {
     vi.useFakeTimers();
     try {

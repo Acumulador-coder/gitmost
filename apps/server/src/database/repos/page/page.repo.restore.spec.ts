@@ -1,7 +1,7 @@
 import { PageRepo } from './page.repo';
 
 /**
- * Regression guard for #201: restorePage must disarm the temporary-note death
+ * restorePage must disarm the temporary-note death
  * timer by setting `temporaryExpiresAt = null` alongside the un-delete fields.
  * Otherwise a restored note whose frozen deadline already passed would be
  * re-trashed by the very next cleanup sweep. There is no real DB here — a

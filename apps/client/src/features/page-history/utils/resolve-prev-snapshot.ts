@@ -1,5 +1,5 @@
 /**
- * #370 — resolve the TRUE previous snapshot for a history item.
+ * Resolve the TRUE previous snapshot for a history item.
  *
  * The history panel can be filtered to "only versions" (manual/agent), but diff
  * and restore must always compare against the immediately-preceding snapshot in

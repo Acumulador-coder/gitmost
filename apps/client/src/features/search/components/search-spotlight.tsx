@@ -44,7 +44,7 @@ export function SearchSpotlight({ spaceId }: SearchSpotlightProps) {
 
   const { data: searchResults, isLoading, isError } = useUnifiedSearch(searchParams);
 
-  // #683 `search_full` — the user's search round-trip: a new non-empty debounced
+  // `search_full` — the user's search round-trip: a new non-empty debounced
   // query is the "submit" (mark), and the metric is settled when its results
   // render (isLoading → false). A brand-new query key starts as isLoading=true,
   // so the mark is set before the settle; a superseding query overwrites the mark

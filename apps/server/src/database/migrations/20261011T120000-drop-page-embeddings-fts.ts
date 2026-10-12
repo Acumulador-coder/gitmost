@@ -3,12 +3,9 @@ import { type Kysely, sql } from 'kysely';
 /**
  * Drop `page_embeddings.fts` and its GIN index.
  *
- * The column was the chunk-level lexical leg of the AI agent's own hybrid
- * retrieval (`PageEmbeddingRepo.hybridSearch`, migration 20260618T150000). The
- * agent's `searchPages` now runs the shared SearchService (#701), whose lexical
- * side is `pages.tsv`, and `hybridSearch` is gone — nothing reads `fts` any more,
- * while Postgres still computed the GENERATED STORED tsvector and maintained the
- * GIN index on every chunk insert.
+ * Nothing reads the column: the agent's `searchPages` uses the shared
+ * SearchService, whose lexical side is `pages.tsv`. Keeping it would only cost
+ * a GENERATED STORED tsvector and a GIN index update on every chunk insert.
  *
  * DROP COLUMN is a catalog change (no table rewrite), so `up` is cheap.
  * `down` restores the column on `ru_en`, the config migration 20260707T130000

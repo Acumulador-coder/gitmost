@@ -13,8 +13,8 @@ import {
  * Provider tests against a mocked remote source (no network). They cover the
  * happy read path (fetchIndex / fetchBundle) over the YAML catalog format, the
  * block-scalar `instructions` round-trip, the malformed-shape rejection, the
- * malformed-YAML rejection, rejection of non-http(s) sources (local sources are
- * gone), and — most importantly — the `^[a-z0-9-]+$` path-traversal guard that
+ * malformed-YAML rejection, rejection of non-http(s) sources, and — most
+ * importantly — the `^[a-z0-9-]+$` path-traversal guard that
  * runs BEFORE any path/URL is built. Fixtures are serialized with the same
  * `yaml` library the provider parses with (`stringifyYaml`), so the tests
  * exercise real YAML, not the JSON subset.
@@ -369,18 +369,15 @@ describe('AiAgentRolesCatalogProvider', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Pin the REAL shipped catalog files (not synthetic fixtures). The JSON->YAML
-  // migration was a hand conversion, so the realistic failure is a hand-edit
-  // error in one of the 5 content YAML files (the index + the four per-bundle/
-  // lang files: index.yaml plus bundles/{editorial,research}/{en,ru}.yaml) — a
-  // quote/colon in a description, a broken
-  // emoji/arrow, a block-scalar indent slip that silently changes or drops
-  // instructions). Nothing else in CI parses these files — `scripts/check.mjs`
-  // is not wired into any turbo/husky/CI step — so this is the only automated
-  // guard over the shipped content. We read them straight off disk, parse with
-  // the SAME options the provider uses (strict + maxAliasCount, see parseYaml in
-  // the provider), and run them through the provider's own type guards. A future
-  // edit that breaks a real file fails here.
+  // Pin the REAL shipped catalog files (not synthetic fixtures): index.yaml plus
+  // every per-bundle/per-language file it lists. The realistic failure is a
+  // hand-edit error — a quote/colon in a description, a broken emoji/arrow, a
+  // block-scalar indent slip that silently changes or drops instructions. Nothing
+  // else in CI parses these files (`scripts/check.mjs` is not wired into any
+  // turbo/husky/CI step), so this is the only automated guard over the shipped
+  // content. We read them straight off disk, parse with the SAME options the
+  // provider uses (strict + maxAliasCount, see parseYaml in the provider), and run
+  // them through the provider's own type guards.
   // ---------------------------------------------------------------------------
   describe('real shipped catalog files (the YAML migration must not break them)', () => {
     // Spec lives at apps/server/src/core/ai-chat/roles/catalog/; the catalog

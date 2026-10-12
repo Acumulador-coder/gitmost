@@ -13,7 +13,7 @@ vi.mock("@/main.tsx", async () => {
 
 import { mainExtensions } from "./extensions";
 
-// #515 — the Yjs KEY invariant of the inline `code` mark, pinned on the schema the
+// The Yjs KEY invariant of the inline `code` mark, pinned on the schema the
 // CLIENT ACTUALLY WRITES WITH.
 //
 // The canonical `Code` mark (`@docmost/editor-ext`) is what `documentExtensions` —

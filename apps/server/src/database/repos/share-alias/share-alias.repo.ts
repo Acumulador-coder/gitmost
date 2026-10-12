@@ -43,8 +43,8 @@ export class ShareAliasRepo {
 
   /**
    * The alias currently pointing at a page (for the share modal). The service
-   * enforces a single alias row per page, but legacy rows (pre-invariant) may
-   * still exist until self-healed; the explicit ORDER BY makes the "current"
+   * enforces a single alias row per page, but duplicate rows may still exist
+   * until self-healed; the explicit ORDER BY makes the "current"
    * choice DETERMINISTIC (newest wins — i.e. the most recently created address,
    * which is the one the user last asked for) instead of an arbitrary Postgres
    * heap order.

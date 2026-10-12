@@ -2,11 +2,9 @@
 //
 // The /git host authenticates `git clone/fetch/push` over HTTP **Basic** auth
 // (username/password), so it needs Basic-header parsing, a brute-force limiter,
-// a client-IP extractor and a credentials-failure classifier. These used to live
-// in `mcp-auth.helpers.ts`, but develop's #558 made /mcp accept Bearer api_key
-// ONLY and removed the Basic-auth surface from that module. git-sync still needs
-// them for git-over-HTTP, so the exact same helpers live here, owned by the /git
-// host. Kept deliberately framework-free (no Nest DI, no concrete services).
+// a client-IP extractor and a credentials-failure classifier. /mcp accepts only
+// a Bearer api_key, so these live here, owned by the /git host. Framework-free
+// (no Nest DI, no concrete services).
 import { UnauthorizedException } from '@nestjs/common';
 import { CREDENTIALS_MISMATCH_MESSAGE } from '../../../core/auth/auth.constants';
 

@@ -2,7 +2,7 @@ import { type Kysely, sql } from 'kysely';
 
 export async function up(db: Kysely<any>): Promise<void> {
   // Per-(chat,page) snapshot of the open page's Markdown at the END of the
-  // agent's previous turn (#274). The next turn diffs the CURRENT Markdown
+  // agent's previous turn. The next turn diffs the CURRENT Markdown
   // against this snapshot to detect edits the USER (or anyone else) made between
   // turns, and surfaces that unified diff as an ephemeral note in the system
   // prompt so the agent does not silently overwrite those edits. The agent's own

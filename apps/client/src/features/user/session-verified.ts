@@ -1,14 +1,13 @@
 import { getOfflineGraceMs } from "@/lib/config";
 
 /**
- * Network-independent session liveness (#640, part 6) — the PURE half.
+ * Network-independent session liveness — the PURE half.
  *
  * `sessionVerifiedAt` is stamped on EVERY successful `/me`. If more than
  * OFFLINE_GRACE (=30d = JWT_TOKEN_EXPIRES_IN) has elapsed since, the client must
  * refuse to draw ANY local content (chrome, tree, ydoc body) and purge it — even
- * offline, where a 401 never arrives. This is the ONLY safeguard that requires
- * no network event; it is what makes Ф5 safe ("offline forever" must not mean
- * "logged in forever").
+ * offline, where a 401 never arrives. This is the only safeguard that needs no
+ * network event ("offline forever" must not mean "logged in forever").
  *
  * This module is a LEAF (imports only config) so the boot-cache gates
  * (page-meta-cache-atom `isCacheUsable`, the ydoc-open gate in page-editor) can
@@ -45,7 +44,7 @@ export function getSessionVerifiedAt(): number | null {
  * Has the session exceeded OFFLINE_GRACE since the last verified `/me`?
  *
  * A NEVER-verified browser (no stamp) is NOT expired: there is no proven session
- * whose life to bound (fresh install / pre-feature content), and the first `/me`
+ * whose life to bound (fresh install), and the first `/me`
  * stamps it. The dangerous case this guards — a stamp set to T, then >30d
  * offline — always has a stamp.
  */

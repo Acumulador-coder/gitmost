@@ -2,25 +2,22 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 
 /**
- * Structural regression guard for #146 (PR #147).
+ * Structural regression guard for the caret/click-offset invariant in ALL THREE
+ * editable NodeViews: the two footnote views (FootnotesListView,
+ * FootnoteDefinitionView) AND the code block (CodeBlockView).
  *
- * Guards ALL THREE editable NodeViews touched by the fix: the two footnote views
- * (FootnotesListView, FootnoteDefinitionView) AND the code block (CodeBlockView).
- *
- * The caret/click-offset fix rests entirely on ONE invariant: in every editable
- * NodeView the editable `NodeViewContent` (contentDOM) must come FIRST in the
- * wrapper, with no non-editable (`contenteditable="false"`) element before it.
- * If a future edit reinserts chrome (separator, heading, marker, back-link,
- * language menu) ahead of the content, the macOS hit-testing bug returns
- * silently — and the symptom needs a real browser to see. This test pins the
- * DOM ORDER (the proxy that IS the fix) in the existing jsdom harness.
+ * In every editable NodeView the editable `NodeViewContent` (contentDOM) must
+ * come FIRST in the wrapper, with no non-editable (`contenteditable="false"`)
+ * element before it. Chrome (separator, heading, marker, back-link, language
+ * menu) ahead of the content brings back the macOS hit-testing bug silently —
+ * and the symptom needs a real browser to see. This test pins the DOM ORDER in
+ * the existing jsdom harness.
  *
  * We stub `@tiptap/react` so the views render as plain DOM and we can inspect
  * the child order our JSX produces — that order is exactly what regresses, and
  * it does not depend on a live editor. The stubbed `NodeViewContent` carries the
  * real `data-node-view-content` marker tiptap uses, so the assertion mirrors
- * production. This test passes on the fixed order and FAILS on the pre-fix order
- * (chrome-before-content).
+ * production.
  */
 vi.mock("@tiptap/react", () => ({
   NodeViewWrapper: ({ children, ...props }: any) => (

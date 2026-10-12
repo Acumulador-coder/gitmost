@@ -228,7 +228,7 @@ export class EnvironmentService {
   }
 
   /**
-   * Operator toggle for the public client-telemetry sink (#355). DEFAULT OFF:
+   * Operator toggle for the public client-telemetry sink. DEFAULT OFF:
    * the unauthenticated POST /api/telemetry/vitals endpoint + client vitals
    * collection are only wired when this is explicitly true. Kept SEPARATE from
    * METRICS_PORT (the server Prometheus half) because Grafana reads the
@@ -244,7 +244,7 @@ export class EnvironmentService {
   }
 
   /**
-   * #640 — network-independent session boundary. Mirrored into window.CONFIG so
+   * Network-independent session boundary. Mirrored into window.CONFIG so
    * the client refuses to draw ANY local content (chrome, tree, ydoc body) once
    * more than this has elapsed since the last successful `/me`, even offline.
    * Defaults to JWT_TOKEN_EXPIRES_IN (the server treats the session dead after
@@ -321,12 +321,11 @@ export class EnvironmentService {
   }
 
   /**
-   * Deferred tool loading for the in-app AI chat (#332). When enabled, the agent
+   * Deferred tool loading for the in-app AI chat. When enabled, the agent
    * sees a compact <tool_catalog> and only CORE tools + the loadTools meta-tool
    * are active each step; deferred tools (the fat/rare ones + all external MCP
-   * tools) load on demand. Defaults to ENABLED — the issue treats deferred
-   * loading as the new behavior; set AI_CHAT_DEFERRED_TOOLS=false to restore the
-   * old "all tools always active" behavior.
+   * tools) load on demand. Defaults to ENABLED; AI_CHAT_DEFERRED_TOOLS=false
+   * keeps all tools always active.
    */
   isAiChatDeferredToolsEnabled(): boolean {
     const enabled = this.configService
@@ -336,11 +335,10 @@ export class EnvironmentService {
   }
 
   /**
-   * Final-step lockdown for the in-app agent loop (#444). When ON (legacy), the
-   * LAST allowed step forces a text-only answer: tools are stripped
-   * (toolChoice:'none') and a synthesis instruction is appended. Defaults to OFF:
-   * stripping the tools mid-work triggered a token-loop degeneration incident
-   * (the model, robbed of its tools on the final step, emitted a 255KB block
+   * Final-step lockdown for the in-app agent loop. When ON, the LAST allowed
+   * step forces a text-only answer: tools are stripped (toolChoice:'none') and a
+   * synthesis instruction is appended. Defaults to OFF: stripping the tools
+   * mid-work can push the model into token-loop degeneration (a 255KB block
    * repeating a single token). With the toggle OFF the last step keeps its tools
    * and gets only a SOFT nudge to finish with a text summary; the universal
    * anti-babble guard is the token-degeneration detector instead. Enable this
@@ -354,14 +352,14 @@ export class EnvironmentService {
   }
 
   /**
-   * In-app AI-chat `viewImage` vision tool (#588, Phase B of #585). When enabled,
+   * In-app AI-chat `viewImage` vision tool. When enabled,
    * the agent gains a read-only `viewImage({pageId, node})` tool that delivers a
    * node's image to the model AS VISION on any provider: raster images
    * (png/jpeg/webp/gif) pass through as-is, SVG / draw.io diagrams are rasterized
-   * to PNG (Phase A #586). Defaults to OFF (fail-closed): with the flag off the
-   * tool is not registered and the per-step image injection never runs, so the
-   * agent surface is byte-identical to before. Set AI_CHAT_VIEW_IMAGE=true to
-   * enable. The public-share chat toolset (`forShare`) never gets this tool.
+   * to PNG. Defaults to OFF (fail-closed): with the flag off the tool is not
+   * registered and the per-step image injection never runs. Set
+   * AI_CHAT_VIEW_IMAGE=true to enable. The public-share chat toolset
+   * (`forShare`) never gets this tool.
    */
   isAiChatViewImageEnabled(): boolean {
     const enabled = this.configService
@@ -371,12 +369,11 @@ export class EnvironmentService {
   }
 
   /**
-   * Kill-switch for personal external MCP servers (#686). When enabled (the
+   * Kill-switch for personal external MCP servers. When enabled (the
    * default), members may attach their OWN external MCP servers via
    * `account/mcp-servers`, and the agent's toolset unions the workspace-admin
-   * servers with the calling user's personal ones. Defaults to ENABLED — the
-   * feature ships on. This is a SANCTIONED kill-switch, NOT a rollout fork:
-   * flip MCP_PERSONAL_SERVERS_ENABLED=false to disable the personal CRUD API
+   * servers with the calling user's personal ones. Set
+   * MCP_PERSONAL_SERVERS_ENABLED=false to disable the personal CRUD API
    * (the account endpoints answer 403) and drop personal rows from the agent
    * union, without a code revert. Kept as an explicit ENABLED flag rather than
    * a MAX=0 because getMcpPersonalServersMax discards <=0 (so a 0 cap cannot
@@ -390,7 +387,7 @@ export class EnvironmentService {
   }
 
   /**
-   * Per-user cap on personal external MCP servers (#686). A member may create
+   * Per-user cap on personal external MCP servers. A member may create
    * at most this many personal servers in a workspace; the personal-create path
    * takes a row lock, counts the user's existing rows, and rejects at the cap.
    * Defaults to 10. A non-integer or <= 0 value falls back to the default (see
@@ -418,7 +415,7 @@ export class EnvironmentService {
     // The image ships a per-branch default for this baked in at build time
     // (Dockerfile ARG AI_AGENT_ROLES_CATALOG_URL, set per-branch in CI), but it
     // is overridable at runtime via the env var (this getter returns that
-    // runtime value). Local-filesystem sources are no longer supported.
+    // runtime value). Local-filesystem sources are not supported.
     // Empty/unset => the catalog is unavailable (the provider returns 502).
     // This is INFRA config (where the catalog lives), not provider/model
     // config, so an env var is appropriate.
@@ -457,7 +454,7 @@ export class EnvironmentService {
       .filter(Boolean);
   }
 
-  // --- git-sync (issue #194 §7.2) -------------------------------------------------
+  // --- git-sync ----------------------------------------------------------------
 
   /** Global master switch for the git-sync control plane (default false). */
   isGitSyncEnabled(): boolean {

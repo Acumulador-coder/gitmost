@@ -1,9 +1,9 @@
 /**
  * Single source of truth for the Lucide-icon reference stored in `pages.icon`
- * and `aiAgentRoles.emoji` (#610).
+ * and `aiAgentRoles.emoji`.
  *
- * Both columns keep their existing name and `varchar` type — the value is now a
- * JSON string of an {@link IconRef} instead of a native emoji character:
+ * Both columns keep their name and `varchar` type; the value is a JSON string
+ * of an {@link IconRef} instead of a native emoji character:
  *   - `pages.icon`         : `{"name":"rocket","color":"blue"}` (color = palette token)
  *   - `aiAgentRoles.emoji` : `{"name":"rocket"}` (no color — the avatar bg is a gradient)
  *
@@ -79,11 +79,10 @@ export function pageIconBg(color: PageIconColor): string {
 /*
  * Why the glyph tone is a per-scheme FORK while the background above is not:
  * in the light scheme Mantine's `--mantine-color-<c>-light-color` IS shade `-6`,
- * the very hue now mixed into the tile at 35%. Glyph and tile would then be the
- * same color at two alphas, so raising the tint necessarily washes the glyph out
- * — measured, that pairing lowered glyph-on-tile contrast for all 13 tokens and
- * left only 4 of them above 3:1 (yellow 1.41, teal 1.74, lime 1.51 among the 9
- * that failed). The two tones below were measured over the real surfaces (light
+ * the very hue mixed into the tile at 35%. Glyph and tile would then be the
+ * same color at two alphas and the glyph washes out — measured, that pairing
+ * left only 4 of 13 tokens above 3:1 (yellow 1.41, teal 1.74, lime 1.51 among the
+ * 9 that failed). The two tones below were measured over the real surfaces (light
  * sidebar #f6f7f9 and its gray-3 hover row, dark sidebar --mantine-color-dark-8
  * and its dark-5 hover) against the real palettes, including the custom
  * blue/red tuples in `theme.ts`: light 3.41…11.06, dark 6.20…8.01 — all 13
@@ -97,12 +96,11 @@ export function pageIconBg(color: PageIconColor): string {
  * styles, so a native `light-dark()` in a `style={{}}` would depend on browser
  * support instead of the repo-wide mechanism every other fork uses.
  *
- * TRADE-OFF, stated honestly: this tile no longer picks up `theme.ts`'s WCAG
- * overrides of `--mantine-color-*-light-color` (red → red-7, green → #1B5E20,
- * gray → gray-7). Those were calibrated for the OLD 10% background and are moot
- * on a 35% tint. The new tones are darker than all of them except green, which
- * measures 4.44:1 here versus the override's ~6.8:1 on the old washed-out tile —
- * still comfortably above the 3:1 bar that applies to a non-text glyph.
+ * TRADE-OFF: this tile does not pick up `theme.ts`'s WCAG overrides of
+ * `--mantine-color-*-light-color` (red → red-7, green → #1B5E20, gray → gray-7),
+ * which were calibrated for a 10% background. The tones here are darker than
+ * all of them except green, which measures 4.44:1 — above the 3:1 bar for a
+ * non-text glyph.
  */
 
 /**

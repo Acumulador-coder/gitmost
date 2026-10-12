@@ -64,7 +64,7 @@ export class AuthenticationExtension implements Extension {
     }
   }
 
-  // #709 — re-check access on an already-authenticated connection. A warm
+  // Re-check access on an already-authenticated connection. A warm
   // (parked) client session never reconnects, so on a warm return the client
   // re-sends its token and hocuspocus routes it here. The same authorization
   // runs on a COPY of the payload with a fresh connectionConfig: the payload's
@@ -121,15 +121,13 @@ export class AuthenticationExtension implements Extension {
       throw new UnauthorizedException('Invalid collab token');
     }
 
-    // #501 — fail-closed api-key laundering guard. A collab token minted by an
-    // api-key principal carries principal='api_key' + apiKeyId; re-check the key
-    // on connect so a REVOKED key gets NO new collab connections (a collab token
-    // outlives its 24h, but a revoked key can no longer open fresh ones). An
-    // api-key token missing its apiKeyId is malformed → reject. A claimless token
-    // (no recognized principal) is trusted only DURING the rollout grace window
-    // (a legacy pre-rollout session token, which api keys could never mint);
-    // once the grace has elapsed every valid token must carry the discriminator,
-    // so a claimless one is a bug and is rejected (not silently trusted for 24h).
+    // Fail-closed api-key guard. A collab token minted by an api-key principal
+    // carries principal='api_key' + apiKeyId; re-check the key on connect so a
+    // REVOKED key gets no new collab connections. An api-key token missing its
+    // apiKeyId is malformed → reject. A claimless token (no recognized
+    // principal) is trusted only during the rollout grace window; after it,
+    // every valid token must carry the discriminator and a claimless one is
+    // rejected.
     const principal = jwtPayload.principal;
     if (principal === 'api_key') {
       if (!jwtPayload.apiKeyId) {
@@ -216,17 +214,15 @@ export class AuthenticationExtension implements Extension {
 
     this.logger.debug(`Authenticated user ${user.id} on page ${pageId}`);
 
-    // Carry the agent-edit provenance into the hocuspocus connection context
-    // (§6.6 / §15 C2), derived via the SAME resolver as the REST seam so the two
-    // can't drift. An is_agent service account (e.g. the MCP bot) is attributed
-    // 'agent' here too, so its page-content edits over collab persist as
-    // lastUpdatedSource='agent' (#143 review Arch A) — not just its REST writes.
-    // #559 — a collab token minted by an api-key principal (an EXTERNAL MCP agent)
-    // carries principal='api_key' + apiKeyId (verified above) but no actor claim;
-    // threading `jwtPayload.apiKeyId` makes resolveProvenance stamp actor='agent'
-    // (even for an ordinary user's personal key) and carries the key id into the
-    // context so persistence.extension can persist last_updated_api_key_id and
-    // the page shows the "External MCP" persona named after the key.
+    // Carry the agent-edit provenance into the hocuspocus connection context,
+    // derived via the same resolver as the REST seam so the two can't drift. An
+    // is_agent service account (e.g. the MCP bot) is attributed 'agent' here too.
+    // A collab token minted by an api-key principal (an external MCP agent)
+    // carries principal='api_key' + apiKeyId but no actor claim; passing
+    // `jwtPayload.apiKeyId` makes resolveProvenance stamp actor='agent' (even for
+    // an ordinary user's personal key) and carries the key id into the context,
+    // so persistence.extension persists last_updated_api_key_id and the page
+    // shows the "External MCP" persona named after the key.
     // The human collab path carries no claim and is not flagged → actor='user'.
     const provenance = resolveProvenance(user, jwtPayload, jwtPayload.apiKeyId);
     return {

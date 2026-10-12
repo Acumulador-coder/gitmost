@@ -1,6 +1,6 @@
 // Unit tests for SpaceLockService in ISOLATION. The lock is exercised against a
 // fake redis (mock `set`/`eval`) and we assert the exact ARGUMENTS passed to
-// redis — the test-coverage gap this refactor (PR #119 #2) closes: acquire uses
+// redis: acquire uses
 // `SET ... PX <ttl> NX`, release uses a DEL-CAS Lua, and the heartbeat refresh
 // uses a PEXPIRE-CAS Lua, all keyed by the same private instanceId.
 import { Logger } from '@nestjs/common';

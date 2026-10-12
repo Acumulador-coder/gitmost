@@ -65,20 +65,16 @@ export function useTreeMutation(spaceId: string): UseTreeMutation {
       if (!source) return;
       const oldParentId = source.parentPageId ?? null;
 
-      // Child-loss guard (#523, twin of #525's realtime `insertByPosition` fix).
-      // We no longer auto-expand the make-child target on drop, so the old
-      // `onToggle(target, true)` — which was ALSO the only trigger of the
-      // corrective lazy-load — is gone. `treeModel.move` materialized
-      // `target.children = [source]` (only the moved node); if the target is an
-      // UNLOADED branch (server has children but none are loaded here), keeping
-      // that partial `[source]` list would defeat the lazy-load gate and hide the
-      // target's OTHER server children (the #159 #1 data-loss class). So for an
-      // unloaded make-child target, build the optimistic tree WITHOUT
-      // materializing source under it: just remove source from its old parent and
-      // flag the target `hasChildren`. The gate stays armed and a later manual
-      // expand fetches the FULL set (incl. the moved page, which the awaited
-      // server move persists). Predicate is the gate's (`isUnloadedBranch`), NOT
-      // `insertByPosition`'s old `=== undefined` (canonical unloaded is `[]`).
+      // Child-loss guard. The make-child target is not auto-expanded on drop.
+      // `treeModel.move` materializes `target.children = [source]`; if the
+      // target is an UNLOADED branch (server has children, none loaded here),
+      // that partial list would defeat the lazy-load gate and hide the target's
+      // other server children. So for an unloaded make-child target, build the
+      // optimistic tree WITHOUT materializing source under it: remove source
+      // from its old parent and flag the target `hasChildren`. A later expand
+      // fetches the full set (incl. the moved page, persisted by the awaited
+      // server move). The predicate is the gate's own (`isUnloadedBranch`);
+      // canonical unloaded is `[]`.
       const target =
         op.kind === "make-child"
           ? (treeModel.find(before, op.targetId) as SpaceTreeNode | null)
@@ -164,10 +160,9 @@ export function useTreeMutation(spaceId: string): UseTreeMutation {
       // path only.
       measureOperation("tree_dragdrop");
 
-      // Realtime broadcast is now server-authoritative: the server emits
-      // `moveTreeNode` to the space room on PAGE_MOVED. The old client relay
-      // (emit + setTimeout(50)) was removed; the optimistic local update above
-      // stays for instant feedback to the author.
+      // Realtime broadcast is server-authoritative: the server emits
+      // `moveTreeNode` to the space room on PAGE_MOVED; the optimistic local
+      // update above gives the author instant feedback.
     },
     [setData, store, movePageMutation, spaceId, t],
   );
@@ -240,11 +235,10 @@ export function useTreeMutation(spaceId: string): UseTreeMutation {
         return treeModel.insert(prev, parentId, newNode, lastIndex);
       });
 
-      // Realtime broadcast is now server-authoritative: the server emits
-      // `addTreeNode` to the space room on PAGE_CREATED. The old client relay
-      // (emit + setTimeout(50)) was removed; the optimistic insert above stays
-      // for instant feedback to the author (the server event is idempotent and
-      // a no-op for the author whose node already exists).
+      // Realtime broadcast is server-authoritative: the server emits
+      // `addTreeNode` to the space room on PAGE_CREATED; the optimistic insert
+      // above gives the author instant feedback (the server event is idempotent
+      // and a no-op for the author whose node already exists).
       const pageUrl = buildPageUrl(
         spaceSlug,
         createdPage.slugId,
@@ -318,10 +312,9 @@ export function useTreeMutation(spaceId: string): UseTreeMutation {
           navigate(getSpaceUrl(spaceSlug));
         }
 
-        // Realtime broadcast is now server-authoritative: the server emits
-        // `deleteTreeNode` to the space room on PAGE_SOFT_DELETED. The old
-        // client relay (emit + setTimeout(50)) was removed; the optimistic
-        // removal above stays for instant feedback to the author.
+        // Realtime broadcast is server-authoritative: the server emits
+        // `deleteTreeNode` to the space room on PAGE_SOFT_DELETED; the
+        // optimistic removal above gives the author instant feedback.
       } catch (error) {
         console.error("Failed to delete page:", error);
       }

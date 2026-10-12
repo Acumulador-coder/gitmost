@@ -3,7 +3,7 @@ import { renderChatMarkdown } from "@/features/ai-chat/utils/markdown.ts";
 
 /**
  * Tests for the internal-link neutralization used by the anonymous public
- * share. Now that the share renders the assistant's MARKDOWN (not plain text),
+ * share. Because the share renders the assistant's MARKDOWN (not plain text),
  * internal app links (e.g. `[page](/p/{uuid})`) would otherwise become clickable
  * `<a href="/p/...">`, leaking internal UUIDs/structure and linking to auth-gated
  * routes. With the flag ON those links are made inert (href removed) while the

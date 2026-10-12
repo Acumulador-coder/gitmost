@@ -1,7 +1,7 @@
 /**
  * Pure access-control derivation for the anonymous public-share assistant.
  *
- * Extracted (mirroring `evaluateShareAssistantFunnel`) so the real access-control
+ * Kept separate (like `evaluateShareAssistantFunnel`) so the real access-control
  * JOIN POINT — "does this (shareId, pageId) pair actually resolve to a usable,
  * non-restricted page inside THIS share?" — is unit-testable without the full
  * Nest/DB graph. The controller performs the async lookups (getShareForPage,
@@ -10,7 +10,7 @@
  * logic so it can be exercised directly against the red-team boundaries
  * (cross-share id swap, restricted descendant, out-of-tree page).
  *
- * Behavior is IDENTICAL to the inlined controller logic it replaces:
+ * The decision:
  *   shareUsable = resolvedShare matches the requested shareId AND sharing allowed
  *   pageInShare = shareUsable AND the opened page has NO restricted ancestor
  *                 (an unresolvable opened page fails closed -> restricted=true)

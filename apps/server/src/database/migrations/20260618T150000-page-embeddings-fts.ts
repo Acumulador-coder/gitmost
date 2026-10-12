@@ -3,12 +3,10 @@ import { type Kysely, sql } from 'kysely';
 /**
  * Chunk-level lexical index for HYBRID retrieval (RRF) over `page_embeddings`.
  *
- * The agent's retrieval used to be either pure full-text (loopback REST over
- * `pages.tsv`) OR pure vector (cosine over `page_embeddings.embedding`). Hybrid
- * retrieval fuses BOTH rankings with Reciprocal Rank Fusion so exact keyword /
- * identifier matches AND semantic matches both surface. The vector side already
- * exists; this migration adds the missing LEXICAL side AT CHUNK GRANULARITY so
- * both CTEs of the fused query rank the SAME chunk rows.
+ * Hybrid retrieval fuses a lexical and a vector ranking with Reciprocal Rank
+ * Fusion so exact keyword / identifier matches and semantic matches both
+ * surface. This migration adds the lexical side at chunk granularity so both
+ * CTEs of the fused query rank the same chunk rows.
  *
  * `fts` is a GENERATED ALWAYS ... STORED `tsvector` built from `content` with
  * the SAME text-search config as `pages.tsv`: `to_tsvector('english',

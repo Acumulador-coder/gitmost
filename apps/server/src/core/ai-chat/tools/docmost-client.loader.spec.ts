@@ -13,7 +13,7 @@ import { dirname, join, relative, sep } from 'node:path';
 
 import { computeSrcRegistryStamp } from './docmost-client.loader';
 
-// The exact message the loader throws on a build/src skew (issue #447). Kept as a
+// The exact message the loader throws on a build/src skew. Kept as a
 // literal here so a reworded prod message reddens this test (the message is a
 // developer-facing contract: it tells them how to fix it).
 const STALE_BUILD_MESSAGE =

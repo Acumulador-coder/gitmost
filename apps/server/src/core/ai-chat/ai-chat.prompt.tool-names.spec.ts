@@ -8,25 +8,17 @@ import { SHARED_TOOL_SPECS } from '../../../../../packages/mcp/src/tool-specs';
 import { INLINE_TOOL_TIERS, LOAD_TOOLS_NAME } from './tools/tool-tiers';
 
 /**
- * #448 guard — a nonexistent tool name in ai-chat.prompt.ts must fail a test.
+ * A nonexistent tool name in ai-chat.prompt.ts must fail a test. The prompt
+ * refers to some tools by name in its guidance notes (e.g. PAGE_CHANGED_NOTE
+ * names getPage, editPageText, patchNode, insertNode, deleteNode).
  *
- * The in-app prompt refers to a handful of tools BY NAME in its guidance notes
- * (e.g. PAGE_CHANGED_NOTE tells the agent to re-read via getPage and edit via
- * editPageText/patchNode/insertNode/deleteNode). Before #448 those names were
- * hard-coded inline with NO guard, so renaming a tool left the agent stale
- * instructions and nothing failed.
+ *  1. Every value of the exported `PROMPT_TOOL_NAMES` must be a real in-app tool.
+ *  2. A scan of the two guidance-note string literals catches a bare tool-name
+ *     token added directly: every camelCase token in those notes must be a real
+ *     tool name or an allowlisted ordinary word.
  *
- * APPROACH — substitution + a precise source scan:
- *  1. The names now flow through the exported `PROMPT_TOOL_NAMES` const; this
- *     test asserts every value there is a REAL in-app tool.
- *  2. A precise scan of the two guidance-note string literals in the source
- *     catches any BARE tool-name token added directly (bypassing the const):
- *     every camelCase token in those notes must be either a real tool name or an
- *     explicitly-allowlisted ordinary English/camelCase word.
- *
- * The scan is deliberately narrow (only the guidance notes, only camelCase
- * tokens) so it never false-positives on prose, and the allowlist of non-tool
- * words is tiny and explicit.
+ * The scan is narrow (only the guidance notes, only camelCase tokens) so it
+ * never false-positives on prose.
  */
 
 // The authoritative set of real in-app tool names: shared-registry inAppKeys +

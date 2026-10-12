@@ -71,8 +71,7 @@ interface BuildOptions {
   vaultOverrides?: Record<string, unknown>;
   /**
    * The per-space opt-in flag `runOnce` reads via `isSpaceGitSyncEnabled`
-   * (`executeTakeFirst` on the `enabled`-aliased query; commit c838fdee added
-   * it). Default
+   * (`executeTakeFirst` on the `enabled`-aliased query). Default
    * `true` so a build() space passes the per-space gate and the cycle proceeds.
    * Set `false` to model a space that did NOT opt in (skipped:'space-not-enabled').
    */
@@ -592,8 +591,8 @@ describe('GitSyncOrchestrator', () => {
     });
   });
 
-  // A failing space used to be invisible: pollTick dropped runOnce's status and
-  // /status reported only config, while runOnce logged an ERROR every 15 s.
+  // A failing space must be visible in /status and the metrics, not only as an
+  // ERROR logged on every poll.
   describe('per-space health, transition logging and metrics', () => {
     const incCycle = incGitSyncCycle as unknown as AnyMock;
     const setFailing = setGitSyncFailingSpaces as unknown as AnyMock;

@@ -138,9 +138,8 @@ describe("messageSignature", () => {
  * EXACTLY". For each kind, mutating a field the render body DRAWS must flip the
  * signature. If a new visible field is rendered without being added here AND to
  * the signature, the corresponding assertion below should fail — that is the
- * guard. (This intentionally stops short of the render-descriptor refactor:
- * adding a part kind or a visible field still requires a human to extend both
- * the signature and this block.)
+ * guard. Adding a part kind or a visible field requires extending both the
+ * signature and this block.
  */
 describe("messageSignature ↔ render coupling (per visible part kind)", () => {
   describe("text part — render draws part.text (MarkdownPart text={part.text})", () => {

@@ -3,7 +3,7 @@ import { roleLaunchMessage, shouldResetRolePicked } from "./role-launch.ts";
 
 const DEFAULT = "Take a look at the current document";
 
-// Covers the three-way handleRolePick behavior (issue #149) without mounting the
+// Covers the three-way handleRolePick behavior without mounting the
 // chat-thread component — the logic lives in these pure helpers.
 describe("roleLaunchMessage", () => {
   it("autoStart=true + custom launchMessage -> the trimmed custom text", () => {
@@ -46,10 +46,9 @@ describe("roleLaunchMessage", () => {
   });
 });
 
-// Regression guard for #149: the "picked, not sent" flag must reset when the
-// user starts a fresh chat after an autoStart=false pick. On pre-fix code there
-// was no reset, so the flag stayed stuck and the role cards never returned —
-// this is exactly the `true` case below (which the old code never acted on).
+// The "picked, not sent" flag must reset when the user starts a fresh chat
+// after an autoStart=false pick; otherwise the flag stays stuck and the role
+// cards never return (the `true` case below).
 describe("shouldResetRolePicked", () => {
   it("resets when the thread is empty and the bound role was cleared (New chat)", () => {
     // chatId still null, roleId cleared by the parent, flag stuck -> reset.

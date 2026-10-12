@@ -1,50 +1,37 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * #348 — targeted hot-path indexes.
+ * Targeted hot-path indexes.
  *
- * 1. GIN trigram indexes for `/search/suggest`. That endpoint runs a
- *    leading-wildcard `LOWER(f_unaccent(col)) LIKE '%q%'` per keystroke, which
- *    is a sequential scan without a trigram index. The index EXPRESSIONS below
- *    are `LOWER(f_unaccent(title|name))`, matching the predicates in
- *    search.service.ts exactly so the planner uses them (verified with EXPLAIN:
- *    the suggest predicate resolves to a Bitmap Index Scan on these indexes).
+ * 1. GIN trigram indexes for `/search/suggest`, which runs a leading-wildcard
+ *    `LOWER(f_unaccent(col)) LIKE '%q%'` per keystroke. The index EXPRESSIONS
+ *    match the predicates in search.service.ts exactly so the planner uses them
+ *    (EXPLAIN: Bitmap Index Scan).
  *
- *    IMMUTABLE-wrapper fix (required for the index to build): `f_unaccent` was
- *    defined as `SELECT unaccent('unaccent', $1)` (the two-arg, dictionary-named
- *    unaccent). That body CANNOT be used in an index expression: when Postgres
- *    inlines the IMMUTABLE SQL wrapper while building the index it fails to
- *    resolve the two-arg call (`function unaccent(unknown, text) does not exist`,
- *    the `'unaccent'` literal loses its regdictionary coercion). The single-arg
- *    `unaccent($1)` is the same operation (the default text-search dictionary IS
- *    `unaccent`; verified byte-equal on accented samples), and — crucially —
- *    SCHEMA-QUALIFIED as `public.unaccent($1)` it inlines cleanly, so the index
- *    builds. We therefore `CREATE OR REPLACE` `f_unaccent` to the qualified
- *    single-arg body. This is output-identical for every existing caller (the
- *    tsvector trigger, the main `tsv @@` search, and the suggest LIKE), so no
- *    reindex/backfill is needed; `down()` restores the original two-arg body.
- *    (The `unaccent` extension is installed in `public` in this codebase, which
- *    is why `public.unaccent` is the correct qualification.)
+ *    The two-arg `unaccent('unaccent', $1)` body of `f_unaccent` cannot be
+ *    inlined into an index expression (`function unaccent(unknown, text) does
+ *    not exist` — the literal loses its regdictionary coercion). The
+ *    schema-qualified single-arg `public.unaccent($1)` is the same operation
+ *    (the default dictionary IS `unaccent`) and inlines cleanly, so
+ *    `f_unaccent` is redefined to it. Output-identical for every caller (the
+ *    tsvector trigger, the `tsv @@` search, the suggest LIKE), so no reindex is
+ *    needed; `down()` restores the two-arg body. The `unaccent` extension lives
+ *    in `public`.
  *
- * 2. Composite indexes for two ORDER-BY-only-on-id queries that currently sort
+ * 2. Composite indexes for two ORDER-BY-id queries that would otherwise sort
  *    on top of a created_at index:
  *    - page_history: `findPageHistoryByPageId` does WHERE page_id ORDER BY id
  *      DESC, but only `(page_id, created_at DESC)` exists → extra sort.
  *    - comments: `findPageComments` does WHERE page_id ORDER BY id ASC, but only
  *      `(page_id)` exists → extra sort.
  *
- * DEPLOY-TIME LOCK: these are plain (non-CONCURRENT) CREATE INDEX statements —
- * CONCURRENTLY is impossible HERE because Kysely runs each migration in a
- * transaction. The two GIN trigram builds on pages.title / users.name are the
- * slow ones and would take a SHARE lock that BLOCKS writes on pages/users for
- * minutes on a large tenant. To avoid that, `ensureConcurrentIndexes`
- * (database/concurrent-indexes.ts) now pre-builds BOTH trigram indexes with
- * CREATE INDEX CONCURRENTLY (no transaction) BEFORE the migrator runs, so on an
- * existing DB the two `IF NOT EXISTS` trigram creates below no-op and no write
- * lock is taken. On a fresh DB the pre-build is skipped and they build on an
- * empty table. Keep the two trigram creates in lockstep with their CANONICAL
- * definitions in CONCURRENT_INDEXES. (The plain b-tree indexes further down are
- * fast metadata-only builds; they are not pre-built.)
+ * DEPLOY-TIME LOCK: Kysely runs each migration in a transaction, so these are
+ * plain CREATE INDEX statements. The two slow GIN trigram builds are pre-built
+ * CONCURRENTLY by `ensureConcurrentIndexes` (database/concurrent-indexes.ts)
+ * before the migrator runs, so on an existing DB their `IF NOT EXISTS` creates
+ * below no-op; on a fresh DB they build on an empty table. Keep the two trigram
+ * creates in lockstep with their CANONICAL definitions in CONCURRENT_INDEXES.
+ * The b-tree indexes are fast and not pre-built.
  */
 export async function up(db: Kysely<any>): Promise<void> {
   // Index-compatible, output-identical redefinition of f_unaccent (see header).

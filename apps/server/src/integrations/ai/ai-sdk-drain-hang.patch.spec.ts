@@ -4,8 +4,8 @@ import { streamText } from 'ai';
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
 
 /**
- * Regression tests for the writeToServerResponse drain-hang fix in
- * patches/ai@6.0.134.patch (#486, commit 6).
+ * Tests for the writeToServerResponse drain-hang fix in
+ * patches/ai@6.0.134.patch.
  *
  * Unpatched ai@6.0.134's writeToServerResponse awaits ONLY `once("drain")` when
  * response.write() returns false (backpressure). If the client disconnects

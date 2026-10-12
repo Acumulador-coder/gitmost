@@ -8,14 +8,13 @@ import { SUBSCRIBER_MAX_BUFFERED_BYTES } from './ai-chat-stream-registry.service
 import type { User, Workspace } from '@docmost/db/types/entity.types';
 
 /**
- * Wiring spec for the #184 phase 1.5 attach endpoint (tail-only #491)
- * (`GET /ai-chat/runs/:chatId/stream`). Owner-gated via assertOwnedChat; the
- * registry is mocked so this exercises ONLY the controller's tail-write/live/204/
- * cleanup wiring against a fake raw socket. The attach signature is now
- * `(chatId, anchor, n, cb)` — the client hands its persisted step frontier `n`
- * and its assistant row id `anchor`. Constructor order is (aiChatService,
- * aiChatRunService, aiChatRepo, aiChatMessageRepo, aiTranscription, pageRepo,
- * streamRegistry, environment).
+ * Wiring spec for the attach endpoint (`GET /ai-chat/runs/:chatId/stream`).
+ * Owner-gated via assertOwnedChat; the registry is mocked so this exercises only
+ * the controller's tail-write/live/204/cleanup wiring against a fake raw socket.
+ * The attach signature is `(chatId, anchor, n, cb)` — the client's persisted
+ * step frontier `n` and its assistant row id `anchor`. Constructor order is
+ * (aiChatService, aiChatRunService, aiChatRepo, aiChatMessageRepo,
+ * aiTranscription, pageRepo, streamRegistry, environment).
  */
 describe('AiChatController attach endpoint (#184 phase 1.5)', () => {
   const user = { id: 'u1' } as User;

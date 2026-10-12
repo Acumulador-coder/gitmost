@@ -16,7 +16,7 @@ import * as path from 'path';
 import { ImportAttachmentService } from './import-attachment.service';
 
 /**
- * Unit test for ImportAttachmentService.createDrawioSvg (issue #507).
+ * Unit test for ImportAttachmentService.createDrawioSvg.
  *
  * The Confluence import wraps a `.drawio` file into a `.drawio.svg` attachment.
  * The `content=` payload MUST be the mxfile XML entity-escaped (draw.io's native

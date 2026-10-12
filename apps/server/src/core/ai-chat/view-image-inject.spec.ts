@@ -1,5 +1,5 @@
 /**
- * Unit tests for the cross-provider viewImage DELIVERY logic (#588 §2): the pure
+ * Unit tests for the cross-provider viewImage DELIVERY logic: the pure
  * prepareStep helpers that inject the image as an ephemeral user-role message and
  * evict a cache entry once the model has spoken about it. No LLM/provider needed.
  *

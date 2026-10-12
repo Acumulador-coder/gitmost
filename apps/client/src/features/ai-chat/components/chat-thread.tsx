@@ -80,14 +80,11 @@ const STREAM_THROTTLE_MS = 50;
 // THREAD now (the FSM owns polling->stalled); the window just polls while armed.
 const DEGRADED_POLL_IDLE_MAX_MS = 10 * 60_000;
 
-// #665: how long the FIRST send of a fresh thread waits for an in-flight "New
-// chat" unbind (DELETE /bind-page) before sending anyway. It closes the "New
-// chat -> instant role-card click" race (the DELETE and the birth UPSERT are two
-// independent requests) by sequencing the send after the DELETE. Ample for a
-// round-trip to our own backend (hundreds of ms) yet below the threshold where a
-// send delay is noticeable; on timeout we send regardless (falling back to the
-// original, harmless race). No env override: exceeding it only reverts to that
-// benign race, so a knob would save nothing.
+// How long the FIRST send of a fresh thread waits for an in-flight "New chat"
+// unbind (DELETE /bind-page) before sending anyway. Sequencing the send after the
+// DELETE keeps the birth UPSERT from racing it (two independent requests). Ample
+// for a round-trip to our own backend yet below a noticeable send delay; on
+// timeout we send regardless, which only reverts to that benign race.
 const AI_CHAT_UNBIND_GATE_TIMEOUT_MS = 1500;
 
 /** The #487 active (non-terminal) run statuses — mirrors the server's
@@ -224,13 +221,13 @@ function rowToUiMessage(row: IAiChatMessageRow): UIMessage {
  * with a `key` when the selected chat changes, so initial messages re-seed
  * cleanly (the v6 transport-based hook keeps its state per mount).
  *
- * #488: the resume/poll/stop/supersede lifecycle is driven by the pure
- * FSM in `state/run-fsm.ts` (see `run-fsm.spec.md`). The component is the RUNTIME:
- * it dispatches typed events (from SDK callbacks / HTTP outcomes) and executes the
+ * The resume/poll/stop/supersede lifecycle is driven by the pure FSM in
+ * `state/run-fsm.ts` (see `run-fsm.spec.md`). The component is the RUNTIME: it
+ * dispatches typed events (from SDK callbacks / HTTP outcomes) and executes the
  * reducer's command EFFECTS (attach GET, POST /run, POST /stop, POST /stream
- * supersede, poll arm/disarm). The FSM lives in this thread (not
- * the window) so a late SDK callback dies with the owner (#161). The one-shot-ref
- * zoo is gone: the epoch counter (I1) drops stale-generation outcomes.
+ * supersede, poll arm/disarm). The FSM lives in this thread (not the window) so a
+ * late SDK callback dies with the owner; the epoch counter (I1) drops
+ * stale-generation outcomes.
  */
 export default function ChatThread({
   chatId,
@@ -356,33 +353,23 @@ export default function ChatThread({
   // `this.activeResponse.state.message` in its finally and then nulls it, so an
   // overlapping B is clobbered). Send-plumbing DATA, not a lifecycle flag.
   const pendingSupersedeTextRef = useRef<string | null>(null);
-  // #488 F1: the epoch under which the CURRENTLY-OWNED stream started, used to
-  // STAMP its onFinish (I1). A superseded/dead stream's late finish carries an OLD
-  // generation and is dropped by the reducer, so it cannot drive the live machine
-  // into a false disconnect recovery or reset its run-fact. Set at each honored
-  // stream start (local send, mount attach, the supersede B-send).
-  // LOAD-BEARING (I1): this stamp is what ENFORCES the "two owned streams never
-  // overlap" invariant — the superseded stream A's late onFinish is stamped with
-  // A's now-stale generation and dropped, so only the live stream B drives the
-  // machine. Do NOT remove it, and do NOT move any stream-start assignment of it
-  // to AFTER that stream's onFinish can fire, or a late/overlapping finish leaks
-  // past the epoch filter.
+  // The epoch under which the CURRENTLY-OWNED stream started, stamped onto its
+  // onFinish (I1). A superseded/dead stream's late finish carries an OLD generation
+  // and the reducer drops it, so it cannot drive the live machine into a false
+  // disconnect recovery or reset its run-fact. LOAD-BEARING: this stamp enforces
+  // "two owned streams never overlap". Set at each honored stream start (local
+  // send, mount attach, the supersede B-send); never move an assignment to AFTER
+  // that stream's onFinish can fire.
   const turnEpochRef = useRef(0);
-  // #555 F1: a ONE-SHOT set by the transport `fetch` path when the server returns a
-  // gate/CAS 409 whose FSM event ADOPTS (or preserves) a run-fact on the `error`
-  // phase — A_RUN_ALREADY_ACTIVE (-> RUN_ALREADY_ACTIVE, adopts activeRunId) and the
-  // supersede-* 409s SUPERSEDE_TARGET_MISMATCH / SUPERSEDE_TIMEOUT / SUPERSEDE_INVALID
-  // (all leave runFact set — see the run-fsm reducer and the S4 sendNow branch). The
-  // SAME failed turn's stream then fires `onFinish({isError:true})`, whose default
-  // FINISH_ERROR would CLOBBER that adopted run-fact to null — killing the S4 "Send
-  // now" CAS-supersede (the guard `runId && runId!=="pending"` would go false). The
-  // FSM has ALREADY absorbed this turn's outcome via the 409 -> `error(kind)`
-  // transition, so the stream's own error finish is REDUNDANT: onFinish reads-and-
-  // clears this ref at the top and SKIPS FINISH_ERROR when it is set. MIRRORS the
-  // superseding-pending special case (pendingSupersedeTextRef) that likewise special-
-  // cases onFinish. Scoped STRICTLY to those 409s: a NORMAL stream error (one that did
-  // NOT adopt a run-fact via a gate/CAS 409) leaves this false and still dispatches
-  // FINISH_ERROR (clearing runFact). Send-plumbing DATA, not a lifecycle flag.
+  // ONE-SHOT set by the transport `fetch` path when the server returns a gate/CAS
+  // 409 whose FSM event adopts (or preserves) a run-fact on the `error` phase —
+  // A_RUN_ALREADY_ACTIVE (adopts activeRunId) and SUPERSEDE_TARGET_MISMATCH /
+  // SUPERSEDE_TIMEOUT / SUPERSEDE_INVALID (all leave runFact set). The same failed
+  // turn's stream then fires `onFinish({isError:true})`, whose FINISH_ERROR would
+  // clobber that run-fact to null and break the S4 "Send now" CAS-supersede. The FSM
+  // already absorbed the outcome via the 409, so onFinish reads-and-clears this ref
+  // and skips FINISH_ERROR when it is set (mirrors pendingSupersedeTextRef). A
+  // normal stream error leaves it false and still dispatches FINISH_ERROR.
   const runFactAdopted409Ref = useRef(false);
 
   // --- Effect runner: executes the reducer's command effects ---------------
@@ -733,14 +720,12 @@ export default function ChatThread({
         return;
       }
 
-      // #488 (browser QA): route DISCONNECT FIRST. In ai@6.0.207 a real network drop
-      // yields BOTH `{ isError:true, isDisconnect:true }` — the SDK sets `isError`
-      // unconditionally in its catch and `isDisconnect` only ALONGSIDE it (for a
-      // fetch/network TypeError). Checking `isError` first therefore sent EVERY real
-      // drop to the terminal error banner and NEVER entered disconnect recovery
-      // (`FINISH_DISCONNECT` is its only entry). A disconnect — the detached run
-      // keeps executing server-side — must win; only a NON-disconnect error (a
-      // provider 500, `{ isError:true, isDisconnect:false }`) is terminal.
+      // Route DISCONNECT FIRST. In ai@6.0.207 a real network drop yields BOTH
+      // `{ isError:true, isDisconnect:true }` — the SDK sets `isError` unconditionally
+      // in its catch and `isDisconnect` only alongside it — and `FINISH_DISCONNECT` is
+      // the only entry into recovery. A disconnect (the detached run keeps executing
+      // server-side) must win; only a NON-disconnect error (a provider 500,
+      // `{ isError:true, isDisconnect:false }`) is terminal.
       if (isDisconnect) {
         if (!mountedRef.current) {
           setStopNotice(null);
@@ -955,18 +940,14 @@ export default function ChatThread({
     };
   }, [phase, initialRows]);
 
-  // #555 S3: consume the degraded delta poll's `run` field. Until now the delta
-  // endpoint's authoritative run fact rode the wire UNCONSUMED (run-fsm.spec.md §3.4),
-  // so a stale recovery only cleared once the terminal ROW merged. Wire it into the
-  // RUN_FACT dispatch path: a
-  // fresh NEGATIVE fact quenches recovery (I3 fresh-negative gate) — in `stopping`
-  // immediately, in `polling` after merging the persisted reply (below) —
-  // a positive fact refreshes ctx.runFact. No epoch — this is AMBIENT server truth (a
-  // trigger event that is never dropped), not a per-generation command outcome; the
-  // poll only runs while armed (a poll-bearing recovery), so it never races a live
-  // local stream. Deduped by the derived active run id, and the dedupe ref is reset
-  // when the poll disarms (`polledRunFact` returns to `undefined`) so the NEXT
-  // recovery's negative fact re-quenches.
+  // Consume the degraded delta poll's `run` field (run-fsm.spec.md §3.4) through
+  // the RUN_FACT dispatch path: a fresh NEGATIVE fact quenches recovery (I3
+  // fresh-negative gate) — in `stopping` immediately, in `polling` after merging
+  // the persisted reply (below) — and a positive fact refreshes ctx.runFact. No
+  // epoch: this is AMBIENT server truth, not a per-generation command outcome; the
+  // poll only runs while armed, so it never races a live local stream. Deduped by
+  // the derived active run id; the dedupe ref resets when the poll disarms
+  // (`polledRunFact` returns to `undefined`) so the NEXT recovery re-quenches.
   // A NEGATIVE fact while `polling`: the run may have finished DURING the drop, and
   // the first delta tick (no cursor yet) carries the run fact but NO rows, so
   // quenching right away would leave the truncated live answer on screen. Fetch the
@@ -1072,22 +1053,16 @@ export default function ChatThread({
         stopFnRef.current?.(); // abort A -> its onFinish sends B
         return;
       }
-      // #555 S4-full: supersede a run belonging to ANOTHER TAB from the ERROR phase.
-      // A plain POST that hit the one-active-run gate (A_RUN_ALREADY_ACTIVE), or a
-      // supersede that lost a CAS (SUPERSEDE_MISMATCH), leaves the FSM in `error`
-      // with the foreign/moved run absorbed into runFact (W1 groundwork). Unlike the
-      // live-local branch there is NO owned stream A in flight here (error is entered
-      // by a terminal finish or a pre-stream 409), so I1 is not at risk: we send B
-      // DIRECTLY (no stop()/onFinish deferral — there is nothing to abort or wait
-      // for). SUPERSEDE_REQUESTED bumps the epoch, so even a late finish of the failed
-      // A (stamped with its pre-error generation) is dropped and cannot overlap B.
-      // The `runId && runId !== "pending"` guard scopes this to EVERY error kind that
-      // LEFT a run-fact — run-already-active and supersede-mismatch, and also
-      // supersede-timeout / supersede-invalid (all of which keep runFact set). None
-      // of them has an owned stream A in flight, so a direct send is safe for all;
-      // for the supersede-* kinds this is a user-initiated re-supersede (they hit
-      // Send), not an auto-retry. A plain stream error cleared runFact to null and
-      // correctly falls through to a plain send. The reducer already permits
+      // Supersede a run belonging to ANOTHER TAB from the ERROR phase. A plain POST
+      // that hit the one-active-run gate (A_RUN_ALREADY_ACTIVE), or a supersede that
+      // lost a CAS (SUPERSEDE_MISMATCH), leaves the FSM in `error` with the
+      // foreign/moved run absorbed into runFact. No owned stream A is in flight here,
+      // so we send B DIRECTLY (nothing to abort or wait for); SUPERSEDE_REQUESTED bumps
+      // the epoch, so a late finish of the failed A is dropped and cannot overlap B.
+      // The guard covers every error kind that left a run-fact (run-already-active,
+      // supersede-mismatch/-timeout/-invalid); for the supersede-* kinds this is a
+      // user-initiated re-supersede, not an auto-retry. A plain stream error cleared
+      // runFact and falls through to a plain send. The reducer permits
       // SUPERSEDE_REQUESTED from `error` (spec §1).
       if (p === "error" && runId && runId !== "pending") {
         setQueue(removeQueuedById(queuedRef.current, id));
@@ -1135,17 +1110,13 @@ export default function ChatThread({
   // #487 409 codes, ...). Computed here so the SAME text can mirror into the export.
   const errorView = error ? describeChatError(error.message ?? "", t) : null;
 
-  // #488 (browser QA): the FSM PHASE is the source of truth for WHICH banner to
-  // show. A real network drop leaves useChat `error` SET even after the FSM has
-  // moved to `polling` — in ai@6 a drop is always `{isError:true,
-  // isDisconnect:true}` and the SDK sets `error` alongside `isError`. So the
-  // terminal error banner must show ONLY when the FSM is actually TERMINAL
-  // (`error(kind)`); during recovery (polling / stalled /
-  // superseding / stopping) the recovery banner — or the streaming content — wins
-  // over the residual `error`, otherwise the terminal "Lost connection… reload"
-  // banner masks "Connection lost — reconnecting…". This still surfaces the
-  // classified #487 409 errors: a supersede/gate 409 lands the FSM in
-  // `error(kind)`, so it shows then.
+  // The FSM PHASE decides WHICH banner to show. A real network drop leaves useChat
+  // `error` SET even after the FSM moved to `polling` (in ai@6 a drop is always
+  // `{isError:true, isDisconnect:true}`). So the terminal error banner shows ONLY
+  // when the FSM is TERMINAL (`error(kind)`); during recovery (polling / stalled /
+  // superseding / stopping) the recovery banner or the streaming content wins over
+  // the residual `error`. Classified supersede/gate 409s land in `error(kind)`, so
+  // they still show.
   const showError = errorView !== null && phase.name === "error";
 
   // Role-picker empty state (unchanged from #149).

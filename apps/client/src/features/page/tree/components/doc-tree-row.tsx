@@ -100,7 +100,7 @@ function DocTreeRowInner<T extends object>(props: Props<T>) {
   const rowRef = useRef<HTMLElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [instruction, setInstruction] = useState<Instruction | null>(null);
-  // Transient "just received a child" cue: a make-child drop no longer expands
+  // Transient "just received a child" cue: a make-child drop does not expand
   // the (collapsed) target, so flash the row instead so the move isn't invisible.
   const [landedChild, setLandedChild] = useState(false);
   const autoExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

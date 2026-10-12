@@ -1,7 +1,7 @@
 import { type Kysely, sql } from 'kysely';
 
 /**
- * #610 — move article icons (`pages.icon`) and AI-agent role glyphs
+ * Move article icons (`pages.icon`) and AI-agent role glyphs
  * (`ai_agent_roles.emoji`) from native emoji to Lucide icons.
  *
  * The new value in each (unchanged, still `varchar`) column is a serialized
@@ -11,8 +11,7 @@ import { type Kysely, sql } from 'kysely';
  *
  * This backfill NULLs every legacy value so the UI shows its default glyph (the
  * defensive client parser already renders a default for a null / unparseable
- * value). We do NOT attempt an emoji -> Lucide semantic mapping — the issue
- * wants the emoji gone, and NULL is the simplest safe result.
+ * value). There is no emoji -> Lucide mapping.
  *
  * A value is treated as "already migrated" iff it starts with `{` (a JSON
  * object); every other non-null value is a legacy native emoji and is cleared.

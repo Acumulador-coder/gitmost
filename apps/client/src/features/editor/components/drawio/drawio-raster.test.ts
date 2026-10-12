@@ -262,8 +262,8 @@ describe("decodedBase64ByteLength + budget (A6)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Extracted hook decision logic (#629 M3): the state-machine cores lifted out
-// of use-drawio-raster-save.ts so they get real regression protection.
+// Extracted hook decision logic: the state-machine cores lifted out of
+// use-drawio-raster-save.ts so they are unit-tested.
 // ---------------------------------------------------------------------------
 
 describe("resolveExportFamily (onExport dispatch decision, A2)", () => {

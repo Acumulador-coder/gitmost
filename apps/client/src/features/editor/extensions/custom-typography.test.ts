@@ -12,7 +12,7 @@ import {
 } from "./custom-typography";
 
 /**
- * PR #296 — the collab-safe typography undo-guard is exercised through the REAL
+ * The collab-safe typography undo-guard is exercised through the REAL
  * editor path: a fresh Editor with the CustomTypography extension, transactions
  * tagged exactly the way prosemirror-history / y-tiptap tag undo & remote
  * changes (`setMeta("history$", …)` and `setMeta(ySyncPluginKey, …)`), plus
@@ -94,8 +94,8 @@ describe("findChangedRange", () => {
 
   it("normalizes the DELETION overlapping-bounds branch (F2 fix)", () => {
     // Delete one repeated 'a' from the middle of "aaaaa" ([3,4)). Here
-    // findDiffEnd reports newTo < start, the symmetric case the old one-sided
-    // normalization missed -> it used to yield a degenerate range (newTo < from).
+    // findDiffEnd reports newTo < start, the symmetric case that needs two-sided
+    // normalization to avoid a degenerate range (newTo < from).
     const { before, after, editor } = mutate("aaaaa", (tr) => tr.delete(3, 4));
     const change = findChangedRange(before, after)!;
     expect(change).toEqual({ from: 5, oldTo: 6, newTo: 5 });

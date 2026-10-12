@@ -11,12 +11,10 @@ import type { Redis } from 'ioredis';
  *
  * `runId` gives each reindex run a stable identity so a poller can tell "same
  * run I've been watching" from "a NEW run started" WITHOUT guessing from the
- * progress counters (the ambiguity that a stale pre-reindex snapshot vs a fresh
- * run otherwise causes — the bug class fixed twice under #262). It is best-
- * effort like the rest of this record: a record written before this field
- * existed (or a Redis hiccup) yields an empty `runId`, which the client must
- * treat as "no identity available" and degrade to its prior behaviour, never
- * break.
+ * progress counters (a stale pre-reindex snapshot vs a fresh run). It is best-
+ * effort like the rest of this record: a record without it (or a Redis hiccup)
+ * yields an empty `runId`, which the client must treat as "no identity
+ * available" and degrade, never break.
  */
 export interface ReindexProgress {
   total: number;

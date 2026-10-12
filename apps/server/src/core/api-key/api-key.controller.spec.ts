@@ -17,7 +17,7 @@ import {
  *  - admin (CASL Manage on API) sees/revokes all workspace keys; a member only
  *    their own.
  *  - reveal: password step-up (401 on wrong password), owner-only even for admin
- *    (404), api_key principal 403 — the copyable-key surface (#557).
+ *    (404), api_key principal 403 — the copyable-key surface.
  */
 
 function makeController(over: any = {}) {

@@ -29,7 +29,7 @@ import AiMcpServerRow from "@/features/ai-mcp/mcp-server-row.tsx";
 import McpServerFormModal from "@/features/ai-mcp/mcp-server-form-modal.tsx";
 
 /**
- * Account settings page (#686): manage the user's OWN personal external MCP
+ * Account settings page: manage the user's OWN personal external MCP
  * servers, added to the agent alongside the workspace-wide (admin) ones. Mirrors
  * `account-api-keys.tsx` and reuses the shared MCP row/modal (`features/ai-mcp`)
  * with the personal `/account/mcp-servers*` hooks. When the instance kill-switch

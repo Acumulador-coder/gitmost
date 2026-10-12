@@ -21,21 +21,20 @@ import {
 } from './mcp-server-view.util';
 
 /**
- * Personal external MCP servers (#686, phase 2 / PR A). A member manages their
- * OWN servers via `account/mcp-servers`; there is NO admin gate. This service is
- * the mirror of the admin `McpServersService` but every read/write goes through
- * the repo's owner-scoped `*ForUser` methods — a user can ONLY ever touch a row
- * they own (the repo is the isolation barrier, see ai-mcp-server.repo.ts).
+ * Personal external MCP servers. A member manages their OWN servers via
+ * `account/mcp-servers`; there is NO admin gate. This service mirrors the admin
+ * `McpServersService`, but every read/write goes through the repo's owner-scoped
+ * `*ForUser` methods — a user can ONLY ever touch a row they own (the repo is the
+ * isolation barrier, see ai-mcp-server.repo.ts).
  *
  * SECURITY (§8.10): the same write-only-headers contract as the admin path —
  * headers are encrypted on save and NEVER returned; the view carries only
  * `hasHeaders`. SSRF validation (`assertMcpUrlAllowed`) runs on every save.
  *
- * CACHE (#686 phase 3 / PR B): the agent loop now CONSUMES personal servers via
- * the per-user toolset cache (`McpClientsService.toolsFor(workspaceId, userId)`).
- * Every personal mutation therefore evicts THIS user's cache entry only, via
- * `invalidateUser(workspaceId, userId)` — the single-key eviction, never the
- * admin fan-out (a personal change affects no other user's toolset).
+ * CACHE: the agent loop consumes personal servers via the per-user toolset cache
+ * (`McpClientsService.toolsFor(workspaceId, userId)`), so every personal mutation
+ * evicts only THIS user's entry via `invalidateUser(workspaceId, userId)`, never
+ * the admin fan-out.
  */
 @Injectable()
 export class AccountMcpServersService {
@@ -54,7 +53,7 @@ export class AccountMcpServersService {
 
   /**
    * Create a personal server, enforcing the per-user cap under a row lock so
-   * concurrent creates cannot both slip past the limit (#686). The whole
+   * concurrent creates cannot both slip past the limit. The whole
    * count-then-insert runs in ONE transaction:
    *   1. `lockUserRow` takes FOR NO KEY UPDATE on the user's `users` row —
    *      serializing this user's concurrent creates through a single gate;

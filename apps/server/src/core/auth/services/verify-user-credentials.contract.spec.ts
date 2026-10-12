@@ -3,28 +3,20 @@ import * as path from 'node:path';
 import * as ts from 'typescript';
 
 /**
- * Security contract for AuthService.verifyUserCredentials (item 4).
+ * Security contract for AuthService.verifyUserCredentials.
  *
- * verifyUserCredentials is the NON-side-effecting credential check used by the
- * /mcp anti-fixation path on subsequent requests: it must perform the same
- * lookup/password/email-verified/disabled checks as login() but mint NO session,
- * write NO USER_LOGIN audit row and update NO lastLoginAt. Calling the
- * side-effecting login() per /mcp tool call would be audit spam + a
- * session-table DoS, so the no-side-effect property is load-bearing.
+ * verifyUserCredentials is the NON-side-effecting credential check used for
+ * repeated per-request validation (git smart-HTTP Basic auth, the api-key reveal
+ * step-up): it must perform the same lookup/password/email-verified/disabled
+ * checks as login() but mint NO session, write NO USER_LOGIN audit row and update
+ * NO lastLoginAt. Calling the side-effecting login() per request would be audit
+ * spam + a session-table DoS, so the no-side-effect property is load-bearing.
  *
- * Why this is a SOURCE-LEVEL (AST) contract test rather than a live AuthService
- * unit: AuthService cannot be constructed — or even imported — under this jest
- * config. jest is rooted at `src/` with no `^src/(.*)` moduleNameMapper, so the
- * transitive `import ... from 'src/integrations/queue/constants'` chain
- * (AuthService -> SignupService -> WorkspaceService -> SpaceService) does not
- * resolve; and even with that mapped, importing AuthService pulls in the
- * `@docmost/transactional` React email templates and the lib0/ESM collaboration
- * graph, which jest's ts-jest transform (with the repo's transformIgnorePatterns)
- * cannot load. (The pre-existing auth.service.spec.ts placeholder fails to run
- * for exactly this reason.) So we assert the contract STRUCTURALLY against the
- * real source: verifyUserCredentials must contain none of the three side
- * effects, and login() must contain all three — a regression that adds a side
- * effect to verifyUserCredentials, or drops one from login, fails this test.
+ * The contract is asserted STRUCTURALLY against the real source:
+ * verifyUserCredentials must contain none of the three side effects, and login()
+ * must contain all three — a regression that adds a side effect to
+ * verifyUserCredentials, or drops one from login, fails this test. The decision
+ * logic itself is exercised live in verify-user-credentials.live.spec.ts.
  */
 
 const SIDE_EFFECTS = [
@@ -131,8 +123,7 @@ describe('AuthService no-side-effect contract (item 4)', () => {
     // missing/disabled guard MUST also short-circuit on a null/empty password,
     // otherwise comparePasswordHash(loginDto.password, null) feeds null to native
     // bcrypt, which REJECTS ("data and hash arguments required") — a 500 on
-    // /api/auth/login and a leaky, limiter-evading 401 on /mcp. A regression that
-    // drops this null check fails here.
+    // /api/auth/login. A regression that drops this null check fails here.
     it('the guard also short-circuits null-password (SSO/LDAP-only) accounts', () => {
       expect(guardMatch).not.toBeNull();
       // The guard CONDITION includes a null/empty password check...

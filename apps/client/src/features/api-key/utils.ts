@@ -1,6 +1,6 @@
 import { addDays, addYears, differenceInMinutes } from "date-fns";
 
-// The single early-warning window (#501/#506): keys whose expiry is closer than
+// The single early-warning window: keys whose expiry is closer than
 // this are visually highlighted in the list. Also used to classify a key as
 // already-expired (a negative "days until" is < 30 too).
 export const EXPIRY_WARNING_DAYS = 30;

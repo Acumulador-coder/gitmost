@@ -1,7 +1,7 @@
 // `.provider` alone cannot prove the gemini/ollama chat factories were built
 // with the instrumented streaming fetch — a regression dropping it (which drops
 // them back to the global undici fetch: no keep-alive recycle, no reset retries,
-// unbounded silence timeout; incident classes #140/#175/#310) would still pass.
+// default silence timeout) would still pass.
 // So mock the factories and assert the exact fetch argument. jest.mock is
 // module-scoped, hence a dedicated file.
 

@@ -15,10 +15,10 @@ import {
 import { currentRouteTemplate, templateRoute } from "./route-template";
 
 /**
- * Client perf-telemetry (#355): web-vitals + custom metrics buffered and posted
+ * Client perf-telemetry: web-vitals + custom metrics buffered and posted
  * to POST /api/telemetry/vitals via sendBeacon.
  *
- * Design constraints from the issue:
+ * Constraints:
  *  - Sampling is decided ONCE per session (25%), cached in sessionStorage,
  *    BEFORE any observer is subscribed. Non-sampled sessions send nothing.
  *  - Route labels are TEMPLATES only; attr is truncated to 120 chars; no page
@@ -47,7 +47,7 @@ const OPERATION_MIN_MS = 8;
 // background noise), not a per-keystroke trace.
 const EDITOR_KEY_LATENCY_MIN_MS = 16;
 
-// #639 — hard cap on a mark-less (timeOrigin) page_open_body_ms measurement.
+// Hard cap on a mark-less (timeOrigin) page_open_body_ms measurement.
 // The mark-less start counts from `performance.timeOrigin`, i.e. document boot.
 // A programmatic (non-<a>) navigation after minutes of idle carries NO click
 // mark, so without a cap it would report the whole idle time (~300000 ms) and
@@ -57,7 +57,7 @@ const EDITOR_KEY_LATENCY_MIN_MS = 16;
 // inflation this cap exists to reject.
 const PAGE_OPEN_MAX_MS = 60_000;
 
-// #639 — survivorship-bias guard window. `page_open_body_ms` only reports on a
+// Survivorship-bias guard window. `page_open_body_ms` only reports on a
 // SUCCESSFUL paint; a body that never paints (offline, empty ydoc, REST never
 // arrived) would otherwise emit nothing and fall out of the sample, so p75
 // "improves" exactly when the feature fails. If the body is not painted within
@@ -280,7 +280,7 @@ export function reportEditorTx(ms: number, docSize: number): void {
 }
 
 /**
- * #683 — the operations measured by `operation_ms{op}`. ONE metric; the op is the
+ * The operations measured by `operation_ms{op}`. ONE metric; the op is the
  * `attr`. Pattern A (surface opens / client-perceived round-trips) uses
  * markOperationStart(op) on the user action + measureOperation(op) at the settled
  * point; Pattern B (pure client compute/render) times the work with
@@ -381,7 +381,7 @@ function clearBodyPaintTimer(): void {
 }
 
 /**
- * Compute the page_open_body_ms value to report, or null to SUPPRESS (#639).
+ * Compute the page_open_body_ms value to report, or null to SUPPRESS.
  *
  * Start of count:
  *  - a click mark (`gm_page_open_start`, set by the tree-row/link listener)
@@ -487,14 +487,13 @@ export function notePageBodyPaint(docKey: string): void {
 }
 
 /**
- * #681 — is the current focus inside a ProseMirror editor? A PerformanceEventTiming
+ * Is the current focus inside a ProseMirror editor? A PerformanceEventTiming
  * entry exposes a `target`, but it returns `null` once the node is detached by
  * callback time (and it is not reliably retained across the paint), so we cannot
  * depend on it to filter editor keydowns. Instead we check the LIVE focus at callback time:
  * a keydown lag matters to this metric only when the editor has focus. The
  * heuristic is intentionally broad — a focused input nested inside a `.ProseMirror`
- * container (e.g. an inline widget) counts as an editor interaction too, which is
- * acceptable per the issue's edge-case call.
+ * container (e.g. an inline widget) counts as an editor interaction too.
  */
 function isEditorFocused(): boolean {
   try {
@@ -506,10 +505,10 @@ function isEditorFocused(): boolean {
 }
 
 /**
- * #681 — the editor-keydown filter + report for a batch of Event Timing entries.
+ * The editor-keydown filter + report for a batch of Event Timing entries.
  * This is the SINGLE source of the editor-keydown detection: the live
  * PerformanceObserver callback (initVitals) and the tests both drive THIS
- * function, so there is no hand-synced mirror of the filter (#7).
+ * function.
  *
  * For each entry it reports `editor_key_latency_ms` = the entry's `duration`,
  * i.e. the FULL keydown→next-paint time (input delay + event handling + React
@@ -622,12 +621,12 @@ export function initVitals(): void {
     // longtask entry type unsupported: skip silently.
   }
 
-  // #681 — editor_key_latency_ms: full keydown→paint latency via the Event
+  // editor_key_latency_ms: full keydown→paint latency via the Event
   // Timing API (the same browser-native source INP is built on), but ALWAYS-ON
   // (every qualifying interaction, not INP's single p98 sample) and filtered to
-  // editor keydowns. This is the ONLY vitals signal that sees the React re-render
+  // editor keydowns. This is the only vitals signal that sees the React re-render
   // / menu-subscription / floating-ui work that runs AFTER the ProseMirror
-  // dispatch — the #343-class overhead that editor_tx_ms is structurally blind
+  // dispatch, which editor_tx_ms is structurally blind
   // to. A passive browser-collected observer: nothing is added to the keystroke
   // hot path (Event Timing is gathered natively; the callback fires only on
   // interactions ≥ threshold).

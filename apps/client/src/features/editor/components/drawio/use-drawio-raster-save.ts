@@ -185,10 +185,9 @@ export function useDrawioRasterSave<TTarget>(
 
   // ---- png raster generation with match/budget checks (A3/A6) ---------------
   // Returns a data-URI on success, or null WITH a reason when the raster is
-  // dropped for being over the byte budget (a persistent state-mismatch now
-  // embeds best-effort, it no longer drops the raster). THROWS only on export
-  // failure/timeout (the caller counts those toward the circuit-breaker); an
-  // over-budget skip is not a server failure.
+  // dropped for being over the byte budget (a persistent state-mismatch still
+  // embeds best-effort). THROWS only on export failure/timeout (the caller counts
+  // those toward the circuit-breaker); an over-budget skip is not a server failure.
   const generateRaster = useCallback(
     async (
       sourceXml: string | null,

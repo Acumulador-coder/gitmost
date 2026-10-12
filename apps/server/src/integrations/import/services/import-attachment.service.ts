@@ -899,7 +899,7 @@ export class ImportAttachmentService {
    * an attribute value is collapsed to a single space by XML attribute-value
    * normalization on DOM read (both our decoder and the real draw.io editor),
    * silently flattening multi-line labels and tab-bearing values. Char-refs
-   * survive that normalization (#507).
+   * survive that normalization.
    */
   private xmlEscapeContent(s: string): string {
     return htmlEscape(s)

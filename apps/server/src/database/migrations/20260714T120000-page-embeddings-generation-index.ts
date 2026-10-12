@@ -1,12 +1,11 @@
 import { type Kysely } from 'kysely';
 
 /**
- * #599 Search Phase B (PR-2): the embedding-fingerprint LIFECYCLE index.
+ * The embedding-fingerprint LIFECYCLE index.
  *
- * PR-1 (#530) added the `fingerprint` column plus
  * `idx_page_embeddings_ws_space_fp_dim` (workspace_id, space_id, fingerprint,
- * model_dimensions) — shaped for the per-SPACE vector-candidate scan. PR-2 adds
- * two workspace-wide, space-agnostic access paths that index cannot serve well
+ * model_dimensions) is shaped for the per-SPACE vector-candidate scan. Two
+ * workspace-wide, space-agnostic access paths cannot use it well
  * (space_id is its second column, so a workspace+fingerprint predicate can only
  * reach it by skipping over every space):
  *
@@ -28,10 +27,10 @@ import { type Kysely } from 'kysely';
  * `coverageEmbeddable`), written atomically in one jsonb merge — the same
  * convention as `settings.ai.provider`.
  *
- * Independent migration (per the #363 crash-loop net): it creates ONLY its own
- * object and never touches another migration's tables/indexes, so a partial
- * failure cannot leave a shared object half-built. The PR-1 index is left exactly
- * as it is — the two serve different predicates and both are used.
+ * Independent migration: it creates only its own object and never touches
+ * another migration's tables/indexes, so a partial failure cannot leave a
+ * shared object half-built. Both indexes serve different predicates and are
+ * used.
  */
 export async function up(db: Kysely<any>): Promise<void> {
   await db.schema

@@ -126,12 +126,11 @@ describe('nextReindexPollInterval', () => {
   });
 
   it('does NOT stop on the stale pre-reindex snapshot (fully indexed, never seen active)', () => {
-    // Regression for #262: right after "Reindex now" the client still holds the
-    // PRE-reindex settings (an already fully-indexed workspace reads as
-    // reindexing=false, indexed>=total). Without the seenActive gate this looked
-    // "done" and stopped polling on the very first tick, freezing the counter at
-    // 0 until a manual reload. The fresh window has not observed the active run,
-    // so polling must continue until the first real poll lands.
+    // Right after "Reindex now" the client still holds the PRE-reindex settings
+    // (an already fully-indexed workspace reads as reindexing=false,
+    // indexed>=total). The fresh window has not observed the active run, so
+    // polling must continue until the first real poll lands (otherwise the
+    // counter freezes at 0).
     expect(
       nextReindexPollInterval({
         ...base,

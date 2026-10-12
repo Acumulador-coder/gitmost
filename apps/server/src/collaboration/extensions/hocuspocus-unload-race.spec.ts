@@ -1,31 +1,22 @@
 /**
- * gitmost #401 — regression test for the connect-vs-unload race in
- * @hocuspocus/server 3.4.4 (patched via patches/@hocuspocus__server@3.4.4.patch).
+ * Connect-vs-unload race in @hocuspocus/server 3.4.4 (patched via
+ * patches/@hocuspocus__server@3.4.4.patch).
  *
- * The race (unpatched): when the last client disconnects, storeDocumentHooks'
- * `finally` schedules an async `unloadDocument`. That unload runs its
- * `beforeUnloadDocument` hooks asynchronously and, meanwhile, records an
- * in-flight promise in `this.unloadingDocuments`. In the original 3.4.4
- * `createDocument`, a NEW connection arriving in that window falls straight
- * through to the `loadingDocuments`/`documents` checks — it never consults
- * `unloadingDocuments`. So the new connection can start loading (or reuse) a
- * document while the old instance is still being torn down; the re-check inside
- * unload (`shouldUnloadDocument`, which sees 0 connections because async auth
- * hooks have not registered the new connection yet) then deletes/destroys the
- * doc out from under the freshly-connected client → orphaned Document → later
- * redis-sync takes the "doc not loaded" path → sync never completes → the
- * provider hangs until its ~25s timeout.
+ * Unpatched: when the last client disconnects, storeDocumentHooks' `finally`
+ * schedules an async `unloadDocument`, which records an in-flight promise in
+ * `this.unloadingDocuments` while its `beforeUnloadDocument` hooks run.
+ * `createDocument` never consults `unloadingDocuments`, so a new connection in
+ * that window can load (or reuse) the doc while it is being torn down; the
+ * unload's re-check (`shouldUnloadDocument`, 0 connections because async auth
+ * hasn't registered the new one) then destroys the doc under the new client,
+ * and redis-sync never completes (the provider hangs until its ~25s timeout).
  *
  * The patch: `createDocument` first awaits any in-flight
- * `unloadingDocuments.get(name)` before proceeding. Once that settles, the
- * decision is deterministic — either the doc was fully unloaded (gone from
- * `documents`, so a clean fresh load) or the unload aborted (healthy doc still
- * in `documents`, reused). The new connection can never hand-shake onto an
- * about-to-be-destroyed Document.
+ * `unloadingDocuments.get(name)`; afterwards the doc is either fully unloaded (a
+ * clean fresh load) or the unload aborted (healthy doc reused).
  *
- * These tests exercise the REAL patched `Hocuspocus.createDocument` (the class
- * is directly constructible) by seeding `unloadingDocuments` with a controllable
- * in-flight unload and observing that createDocument waits for it.
+ * These tests exercise the real patched `Hocuspocus.createDocument` by seeding
+ * `unloadingDocuments` with a controllable in-flight unload.
  */
 import { Hocuspocus } from '@hocuspocus/server';
 

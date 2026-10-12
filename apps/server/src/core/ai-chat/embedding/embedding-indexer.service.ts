@@ -36,28 +36,19 @@ const CHUNK_OVERLAP = 200;
 const SLOW_PAGE_MS = 30_000;
 
 /**
- * #599 (R2) — a bulk reindex run finished, but SOME pages failed to embed (a TEI
- * timeout, a 429/500, a single poison page). The run is therefore NOT a full
- * reindex: the target generation has holes, so the pointer is not flipped (see
- * runReindex) and the workspace stays in the swap window — ~2x the pgvector rows
- * (no ANN index -> a linearly slower vector scan), `semantic.state: 'stale'`, and
- * on a MODEL change lexical-only search.
+ * A bulk reindex run finished, but SOME pages failed to embed (a TEI timeout, a
+ * 429/500, a poison page). The target generation has holes, so the pointer is not
+ * flipped (see runReindex) and the workspace stays in the swap window — ~2x the
+ * pgvector rows, `semantic.state: 'stale'`, and on a MODEL change lexical-only
+ * search.
  *
- * That window MUST NOT be permanent. This error is THROWN out of the run so BullMQ
- * marks the job failed and RETRIES it with backoff (the reindex jobs are enqueued
- * with `attempts: 3` + exponential backoff — the AI_QUEUE default is `attempts: 1`,
- * so the option is set explicitly at every enqueue site). A retry is safe: the
- * start GC keeps [active, target] (it never deletes the generation being served),
- * and the per-page replace is fingerprint-scoped, so re-running simply re-writes
- * the same rows and re-attempts the pages that failed — a transient TEI hiccup then
- * self-heals into a completed run + a flip.
- *
- * Retries are BOUNDED (`attempts`), so a permanently failing page (a poison page,
- * a model that rejects a specific input) cannot loop forever: after the last
- * attempt the job is failed for good and the workspace is simply left in the
- * already-safe state it is in now — old generation still serving, coverage `stale`,
- * with the final WARN/ERROR naming the failure count. It never silently reports
- * success, which is exactly the bug this replaces.
+ * Thrown out of the run so BullMQ fails the job and RETRIES it with backoff (the
+ * reindex jobs are enqueued with `attempts: 3` + exponential backoff — the AI_QUEUE
+ * default is `attempts: 1`, so every enqueue site sets it explicitly). A retry is
+ * safe: the start GC keeps [active, target] and the per-page replace is
+ * fingerprint-scoped, so a re-run re-writes the same rows and re-attempts the
+ * failed pages. After the last attempt the job stays failed and the old
+ * generation keeps serving with coverage `stale`.
  */
 export class PartialReindexError extends Error {
   constructor(
@@ -103,10 +94,10 @@ export class EmbeddingIndexerService {
    * defensive skip is a page whose chunks somehow yield mixed vector lengths.
    * Deleted/empty pages have their rows purged and return.
    *
-   * #599: new rows are always written with the TARGET fingerprint (the live
-   * config's). The delete half of the delete+insert replace is FINGERPRINT-SCOPED
-   * while a swap is in flight, so an edit during a reindex never removes the
-   * page's still-served ACTIVE-generation rows (acceptance 3).
+   * New rows are always written with the TARGET fingerprint (the live config's).
+   * The delete half of the delete+insert replace is FINGERPRINT-SCOPED while a
+   * swap is in flight, so an edit during a reindex never removes the page's
+   * still-served ACTIVE-generation rows.
    *
    * `activeFingerprint` lets the bulk run pass the pointer it resolved ONCE, so a
    * 1000-page run does not re-read the workspace settings 1000 times. The
@@ -264,14 +255,10 @@ export class EmbeddingIndexerService {
     // HARD replace in one transaction: delete then insert so search never returns
     // stale vectors for this page.
     //
-    // #599 — the delete is FINGERPRINT-SCOPED to the generation being rewritten
-    // (the target) whenever a swap is in flight. During a swap the page's ACTIVE
-    // rows are what search still serves; deleting them here (and inserting rows of
-    // the not-yet-served target generation) would drop the page out of semantic
-    // search for the entire reindex window. Outside a swap active === target and
-    // the scope is dropped entirely, so the replace ALSO reclaims the page's rows
-    // from any other generation (notably legacy NULL-fingerprint rows) — the
-    // per-page half of the generational GC.
+    // During a swap the delete is scoped to the generation being rewritten (the
+    // target): the page's ACTIVE rows are what search still serves. Outside a swap
+    // active === target and the scope is dropped, so the replace also reclaims the
+    // page's rows from any other generation (notably legacy NULL-fingerprint rows).
     const deleteScope =
       active === targetFingerprint ? undefined : [targetFingerprint];
 
@@ -292,62 +279,42 @@ export class EmbeddingIndexerService {
   }
 
   /**
-   * (Re)build embeddings for the EMBEDDABLE page set of a workspace — the same
-   * set countEmbeddablePages counts (via getEmbeddablePageIds): non-deleted pages
-   * that qualify under any of the three clauses of `embeddablePredicate` —
-   * non-empty textContent, OR an empty/null textContent whose ProseMirror
-   * `content` JSON has at least one text node (`"type":"text"`) that `jsonToText`
-   * can extract, OR an already-stored (non-deleted) embedding row — NOT every
-   * non-deleted page. Iterating this set keeps the live `total` equal to the
-   * steady-state denominator, so the progress counter climbs 0 -> total and
-   * matches the before/after DB coverage exactly. A page with truly no
-   * extractable text (empty textContent AND content with only non-text/atom
-   * nodes such as math) is correctly skipped (reindexPage no-ops on it); a page
-   * that lost its text but still has stale embeddings stays in the set (the
-   * EXISTS clause) so it is visited and its stale rows are cleared. Used by the
-   * bulk reindex (WORKSPACE_CREATE_EMBEDDINGS, fired when AI Search is enabled
-   * and by the manual "Reindex now" action).
+   * (Re)build embeddings for the EMBEDDABLE page set of a workspace — the set
+   * countEmbeddablePages counts (getEmbeddablePageIds / `embeddablePredicate`):
+   * non-empty textContent, OR ProseMirror `content` JSON with at least one text
+   * node, OR an already-stored embedding row (so a page that lost its text is
+   * visited and its stale rows cleared). Iterating this set keeps the live
+   * `total` equal to the steady-state denominator. Used by the bulk reindex
+   * (WORKSPACE_CREATE_EMBEDDINGS: AI Search enabled, or "Reindex now").
    *
-   * Resolves the embeddings model once up front: if the workspace has no
-   * embeddings provider configured, the whole batch is skipped (otherwise each
-   * page would no-op individually after a wasted read). Pages are processed
-   * sequentially and each is isolated in try/catch so one failure never aborts
-   * the batch.
+   * Skips the whole batch when no embeddings provider is configured. Pages are
+   * processed sequentially, each isolated in try/catch.
    *
-   * #599 — THE GENERATION SWAP. The run is the unit that owns a fingerprint
-   * transition, in this order:
+   * The run owns a fingerprint transition, in this order:
    *
    *   1. pin the TARGET (the live config's fingerprint) and read the ACTIVE
-   *      pointer. The run carries the target from here on: every row it writes
-   *      carries it, and the pointer may only ever be flipped ONTO it.
+   *      pointer. Every row the run writes carries the target, and the pointer may
+   *      only ever be flipped ONTO it.
    *   2. GC at the START: keep {active, target} only — reclaims older generations,
-   *      legacy NULL-fingerprint rows, and the partial output of an earlier run
-   *      whose target has since been superseded. Idempotent, so a retried run
-   *      re-runs it harmlessly (acceptance 4).
-   *   3. reindex every embeddable page into the TARGET generation. NON-DESTRUCTIVE:
-   *      the active generation is untouched and keeps serving search for the whole
-   *      window (acceptance 2), at the cost of a transient ~2x pgvector footprint
-   *      (documented on deleteOtherGenerations).
-   *   4. ATOMIC FLIP, only after the run indexed EVERY page it iterated (zero
-   *      failures) AND only if the config still resolves to this run's target
-   *      (EmbeddingGenerationService.completeRun). A fatal provider abort throws out
-   *      of the loop and never reaches this line, so an aborted run NEVER flips the
-   *      pointer (acceptance 4). If the config moved on MID-RUN, completeRun throws
-   *      StaleReindexTargetError: the job fails, BullMQ retries it, and the retry
-   *      re-resolves the provider here at step 1 and builds the new target (#599
-   *      review F1 — the enqueue that config change attempted was deduped against
-   *      this run, so the retry is the only thing that will ever build it).
+   *      legacy NULL-fingerprint rows, and the partial output of a superseded run.
+   *      Idempotent.
+   *   3. reindex every embeddable page into the TARGET generation. The active
+   *      generation keeps serving search meanwhile, at the cost of a transient ~2x
+   *      pgvector footprint (documented on deleteOtherGenerations).
+   *   4. ATOMIC FLIP, only after zero failures AND only if the config still
+   *      resolves to this run's target (EmbeddingGenerationService.completeRun). A
+   *      fatal provider abort throws before this line. If the config moved on
+   *      mid-run, completeRun throws StaleReindexTargetError and the BullMQ retry
+   *      builds the new target — the enqueue from that config change was deduped
+   *      against this run, so the retry is the only thing that builds it.
    *
-   * The legacy NULL-fingerprint rows of an existing instance are covered by exactly
-   * the same path: the first run writes the whole workspace under the target
-   * fingerprint, flips onto it, and the GC reclaims the NULLs (acceptance 1).
+   * Legacy NULL-fingerprint rows take the same path: the first run writes the
+   * workspace under the target fingerprint, flips, and the GC reclaims the NULLs.
    *
-   * #599 (D4) — the WHOLE run is serialised per workspace by a Postgres advisory
-   * lock (EmbeddingGenerationService.runExclusive). The BullMQ jobId dedupe alone is
-   * not enough: a stalled job is re-dispatched while the original still runs, and
-   * two overlapping runs destroy each other's generations (run B's start GC deletes
-   * run A's half-built target; a config rollback then lets A flip onto its own holed
-   * generation and GC the one that was serving). A second run simply skips.
+   * The WHOLE run is serialised per workspace by a Postgres advisory lock
+   * (EmbeddingGenerationService.runExclusive). The BullMQ jobId dedupe is not
+   * enough: a stalled job is re-dispatched while the original still runs, and two
+   * overlapping runs destroy each other's generations. A second run skips.
    */
   async reindexWorkspace(workspaceId: string): Promise<void> {
     const ran = await this.generation.runExclusive(workspaceId, () =>
@@ -425,16 +392,9 @@ export class EmbeddingIndexerService {
         );
       }
 
-      // Iterate the EMBEDDABLE set (same three-clause predicate as
-      // countEmbeddablePages), NOT every non-deleted page: this makes `total`
-      // here equal the steady-state denominator, so the live counter climbs
-      // 0 -> total and matches the before/after DB count exactly (no
-      // 478 -> 500 -> 478 denominator jump). Pages whose text lives in the
-      // ProseMirror `content` JSON (a text node) even with empty text_content ARE
-      // in this set (the content-JSON clause) and get embedded; a page with no
-      // extractable text at all is correctly skipped — reindexPage no-ops on it —
-      // and a page that lost its text but still has stale embeddings IS in this
-      // set (the EXISTS clause) so it is still visited and its stale rows cleared.
+      // Iterate the EMBEDDABLE set (same predicate as countEmbeddablePages), not
+      // every non-deleted page, so `total` equals the steady-state denominator and
+      // the live counter climbs 0 -> total. See reindexWorkspace for the set.
       const pageIds = await this.pageRepo.getEmbeddablePageIds(workspaceId);
       const total = pageIds.length;
       const startedAt = Date.now();
@@ -505,31 +465,13 @@ export class EmbeddingIndexerService {
           `${total - failed}/${total} indexed, ${failed} failed in ${Date.now() - startedAt}ms`,
       );
 
-      // #599 (D1) — a run with ANY failed page is NOT a full reindex, and the design
-      // flips "ONLY after a FULL reindex". Non-fatal per-page failures (a TEI
-      // timeout, a 429/500, a mixed-dimension page) are isolated so they cannot
-      // abort the batch — but they mean the TARGET generation has HOLES: those pages
-      // have no target rows. Flipping anyway would be data loss, not degradation:
-      //   - the post-flip GC (keep = [target]) would destroy the OLD generation,
-      //     including the only surviving rows of the failed pages -> they fall out
-      //     of semantic search PERMANENTLY;
-      //   - and coverage would report `full` (indexed == the recorded produced
-      //     total), i.e. a vacuous "full" over a corpus that silently lost 5%.
-      // So: no flip. The OLD generation keeps serving (complete, if stale), coverage
-      // keeps reporting `stale`, and the partial target rows are simply an extra
-      // generation — a re-run overwrites them page by page (the per-page replace is
-      // fingerprint-scoped, so it is idempotent), and the start GC reclaims them if
-      // the config has moved on in the meantime.
-      //
-      // #599 (R2) — and the re-run must be AUTOMATIC. Returning quietly here made
-      // the BullMQ job COMPLETE successfully, so nothing ever re-ran it: ONE
-      // transient TEI timeout parked the workspace in the swap window FOREVER (2x
-      // rows on an un-indexed vector column, `stale`, and lexical-only after a model
-      // change). THROW instead: the processor lets it out, BullMQ retries the job
-      // with exponential backoff, and the idempotent run re-attempts the failed
-      // pages. Bounded by the job's `attempts`, after which the workspace is left in
-      // this same (safe, old-generation-still-serving) state — degraded, but never
-      // silently and never claiming success.
+      // A run with ANY failed page is not a full reindex: the TARGET generation has
+      // holes. Flipping would let the post-flip GC (keep = [target]) destroy the old
+      // generation, including the only rows of the failed pages, and coverage would
+      // report `full`. So no flip: the old generation keeps serving, coverage stays
+      // `stale`, and the run THROWS so BullMQ retries it with backoff (the per-page
+      // replace is fingerprint-scoped, so a re-run is idempotent). After the job's
+      // `attempts` the workspace stays in this safe state.
       if (failed > 0) {
         this.logger.warn(
           `reindexWorkspace: NOT flipping the active generation for workspace ` +
@@ -541,24 +483,16 @@ export class EmbeddingIndexerService {
         throw new PartialReindexError(workspaceId, failed, total);
       }
 
-      // The run completed IN FULL (a fatal provider error would have thrown out of
-      // the loop above, skipping this; a partial run threw just above). Publish the
-      // generation: ONE settings write moves the active pointer onto the target and
-      // records `produced` (the pages that really produced a chunk), `total` (the
-      // pages the run considered embeddable) and `coverageAt` (when the run started)
-      // as the coverage measurements — but only if the config STILL resolves to this
-      // run's target, so a config change during the run cannot get a superseded
-      // generation published (the second-swap-during-the-first guard). On a
-      // successful flip completeRun also GCs the superseded generation, ending the
-      // transient ~2x storage.
+      // The run completed IN FULL. ONE settings write moves the active pointer onto
+      // the target and records `produced` (pages that really produced a chunk),
+      // `total` (pages the run considered embeddable) and `coverageAt` (run start)
+      // — only if the config STILL resolves to this run's target. On a flip
+      // completeRun also GCs the superseded generation.
       //
-      // #599 (review F1) — when the config DID move on, completeRun THROWS
-      // (StaleReindexTargetError) rather than skipping quietly, and the throw is
-      // deliberately left to propagate: it fails the BullMQ job, whose retry
-      // re-resolves the provider at the top of this method and builds the NOW-current
-      // target. Nothing else would: the reindex the config change tried to enqueue
-      // was de-duplicated against this very job, so swallowing this would leave the
-      // new fingerprint with zero rows and no job forever.
+      // When the config did move on, completeRun THROWS StaleReindexTargetError and
+      // the throw is left to propagate: the BullMQ retry re-resolves the provider
+      // and builds the current target. The reindex the config change tried to
+      // enqueue was de-duplicated against this job, so nothing else would.
       await this.generation.completeRun({
         workspaceId,
         target: targetFingerprint,

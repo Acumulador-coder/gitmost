@@ -5,19 +5,14 @@ import { PartialReindexError } from './embedding-indexer.service';
 import { QueueJob } from '../../../integrations/queue/constants';
 
 /**
- * #599 (R2) — the AI_QUEUE consumer's ERROR CONTRACT.
- *
- * The workspace-wide reindex and the per-page jobs need OPPOSITE handling, and the
- * bug this pins was that both were swallowed:
+ * The AI_QUEUE consumer's error contract:
  *
  *   - a per-PAGE job keeps per-item isolation (one bad page must not drop the
  *     others, and a provider error must not crash the worker);
  *   - the WORKSPACE reindex must PROPAGATE, so BullMQ fails the job and retries it
- *     with backoff. A run that ends with failed pages does not flip the active
- *     generation, so swallowing the error completed the job "successfully" and
- *     nothing ever re-ran it: the workspace stayed in the swap window — ~2x pgvector
- *     rows on an un-indexed column, `semantic.state: stale`, lexical-only search
- *     after a model change — permanently, from ONE transient TEI timeout.
+ *     with backoff. A run with failed pages does not flip the active generation,
+ *     so swallowing the error would leave the workspace in the swap window
+ *     permanently.
  */
 
 function makeProcessor(indexer: Partial<EmbeddingIndexerService>) {

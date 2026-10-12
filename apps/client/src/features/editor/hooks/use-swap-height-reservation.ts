@@ -18,10 +18,10 @@ export const EARLY_SWAP_RELEASE_RATIO = 0.8;
  *
  * The live editor lays out its content over a few frames, so replacing the
  * (full-height) static copy with it momentarily shrinks the document; the
- * browser then clamps window scroll to the top, which yanked the reader off
- * their restored reading position (and threw their scroll to 0 if they were
+ * browser then clamps window scroll to the top, which would yank the reader off
+ * their restored reading position (and throw their scroll to 0 if they were
  * scrolling at that moment). Pinning a min-height on the swap wrapper keeps the
- * document tall through the swap so the scroll position simply survives (#266).
+ * document tall through the swap so the scroll position simply survives.
  * `reservedHeight === null` means no reservation is active.
  *
  * The capture is intentionally a CALLBACK the page editor invokes, NOT something
@@ -63,7 +63,7 @@ export function useSwapHeightReservation(
   // last-resort so we never pin forever. A shorter-than-reserved live doc (rare:
   // stale/longer cache) releases at the cap, leaving only harmless bottom dead
   // space until then.
-  // `earlySwap` (#564, guard 6): with local-first the swap happens hundreds of ms
+  // `earlySwap` (guard 6): with local-first the swap happens hundreds of ms
   // EARLIER, from the local ydoc — whose content may legitimately differ in
   // height from the (network-seeded) static copy. Demanding an exact match would
   // then pin the reservation until the 4s cap and leave dead space under the
@@ -75,7 +75,7 @@ export function useSwapHeightReservation(
   // releasing there would collapse the document and clamp the scroll to the top —
   // precisely the bug the reservation exists to prevent. Releasing at 80% keeps
   // the guard meaningful while tolerating a legitimately-shorter local copy; a
-  // still-shorter one falls back to the 4s cap, as before.
+  // still-shorter one falls back to the 4s cap.
   useEffect(() => {
     if (showStatic || reservedHeight == null) return;
     let raf = 0;

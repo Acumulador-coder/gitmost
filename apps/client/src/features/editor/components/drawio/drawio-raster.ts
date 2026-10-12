@@ -1,5 +1,5 @@
-// Pure, framework-free helpers for the draw.io PNG-raster embedding feature
-// (issue #629, Part A). These are deliberately side-effect free so the tricky
+// Pure, framework-free helpers for the draw.io PNG-raster embedding feature.
+// These are deliberately side-effect free so the tricky
 // bits (format dispatch, string-splice injection, the upload guardrail, the
 // xml-state compare and the size budget) can be unit-tested without a browser
 // or a live draw.io embed. The React orchestration lives in
@@ -20,7 +20,7 @@ export const RASTER_DATA_URI_PREFIX = "data:image/png;base64,";
 // scale is still over, we give up and save without a raster.
 export const MAX_RASTER_BYTES = 2 * 1024 * 1024; // 2 MiB
 
-// PNG export scale ladder (issue #629 follow-up: retina quality). draw.io's
+// PNG export scale ladder. draw.io's
 // default png export is 1x, which looks soft on hi-DPI screens and whenever the
 // diagram is shown wider than its native px size. We export at 2x for crisp
 // text/lines and, on over-budget, step DOWN this ladder (2 -> 1 -> 0.5) instead
@@ -218,12 +218,10 @@ export function decodedBase64ByteLength(input: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Extracted decision logic for the React hook (`use-drawio-raster-save.ts`).
-// These are the state-machine "cores" that were previously inline in the hook
-// and thus untestable without a browser/editor; pulled out here so the hook's
-// riskiest decisions get real unit-test regression protection (issue #629 M3).
-// The hook wires refs/timers/ProseMirror around these; that plumbing stays in
-// the hook and is genuinely lifecycle-bound.
+// Extracted decision logic for the React hook (`use-drawio-raster-save.ts`):
+// the state-machine "cores" live here so the hook's riskiest decisions are
+// unit-testable without a browser/editor. The hook wires refs/timers/ProseMirror
+// around these; that plumbing is lifecycle-bound and stays in the hook.
 // ---------------------------------------------------------------------------
 
 /**

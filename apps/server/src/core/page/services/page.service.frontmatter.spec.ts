@@ -1,6 +1,6 @@
-// #555 (review of #514): the REST full-body content-write path
-// (`parseProsemirrorContent`, used by createPage / updatePageContent) must be
-// SYMMETRIC with the MCP agent-write path — it must NOT strip a leading
+// The REST full-body content-write path (`parseProsemirrorContent`, used by
+// createPage / updatePageContent) must be SYMMETRIC with the MCP agent-write
+// path — it must NOT strip a leading
 // `---…---` as YAML front-matter. A page that opens with a horizontalRule and
 // contains a later `---` serializes to a `---…---`-shaped body; stripping it as
 // front-matter silently deletes the page's leading content (the same class of

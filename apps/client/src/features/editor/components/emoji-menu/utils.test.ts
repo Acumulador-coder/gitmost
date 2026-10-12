@@ -76,7 +76,7 @@ describe("getFrequentlyUsedEmoji", () => {
     expect(getFrequentlyUsedEmoji()).toEqual({ rocket: 42 });
   });
 
-  // BUG (issue #204, Phase 2): getFrequentlyUsedEmoji() does an unprotected
+  // BUG: getFrequentlyUsedEmoji() does an unprotected
   // JSON.parse() of the raw localStorage value. A corrupt value (e.g. truncated
   // by a crash, or written by another tab/extension) makes the emoji menu throw
   // on open instead of degrading gracefully to the default set.

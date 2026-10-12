@@ -14,12 +14,10 @@ import {
 import { AuditLogContext, IAuditService } from './audit.service';
 
 /**
- * Minimal DB-backed audit trail (#496). Replaces NoopAuditService so that
- * decision-bearing events — notably comment.suggestion_applied /
- * comment.suggestion_dismissed, whose subject comment is HARD-DELETED on the
- * childless path — leave a durable record of who decided what. Without this the
- * events were emitted (comment.service / *.controller) but swallowed, so an
- * applied/dismissed suggestion was unrecoverable once the row was gone.
+ * Minimal DB-backed audit trail, so that decision-bearing events — notably
+ * comment.suggestion_applied / comment.suggestion_dismissed, whose subject
+ * comment is HARD-DELETED on the childless path — leave a durable record of who
+ * decided what.
  *
  * Rows land in the pre-existing `audit` table (migration 20260228T223532). The
  * per-request actor/workspace/ip come from the CLS AuditContext populated by

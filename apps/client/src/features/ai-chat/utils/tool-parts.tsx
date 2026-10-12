@@ -6,10 +6,9 @@
  * A tool part's `type` is `tool-${toolName}` (AI SDK v6 static tool parts) and
  * its `state` is one of input-streaming / input-available / output-available /
  * output-error (we only surface running / done / error). The full toolset the
- * server exposes lives in `ai-chat-tools.service.ts` (the agent now exposes the
- * complete Docmost toolset); friendly action-log labels exist ONLY for the
- * tools listed in `toolLabelKey` below — every other tool falls through to the
- * generic "Ran tool {{name}}" label.
+ * server exposes lives in `ai-chat-tools.service.ts`; friendly action-log labels
+ * exist ONLY for the tools listed in `toolLabelKey` below — every other tool
+ * falls through to the generic "Ran tool {{name}}" label.
  */
 
 /** A tool UI part as it arrives from `useChat` / persisted history. */

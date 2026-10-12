@@ -1,14 +1,12 @@
 import { CommentRepo } from './comment.repo';
 
 /**
- * Enrichment coverage for CommentRepo.findById (#300).
+ * Enrichment coverage for CommentRepo.findById.
  *
  * The {agent,launcher} avatar stack must be attached on the SINGLE-ROW read
  * path, not only on findPageComments — the live websocket broadcasts
  * (commentCreated/commentUpdated/commentResolved) return a comment loaded via
- * findById. These tests would FAIL against the previous un-enriched findById
- * (which returned the raw row without calling attachCommentAgent and without
- * selecting the agent-role subquery).
+ * findById.
  *
  * The Kysely db is replaced by a chainable recorder so the query never touches a
  * real database: it records the `.select(...)` args (to prove the agent-role
@@ -83,16 +81,13 @@ describe('CommentRepo.findById — agent avatar stack enrichment', () => {
     expect(result).not.toHaveProperty('agentRole');
   });
 
-  // #559 — external-MCP (api_key) provenance, FORM 3. The row carries
+  // External-MCP (api_key) provenance, FORM 3. The row carries
   // createdSource='agent', aiChatId null, a non-null createdApiKeyId, and the
   // key-name join object (`apiKey`). attachCommentAgent must thread
   // api_key_id + apiKeyName into resolveAgentProvenance so the persona is the
   // NAMED key, launcher null, and the join-only `apiKey` object is stripped.
-  //
-  // NON-VACUITY: if the read-side threading is reverted (attachCommentAgent no
-  // longer passes api_key_id / apiKeyName, or the resolver's external-MCP branch
-  // is removed) this row falls into the degenerate external form and `agent`
-  // becomes the creator ('MCP Bot') instead of the key name — reddening this.
+  // Without that threading the row falls into the degenerate external form and
+  // `agent` would be the creator ('MCP Bot') instead of the key name.
   it('external MCP with api_key name (form 3): agent = key name, launcher = null, apiKey stripped', async () => {
     const { repo } = makeRepo({
       id: 'c-5',

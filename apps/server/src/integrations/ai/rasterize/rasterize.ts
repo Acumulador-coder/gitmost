@@ -9,7 +9,7 @@
  * ever left dangling.
  *
  * No browser, no child process, no external service — the worker thread is
- * in-process, satisfying the #423 hard constraint.
+ * in-process.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';

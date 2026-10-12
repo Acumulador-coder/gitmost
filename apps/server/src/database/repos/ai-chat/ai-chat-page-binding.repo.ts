@@ -4,11 +4,10 @@ import { KyselyDB, KyselyTransaction } from '../../types/kysely.types';
 import { dbOrTx } from '../../utils';
 
 /**
- * Repository for the MUTABLE page->chat binding (#665): the pointer that says
- * "for THIS user, on THIS page, this chat opens." Replaces the #191
- * findLatestByPage "newest chat born on the page wins" heuristic as the binding
- * resolver, so a conscious open (history select) or "New chat" (unbind) can move
- * the pointer without touching the immutable `ai_chats.page_id` provenance.
+ * Repository for the MUTABLE page->chat binding: the pointer that says "for
+ * THIS user, on THIS page, this chat opens." A conscious open (history select)
+ * or "New chat" (unbind) moves the pointer without touching the immutable
+ * `ai_chats.page_id` provenance.
  *
  * One row per (userId, pageId) — the UNIQUE(user_id, page_id) invariant; writes
  * upsert / delete on that key. Absence of a row == "nothing bound" == an empty
@@ -23,9 +22,9 @@ export class AiChatPageBindingRepo {
    * Joins the chat and re-checks ownership at read time so a stale row can never
    * surface a chat the user no longer owns / that left the workspace / was
    * soft-deleted: a deleted bound chat resolves to null (=> a fresh empty chat),
-   * NOT a 500. There is deliberately NO fallback to the old findLatestByPage
-   * heuristic — after "New chat" the row is gone, and a fallback would resurrect
-   * the unbound chat, breaking the whole feature (#665).
+   * NOT a 500. There is deliberately no "newest chat on the page" fallback:
+   * after "New chat" the row is gone, and a fallback would resurrect the
+   * unbound chat.
    */
   async findChatIdByPage(
     userId: string,

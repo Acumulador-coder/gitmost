@@ -116,8 +116,8 @@ export interface GitHttpBackendRequest {
  * `<dataDir>/<spaceId>` (no `.git` suffix on disk), so the
  * repo directory git http-backend must resolve is `<spaceId>` — NOT
  * `<spaceId>.git`. The URL carries the conventional `.git` suffix (stripped by
- * parseGitPath into `spaceId`); re-appending it here pointed the CGI at a
- * non-existent `<dataDir>/<spaceId>.git` and every fetch/push 404'd.
+ * parseGitPath into `spaceId`); re-appending it here would point the CGI at a
+ * non-existent `<dataDir>/<spaceId>.git` and every fetch/push would 404.
  */
 export function buildGitBackendCgiEnv(
   parsed: GitHttpBackendRequest,
@@ -164,7 +164,7 @@ export class GitHttpBackendService {
    * A receive-pack writes `main`, so if the lock lapses mid-push
    * (heartbeat CAS miss / Redis outage) the signal fires and we kill the child —
    * preventing it from continuing to write the vault while another replica
-   * may have taken over the lock and started a cycle (warning #3).
+   * may have taken over the lock and started a cycle.
    */
   async run(
     parsed: GitHttpBackendRequest,

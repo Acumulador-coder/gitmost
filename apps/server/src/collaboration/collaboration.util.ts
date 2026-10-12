@@ -56,8 +56,8 @@ export function inEditorShape(pmJson: any) {
 }
 
 /**
- * Deterministic text-serializer overrides for the `format:"text"` page read
- * (#502). Non-text nodes render to a STABLE placeholder instead of their
+ * Deterministic text-serializer overrides for the `format:"text"` page read.
+ * Non-text nodes render to a STABLE placeholder instead of their
  * (structure-dependent) inner text, so a machine diff of two text reads is
  * driven only by the page's actual prose — output stability across package
  * versions IS the contract (pinned by a snapshot test). Returning a string from
@@ -89,7 +89,7 @@ const TEXT_READ_SERIALIZERS: Record<string, (props: { node: any }) => string> =
  * concatenated node text with `generateText`'s default `\n\n` block separator.
  * This feeds the page `textContent` tsvector and MUST NOT change.
  *
- * `deterministic:true` (#502 `format:"text"` page read): a flat, machine-diffable
+ * `deterministic:true` (`format:"text"` page read): a flat, machine-diffable
  * rendering — one line per block (`\n` block separator; `hardBreak` already
  * serializes to `\n`), inline marks/anchors/autoformat dropped, and non-text
  * nodes replaced by the stable placeholders above (`[image]`, `[table RxC]`).
@@ -221,20 +221,18 @@ export function prosemirrorNodeToYElement(node: any): Y.XmlElement | Y.XmlText {
 }
 
 /**
- * #647 §C / R1 — write a ProseMirror JSON doc into the live Yjs fragment by
- * STRUCTURAL DIFF (`updateYFragment`), the exact routine the editor itself uses
- * to sync ProseMirror edits into Yjs. It diffs the new node against the current
- * fragment and touches only the changed children, so unchanged nodes keep their
- * Yjs identity (node ids). y-prosemirror anchors the editor selection to those
- * ids, so a naive `fragment.delete(0,len)` + `toYdoc` + `applyUpdate` full replace
- * (what `updatePageContent` operation='replace' does) discards every id and snaps
- * an idle human editor's cursor to the end of the document on every agent write
- * (the #152 regression). The guarded CAS replace uses THIS instead.
+ * Write a ProseMirror JSON doc into the live Yjs fragment by STRUCTURAL DIFF
+ * (`updateYFragment`), the routine the editor itself uses to sync ProseMirror
+ * edits into Yjs. Only changed children are touched, so unchanged nodes keep
+ * their Yjs identity; y-prosemirror anchors the editor selection to it, so a
+ * full replace (`fragment.delete(0,len)` + `toYdoc` + `applyUpdate`, as
+ * `updatePageContent` operation='replace' does) snaps an idle editor's cursor to
+ * the end of the document. The guarded CAS replace uses this.
  *
  * MUST run inside a `doc.transact` (the caller's `connection.transact`) so the
- * diff applies atomically with no remote update interleaving. Mirrors the MCP
- * client's `applyDocToFragment` (packages/mcp/src/lib/collaboration.ts) but over
- * the server's own schema (`jsonToNode`, which strips unknown node types).
+ * diff applies atomically. Mirrors the MCP client's `applyDocToFragment`
+ * (packages/mcp/src/lib/collaboration.ts) over the server's own schema
+ * (`jsonToNode`, which strips unknown node types).
  */
 export function applyPmJsonToFragment(doc: Y.Doc, pmJson: JSONContent): void {
   const pmNode = jsonToNode(pmJson);
@@ -247,9 +245,7 @@ export function applyPmJsonToFragment(doc: Y.Doc, pmJson: JSONContent): void {
 
 export function jsonToMarkdown(tiptapJson: any): string {
   // Direct ProseMirror JSON -> Markdown via the canonical converter
-  // (`@docmost/prosemirror-markdown`) — no HTML intermediate, no second
-  // editor-ext markdown layer. Same serializer as the page/space export and the
-  // git-sync vault writer, so every server PM->MD path emits identical canonical
-  // markdown (issue #345).
+  // (`@docmost/prosemirror-markdown`), the same serializer as the page/space
+  // export and the git-sync vault writer.
   return convertProseMirrorToMarkdown(tiptapJson);
 }

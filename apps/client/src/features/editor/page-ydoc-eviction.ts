@@ -14,7 +14,7 @@ import { canOpenLocalYdoc } from "@/features/editor/page-ydoc-tombstones";
 import { isSessionExpired } from "@/features/user/session-verified";
 
 /**
- * Fail-closed hygiene of a page's LOCAL body ydoc (#564 guard 3, #626, #640).
+ * Fail-closed hygiene of a page's LOCAL body ydoc (guard 3).
  *
  * With local-first on, the body is painted from the local ydoc BEFORE the
  * network answers. If access was meanwhile lost (or the page deleted), the page
@@ -30,7 +30,7 @@ import { isSessionExpired } from "@/features/user/session-verified";
  * never mounts there (not-found renders instead), so BOTH halves of this module
  * are mount-independent:
  *  - the subscriber is installed at APP level (main.tsx), not from the editor;
- *  - the `slugId -> pageId` alias is resolved from the PERSISTED #563 page-meta
+ *  - the `slugId -> pageId` alias is resolved from the PERSISTED page-meta
  *    boot cache (which stores every page under both aliases), not only from the
  *    session-scoped map a successful mount populates.
  */
@@ -44,9 +44,9 @@ import { isSessionExpired } from "@/features/user/session-verified";
 export const PAGE_YDOC_PREFIX = "page.";
 
 /**
- * The y-indexeddb DATABASE name for a page's body — NAMESPACED BY SCOPE (#626).
+ * The y-indexeddb DATABASE name for a page's body — NAMESPACED BY SCOPE.
  *
- * ⚠️ DB name ≠ collab room name (#640, invariant 1). This is used ONLY for
+ * ⚠️ DB name ≠ collab room name. This is used ONLY for
  * `IndexeddbPersistence`, eviction, tombstones and purge. The collab ROOM name
  * is `pageYdocRoomName(pageId)` = `page.<pageId>` and MUST stay un-namespaced:
  * the server resolves the page from the room name via
@@ -55,7 +55,7 @@ export const PAGE_YDOC_PREFIX = "page.";
  * auth + persistence on EVERY collab connection.
  *
  * The DB name embeds the same `<workspace>:<user>` scope key the tree/meta boot
- * caches use (`scopeKeyAtom`, the #563 mechanism), yielding
+ * caches use (`scopeKeyAtom`), yielding
  * `page.<scopeKey>.<pageId>`, so two scopes get two distinct databases and a
  * shared browser never serves one user's local body to another.
  *
@@ -78,12 +78,11 @@ export function pageYdocDbName(scopeKey: string, pageId: string): string {
  * (apps/server/src/collaboration/collaboration.util.ts). A scope-namespaced room
  * name (`page.<scopeKey>.<pageId>`) makes `split('.')[1]` return the SCOPE, not
  * the pageId → the collab server can't find the page → every authenticated
- * collab connection is rejected (regression introduced by #626 wiring the
- * namespaced db name straight into HocuspocusProvider.name). Local-content
+ * collab connection is rejected. Local-content
  * isolation lives entirely in the IndexedDB DB name (pageYdocDbName); the room
  * name must never carry the scope. It is the SAME room name the MCP agent opens
- * (`page.<uuid>`), so a scoped name also split the human editor and the agent into
- * different rooms. Locked on both sides: the room-name construction here by
+ * (`page.<uuid>`); a scoped name would also split the human editor and the
+ * agent into different rooms. Locked on both sides: the room-name construction here by
  * page-ydoc-eviction.test.ts, and the server getPageId contract by
  * collaboration.util.spec.ts.
  */
@@ -166,7 +165,7 @@ export function resetPageYdocRegistryForTests(): void {
  * Map a `["pages", id]` query-key id to the page's ydoc DATABASE name, using the
  * given scope. Three sources, in order of authority:
  *  1. this session's alias map (a page opened here — always exact);
- *  2. the PERSISTED #563 page-meta boot cache (every page under BOTH aliases);
+ *  2. the PERSISTED page-meta boot cache (every page under BOTH aliases);
  *  3. a bare uuid, which IS the pageId by construction.
  * A slugId in none of them addresses a page this device never opened.
  */
@@ -306,7 +305,7 @@ let scopeDrainInstalled = false;
  * what is mounted. Installed ONCE at app level (main.tsx): the revoked-page case
  * this exists for never mounts the page editor at all.
  *
- * ORDERING (load-bearing): this must be installed BEFORE #563's
+ * ORDERING (load-bearing): this must be installed BEFORE
  * `installPageMetaEviction`, because that subscriber DELETES the page-meta entry
  * this one resolves the `slugId -> pageId` alias from.
  */
@@ -440,18 +439,18 @@ function ydocDbNameKnown(name: string): boolean {
 /**
  * Best-effort SYNCHRONOUS check: is there a usable LOCAL body ydoc for this page?
  *
- * page.tsx uses it (#641, part 7) to choose, WITHOUT an async IndexedDB open,
+ * page.tsx uses it to choose, WITHOUT an async IndexedDB open,
  * between rendering the cached body offline and the explicit "not available
  * offline" empty-state. Fail-closed:
  *  - anon / unresolved scope, or a session past OFFLINE_GRACE → no local body;
- *  - tombstoned under either alias (access revoked, Ф4) → no local body;
+ *  - tombstoned under either alias (access revoked) → no local body;
  *  - the ydoc DB was never opened here (not in the registry) → the page is in the
- *    boot META cache but its BODY was never written on this device (the exact
- *    part-7 case: a link/tree entry cached the chrome, the body never loaded).
+ *    boot META cache but its BODY was never written on this device (a
+ *    link/tree entry cached the chrome, the body never loaded).
  *
  * A registry hit whose IndexedDB the browser later evicted (Safari) is a
  * tolerated false-positive: the editor then shows an empty body instead of the
- * empty-state — no worse than today, and not an eternal silent skeleton because
+ * empty-state — and not an eternal silent skeleton because
  * the offline banner still explains the state.
  */
 export function hasLocalPageBody(
@@ -524,8 +523,8 @@ export function installYdocPurgeBroadcastListener(): void {
 }
 
 /**
- * Purge EVERY `page.`-prefixed ydoc IndexedDB database of this scope, AWAITABLE
- * (#640, part 4). Called on logout / 401 / sign-in / session-boundary, so one
+ * Purge EVERY `page.`-prefixed ydoc IndexedDB database of this scope,
+ * AWAITABLE. Called on logout / 401 / sign-in / session-boundary, so one
  * user's local page bodies never survive into another user's session.
  *
  *  1. broadcast "close your ydocs" to other tabs (so their handles release and
@@ -614,7 +613,7 @@ function legacyPageIdsFromMetaBlobs(): Set<string> {
 const YDOC_MIGRATION_FLAG = "pageYdoc.legacyPurged.v1";
 
 /**
- * ONE-TIME migration (#626 / #640, part 8): on the first launch of the
+ * ONE-TIME migration: on the first launch of the
  * namespaced build, delete the legacy un-namespaced `page.<pageId>` databases
  * left by earlier versions. The body is authoritative on the server; the local
  * ydoc is only a cache, so dropping it is safe (it re-hydrates from collab).
@@ -622,7 +621,7 @@ const YDOC_MIGRATION_FLAG = "pageYdoc.legacyPurged.v1";
  * TWO discovery sources, because after the rename NOTHING lists the legacy names
  * on Firefox otherwise:
  *  - `indexedDB.databases()` where it exists (Chrome/Safari);
- *  - the #563 page-meta boot cache, which holds EVERY cached pageId under both
+ *  - the page-meta boot cache, which holds EVERY cached pageId under both
  *    aliases — so we can derive `page.<pageId>` legacy names and delete them by
  *    name even on Firefox. This MUST run BEFORE the meta cache is swept
  *    (main.tsx installs it at boot, before any logout).

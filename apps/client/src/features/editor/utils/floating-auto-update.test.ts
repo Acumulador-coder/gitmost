@@ -10,13 +10,13 @@ describe("EDITOR_AUTO_UPDATE_OPTIONS", () => {
 });
 
 /**
- * Drift guard (F1). The three table handles are covered by a behavioral test
+ * Drift guard. The three table handles are covered by a behavioral test
  * (`components/table/handle/floating-auto-update.test.tsx`), but the remaining
  * anchors — slash menu, emoji menu, mentions, footnote popover — are imperative
  * `autoUpdate(...)` calls inside Tiptap suggestion renderers with no component
  * to mount. This scan makes sure NO call site (existing or newly added) starts
- * an `autoUpdate` without the shared options, which is exactly the regression
- * that produced the Safari CPU burn.
+ * an `autoUpdate` without the shared options (see floating-auto-update.ts for
+ * the Safari CPU burn they prevent).
  */
 const CLIENT_SRC = join(__dirname, "..", "..", "..");
 // The shared editor extensions have no floating-ui anchor today; scanning them

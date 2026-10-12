@@ -71,8 +71,8 @@ function chatIdSnapshot(
  * fallback), the history-loaded latch, and the render-phase reconciler that keeps
  * the thread's mount key in sync with the public `activeChatId` atom.
  *
- * This is the twice-bugged area for the #137 two-tab adoption race; the canonical
- * explanation of the adoption design lives in adopt-chat-id.ts.
+ * The canonical explanation of the two-tab-safe adoption design lives in
+ * adopt-chat-id.ts.
  */
 export function useChatSession(
   params: UseChatSessionOptions,
@@ -135,15 +135,14 @@ export function useChatSession(
   // list, which races a second tab — #137; see adopt-chat-id.ts).
   const onTurnFinished = useCallback(
     (serverChatId?: string, finishingThreadKey?: string) => {
-      // Thread-aware guard (#161). A turn ABANDONED by "New chat" mid-stream still
-      // fires onFinish/onError after its ChatThread unmounted (@ai-sdk/react does
-      // not abort on unmount and proxies callbacks through a ref). If that late
-      // finish ran the adoption path it would set activeChatId to the abandoned
-      // chat's real id and yank the user out of the fresh chat they just opened.
-      // So adopt / arm the fallback ONLY for the still-mounted thread; an
-      // abandoned one merely refreshes the chat list (so the left-behind chat
-      // surfaces in history) and does nothing else. A missing key (undefined)
-      // means "current thread" — keeps old call sites/tests working.
+      // Thread-aware guard. A turn ABANDONED by "New chat" mid-stream still fires
+      // onFinish/onError after its ChatThread unmounted (@ai-sdk/react does not abort
+      // on unmount and proxies callbacks through a ref). If that late finish ran the
+      // adoption path it would set activeChatId to the abandoned chat's real id and
+      // yank the user out of the fresh chat they just opened. So adopt / arm the
+      // fallback ONLY for the still-mounted thread; an abandoned one merely refreshes
+      // the chat list (so the left-behind chat surfaces in history). A missing key
+      // (undefined) means "current thread".
       if (
         finishingThreadKey !== undefined &&
         finishingThreadKey !== threadKeyRef.current
@@ -189,7 +188,7 @@ export function useChatSession(
     [chats, setActiveChatId, onInvalidateChatList, onInvalidateChatMessages],
   );
 
-  // EARLY adoption (#174): adopt the authoritative streamed chat id the moment
+  // EARLY adoption: adopt the authoritative streamed chat id the moment
   // the server emits it on the `start` chunk, so a brand-new chat gets its real
   // `activeChatId` WHILE its first turn streams — not only at terminal
   // onTurnFinished. This makes the activeChatId-gated Copy/export button
@@ -276,7 +275,7 @@ export function useChatSession(
   // equals the chat id) whose history has not been fully loaded yet. For a live
   // in-place thread that adopted its id, the key is still the "new-…" session
   // key, so the live thread keeps rendering; and once a chat's history has loaded,
-  // a later background refetch no longer tears it down (see the latch above).
+  // a later background refetch does not tear it down (see the latch above).
   const waitingForHistory =
     activeChatId !== null &&
     messagesLoading &&
@@ -293,7 +292,7 @@ export function useChatSession(
     pendingNewChatRef.current = null;
   }, []);
 
-  // Force a fresh, empty thread regardless of `activeChatId` (#161). The render-
+  // Force a fresh, empty thread regardless of `activeChatId`. The render-
   // phase reconciler only remounts when activeChatId diverges from thread.chatId,
   // so "New chat" pressed while a brand-new chat's first turn is still streaming
   // (activeChatId AND thread.chatId both null — the real id is adopted only at the

@@ -175,7 +175,7 @@ describe("formatRelativeTime — relative buckets and absolute-date fallback", (
   });
 
   it("falls back to an absolute short date once >= 7 days old", () => {
-    // 6d -> still relative; 7d -> absolute date (no longer N[mhd], and equal to
+    // 6d -> still relative; 7d -> absolute date (not N[mhd], and equal to
     // the localized short-date of the source timestamp).
     expect(formatRelativeTime(ago(6 * DAY))).toBe("6d");
 

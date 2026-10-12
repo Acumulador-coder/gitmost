@@ -162,8 +162,8 @@
     );
 }
 
-/* "A page just moved in here" cue (#523). A make-child drop no longer expands
-   the collapsed target, so the moved page is momentarily invisible; pulse the
+/* "A page just moved in here" cue. A make-child drop does not expand the
+   collapsed target, so the moved page is momentarily invisible; pulse the
    target row in a distinct teal (NOT the blue make-child highlight, NOT the
    neutral post-move flash) so the landing is noticeable while the node stays
    collapsed. Two short pulses fit inside DROP_LANDED_HIGHLIGHT_MS (1.8s), after

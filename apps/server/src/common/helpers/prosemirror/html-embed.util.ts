@@ -7,7 +7,7 @@ export const HTML_EMBED_NODE_NAME = 'htmlEmbed';
  *
  * The `htmlEmbed` node renders inside a SANDBOXED iframe (no `allow-same-origin`)
  * on the client, so its content cannot touch the viewer's session/cookies/API —
- * it is NOT a stored-XSS surface. This helper is retained ONLY to honor the
+ * it is NOT a stored-XSS surface. This helper exists only to honor the
  * workspace master toggle (`settings.htmlEmbed`) on the anonymous public-share
  * read path: an anonymous viewer cannot read the workspace toggle, so the server
  * strips the block when the toggle is OFF before serving shared content.

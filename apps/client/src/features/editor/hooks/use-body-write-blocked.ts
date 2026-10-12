@@ -6,7 +6,7 @@ import { bodyWriteBlockedAtom } from "@/features/editor/atoms/editor-atoms";
 
 /**
  * Guard for PROGRAMMATIC writes to the page body during the local-first
- * read-only window (#564, guard 2).
+ * read-only window (guard 2).
  *
  * In that window the body's Yjs write guard rejects every doc-changing
  * transaction, and `filterTransaction` gives the caller no feedback — so a

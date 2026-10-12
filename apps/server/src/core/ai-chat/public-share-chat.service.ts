@@ -107,7 +107,7 @@ export function filterShareTranscript(messages: UIMessage[]): UIMessage[] {
 
 /**
  * Fixed, classified strings an ANONYMOUS share reader may see when the assistant
- * stream fails (#394). These reveal NOTHING about the internal provider, its
+ * stream fails. These reveal NOTHING about the internal provider, its
  * baseUrl, the model name, or the raw response body — unlike describeProviderError
  * (which is for the server log / the authenticated operator only). We classify by
  * HTTP status where available so the reader still gets a useful hint (retry vs.
@@ -158,7 +158,7 @@ export class PublicShareChatService {
    * COST contour two: a per-workspace TOKEN budget over a rolling day. The
    * request-count limiter above bounds how many anonymous calls run; this bounds
    * how many provider TOKENS they spend (input re-sent per step + output),
-   * which is what the owner is actually billed for (issue #159, finding #5).
+   * which is what the owner is actually billed for.
    * Checked read-only before a turn streams; the real usage is recorded once the
    * turn finishes (`onFinish`).
    */
@@ -189,7 +189,7 @@ export class PublicShareChatService {
    * rolling-day token budget, false once the trailing-day token spend has
    * reached it (the controller must then 429 BEFORE starting the stream). This
    * bounds the owner's actual provider bill, which counting requests alone does
-   * not (issue #159, finding #5).
+   * not.
    */
   async withinShareTokenBudget(workspaceId: string): Promise<boolean> {
     return this.tokenBudget.withinBudget(workspaceId);
@@ -207,7 +207,7 @@ export class PublicShareChatService {
    * `streamText` onFinish hook body: account a finished turn's REAL token spend
    * (input re-sent per step + output, summed across all steps) against the
    * per-workspace rolling-day budget, so a future turn over budget is rejected up
-   * front (issue #159, finding #5). `totalUsage` fields are `number | undefined`;
+   * front. `totalUsage` fields are `number | undefined`;
    * fall back to the sum of input+output when the provider omits `totalTokens`.
    * Fire-and-forget: the turn already streamed, so a record failure must not
    * break it.
@@ -349,7 +349,7 @@ export class PublicShareChatService {
       result.pipeUIMessageStreamToResponse(res.raw, {
         headers: { 'X-Accel-Buffering': 'no' },
         onError: (error: unknown) => {
-          // SECURITY (#394): the string this returns is written verbatim into the
+          // SECURITY: the string this returns is written verbatim into the
           // SSE error frame delivered to an ANONYMOUS reader (for a tool failure
           // it becomes the atomic `tool-output-error` frame's errorText; for a
           // stream/provider failure, the terminal error frame).

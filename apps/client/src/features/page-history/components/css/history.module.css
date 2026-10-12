@@ -83,11 +83,10 @@
 .desktopRoot {
   display: flex;
   flex-direction: column;
-  /* #605 Fix B — centered popup (not fullScreen). The height MUST be
+  /* Centered popup (not fullScreen). The height MUST be
      viewport-defined: Modal.Body is auto-height and not a flex column, so
      height:100% would collapse to auto and the inner ScrollAreas would lose
-     their bounded height and clip (the same reason #583 could not use
-     height:100%). 90vh sits inside Mantine's content max height
+     their bounded height and clip. 90vh sits inside Mantine's content max height
      calc(100dvh − 2·yOffset) = 94vh at yOffset=3vh, and gives this flex column
      (toolbar flex:none 56px + body flex:1 min-height:0) a correct bounded height
      so both ScrollAreas scroll internally. */
@@ -196,7 +195,7 @@
   font-weight: 500;
 }
 
-/* #583 Fix A — hover response for in-month cells ONLY. An INSET box-shadow ring
+/* Hover response for in-month cells ONLY. An INSET box-shadow ring
    (not a bg swap, not filter:brightness): a bg swap would put white heat-3 digits
    on a light-grey fill and hide them; brightness is invisible on transparent
    heat-0 (empty) days. The inset ring is visible over transparent heat-0,

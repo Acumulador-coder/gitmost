@@ -26,7 +26,7 @@ const MAX_BYTES = 1_000_000;
 /**
  * Fetches + validates the agent-roles catalog from its configured source. The
  * source (EnvironmentService.getAiAgentRolesCatalogSource()) is an http(s)://
- * base URL — REMOTE only; local-filesystem sources are no longer supported. The
+ * base URL — REMOTE only; local-filesystem sources are not supported. The
  * value is baked into the Docker image at build time (set per-branch in CI).
  *
  * The catalog is UNTRUSTED input: every file is YAML-parsed with a SAFE schema

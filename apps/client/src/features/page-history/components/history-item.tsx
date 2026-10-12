@@ -133,7 +133,7 @@ const HistoryItem = memo(function HistoryItem({
             launcher={historyItem.launcher}
             aiChatId={historyItem.lastUpdatedAiChatId}
             // The history row owns the modal: close it when the stack deep-links
-            // into the chat (the stack no longer reaches into page-history).
+            // into the chat (the stack does not reach into page-history).
             onActivate={() => setHistoryModalOpen(false)}
           />
         )}

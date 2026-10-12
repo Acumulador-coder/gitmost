@@ -3,12 +3,11 @@ import { AiChatController } from './ai-chat.controller';
 import type { User, Workspace } from '@docmost/db/types/entity.types';
 
 /**
- * Wiring spec for the #184 run-reconnect / run-stop endpoints
- * (`POST /ai-chat/run` and `POST /ai-chat/stop`). Both are OWNER-gated via
- * assertOwnedChat (the requesting user must own the chat) and NOT flag-gated.
- * Exercised with hand-rolled mocks — no Nest graph, no DB. The controller's
- * constructor order is (aiChatService, aiChatRunService, aiChatRepo,
- * aiChatMessageRepo, aiTranscription).
+ * Wiring spec for the run-reconnect / run-stop endpoints (`POST /ai-chat/run`
+ * and `POST /ai-chat/stop`). Both are owner-gated via assertOwnedChat and not
+ * flag-gated. Hand-rolled mocks — no Nest graph, no DB. Constructor order is
+ * (aiChatService, aiChatRunService, aiChatRepo, aiChatMessageRepo,
+ * aiTranscription).
  */
 describe('AiChatController run endpoints (#184)', () => {
   const user = { id: 'u1' } as User;

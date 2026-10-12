@@ -2,11 +2,11 @@ import { NotFoundException } from '@nestjs/common';
 import { ShareService } from './share.service';
 
 /**
- * Regression for issue #218: public-share content must be bound to the requested
+ * Public-share content must be bound to the requested
  * shareId. `getSharedPage` resolves the page off its slug, but when the caller
  * supplies a shareId it must be reachable THROUGH that exact share — a forged or
  * mismatched shareId 404s instead of rendering the page off its slug alone. A
- * request with no shareId keeps the legacy slug-capability behavior.
+ * request with no shareId keeps the slug-capability behavior.
  */
 const WS = 'ws-1';
 const PAGE_ID = 'page-uuid-1';

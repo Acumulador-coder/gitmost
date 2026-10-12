@@ -1,11 +1,11 @@
-// Pure, framework-free helpers for the excalidraw PNG-raster embedding feature
-// (issue #632, Part A — symmetric to draw.io's #629). Side-effect free so the
-// splice/budget/guardrail decisions are unit-testable without a browser or a live
-// Excalidraw scene. The React orchestration lives in `excalidraw-view.tsx`.
+// Pure, framework-free helpers for the excalidraw PNG-raster embedding feature,
+// symmetric to draw.io's. Side-effect free so the splice/budget/guardrail
+// decisions are unit-testable without a browser or a live Excalidraw scene. The
+// React orchestration lives in `excalidraw-view.tsx`.
 //
-// SHARED CONTRACT is IDENTICAL to #629: the raster is stored as a root
+// SHARED CONTRACT is IDENTICAL to draw.io: the raster is stored as a root
 // `data-raster="data:image/png;base64,<b64>"` attribute on the `<svg …>` element,
-// validated with the 8-byte PNG signature by the server/mcp consumers (Part B).
+// validated with the 8-byte PNG signature by the server/mcp consumers.
 // The type-agnostic injection/budget primitives are REUSED from drawio-raster.ts
 // (cross-component import — no logic is duplicated); only the excalidraw-specific
 // upload guardrail lives here.
@@ -25,7 +25,7 @@ import {
  *
  * Returns the possibly-modified svg plus whether the raster was embedded and, on
  * a skip, a machine-readable reason. Pure: `injectRasterIntoSvg` is the same
- * string-splice #629 uses (never DOMParser), so the SVG body is left byte-intact.
+ * string-splice drawio-raster.ts uses (never DOMParser), so the SVG body is left byte-intact.
  */
 export function embedRasterIfWithinBudget(
   svgString: string,

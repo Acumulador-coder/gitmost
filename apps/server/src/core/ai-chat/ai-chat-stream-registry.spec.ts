@@ -9,8 +9,8 @@ import { streamText, JsonToSseTransformStream } from 'ai';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 
 /**
- * Unit tests for the in-memory run-stream registry (#184 phase 1.5, step-aligned
- * retention #491). The registry is the whole of the resumable-transport contract:
+ * Unit tests for the in-memory run-stream registry. The registry is the whole of
+ * the resumable-transport contract:
  * step-stamped retention, tail-only attach at the client's frontier N, the
  * confirmed-persist ring rotation (and the anti-inversion rule), the memory bound,
  * the overflow gap, paused -> live hand-off, retention, the anchor check
@@ -587,20 +587,13 @@ describe('AiChatStreamRegistryService retention timers', () => {
 });
 
 /**
- * #555 item 3 — CANARY for the `finish-step` SSE framing the registry depends on.
- *
- * The registry stamps each buffered frame by counting `finish-step` boundaries via
- * a cheap PREFIX match (`FINISH_STEP_FRAME_PREFIX = 'data: {"type":"finish-step"'`),
- * deliberately avoiding a JSON.parse per frame. That prefix is pinned to the wire
- * shape ai@6.0.207 emits: every UI-message-stream part is a single
- * `data: {json}\n\n` SSE event (never split across `data:` lines) and `type` is the
- * FIRST key. If a future `ai` SDK bump changes that framing — renames the part,
- * reorders keys so `type` is no longer first, or reshapes the SSE envelope — the
- * prefix silently stops matching: steps never advance, and the resumable transport
- * degrades to the 204/poll fallback WITHOUT any test failing. This canary drives a
- * REAL streamText through the SDK's own UI-message-stream -> SSE serializer and
- * asserts the finish-step boundary still matches the exact prefix the code keys on,
- * so such a bump FAILS LOUDLY here instead of degrading in production.
+ * Canary for the `finish-step` SSE framing the registry depends on. The registry
+ * counts step boundaries by a PREFIX match (`FINISH_STEP_FRAME_PREFIX`), which
+ * assumes each UI-message-stream part is a single `data: {json}\n\n` event with
+ * `type` as the first key. If an `ai` SDK bump changes that, steps never advance
+ * and resume silently degrades to 204/poll. This drives a REAL streamText through
+ * the SDK's UI-message-stream -> SSE serializer and asserts the finish-step frame
+ * still starts with the exact prefix.
  */
 describe('finish-step framing canary (#555 item 3 — detects ai-SDK framing drift)', () => {
   // Collect every SSE frame the SDK emits for a one-step text generation, using the

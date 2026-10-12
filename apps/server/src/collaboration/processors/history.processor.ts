@@ -58,27 +58,21 @@ export class HistoryProcessor extends WorkerHost implements OnModuleDestroy {
         return;
       }
 
-      // #370 F3 — the snapshot decision (findPageLastHistory → saveHistory) must
-      // be serialized against manual-save/boundary writers, which run under a
-      // page-row lock in onStoreDocument. Without it, this processor and a
-      // concurrent manual-save each read the same lastHistory (MVCC), both see
-      // content != lastHistory, and both insert — producing two page_history rows
-      // with IDENTICAL content (one 'idle', one 'manual'), defeating
-      // promote-not-dup and the version-vs-autosave split. Taking the same
-      // page-row lock makes the second writer observe the first's committed row so
-      // the isDeepStrictEqual gate collapses the duplicate. Only the read+write
-      // is transacted; the post-snapshot queue work stays outside.
+      // The snapshot decision (findPageLastHistory → saveHistory) is serialized
+      // against manual-save/boundary writers, which run under a page-row lock in
+      // onStoreDocument. Without the same lock, both could read the same
+      // lastHistory (MVCC) and insert two rows with identical content (one
+      // 'idle', one 'manual'). With it, the second writer sees the first's row
+      // and the isDeepStrictEqual gate collapses the duplicate. Only the
+      // read+write is transacted; the queue work stays outside.
       let contributorIds: string[] = [];
       let snapshotWritten = false;
       let lastHistoryContent: unknown;
-      // #370 F8 — the contributor set popped from Redis (destructive SPOP) must be
-      // restored if the snapshot does not durably land. The inner try/catch only
-      // covers a throw INSIDE the callback; a COMMIT failure (connection drop,
-      // serialization/deadlock abort on commit — the transient class the epic
-      // already retries) throws OUTSIDE it, rolling the snapshot back while the
-      // pop is already gone. We track the popped set here and restore it in the
-      // outer catch so a BullMQ retry re-attributes the version. addContributors
-      // is an idempotent Redis SADD, so a double-restore is harmless.
+      // The contributor set popped from Redis (destructive SPOP) must be
+      // restored if the snapshot does not durably land. A COMMIT failure throws
+      // OUTSIDE the inner try/catch, rolling the snapshot back after the pop, so
+      // the popped set is restored in the outer catch and a BullMQ retry
+      // re-attributes the version. addContributors is an idempotent SADD.
       let poppedForRestore: string[] = [];
 
       try {

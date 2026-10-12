@@ -2,13 +2,9 @@ import { escapeLikePattern } from './search.service';
 
 /**
  * Pure-function coverage for `escapeLikePattern` — LIKE-metacharacter escaping so
- * `%`/`_`/`\` are matched literally (the acceptance requirement that a query of
- * `%` or `_` does NOT match everything, #529 acceptance #10). The substring
- * branch's DB behaviour is covered by the integration spec.
- *
- * NOTE (#529): the old tiered `computeLookupScore` was replaced by RRF rank
- * fusion in the unified engine, so its unit coverage moved to the integration
- * ordering tests; only the escaping helper remains a pure unit here.
+ * `%`/`_`/`\` are matched literally (a query of `%` or `_` must NOT match
+ * everything). The substring branch's DB behaviour and the RRF ordering are
+ * covered by the integration spec.
  */
 describe('escapeLikePattern', () => {
   it('escapes the LIKE metacharacters % _ and \\', () => {

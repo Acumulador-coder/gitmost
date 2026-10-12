@@ -48,7 +48,7 @@ export function splitPlainChunks(text: string): string[] {
  * One immutable chunk. Memoized on its string prop: during streaming only the
  * TAIL chunk's text changes (see the splitPlainChunks invariant), so React
  * skips every stable chunk and the per-delta DOM work is a single text-node
- * update. `pre-wrap` is set per chunk (like the old raw-text fallback did), NOT
+ * update. `pre-wrap` is set per chunk, NOT
  * on the surrounding markdown-styled container — see the note in
  * ai-chat.module.css. Font/size/color are inherited from that container.
  *

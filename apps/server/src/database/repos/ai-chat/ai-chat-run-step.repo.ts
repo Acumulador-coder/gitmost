@@ -5,12 +5,11 @@ import { dbOrTx } from '../../utils';
 import { AiChatRunStep } from '@docmost/db/types/entity.types';
 
 /**
- * Append-only per-step persistence for an assistant turn (#492). Each finished
- * agent step's UI `parts` (its text part + a `tool-*` part per call, WITH the
- * tool output) is INSERTed as its own lightweight row the moment the step ends —
- * instead of REWRITING the assistant row's growing `metadata.parts` jsonb on every
- * `onStepFinish` (a Postgres jsonb UPDATE rewrites the whole TOASTed row version
- * under MVCC, so that was O(n²) WAL/dead-tuple churn per turn).
+ * Append-only per-step persistence for an assistant turn. Each finished agent
+ * step's UI `parts` (its text part + a `tool-*` part per call, WITH the tool
+ * output) is INSERTed as its own row the moment the step ends, rather than
+ * rewriting the assistant row's growing `metadata.parts` jsonb (a jsonb UPDATE
+ * rewrites the whole TOASTed row version under MVCC: O(n²) WAL per turn).
  *
  * The full `metadata.parts` on the message row is assembled ONCE at finalize;
  * mid-run, a resuming client's seed is rebuilt from these rows in `stepIndex`

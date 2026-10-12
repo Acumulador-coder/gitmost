@@ -7,7 +7,7 @@ import { dbOrTx } from '../../utils';
 
 /**
  * Repository for `page_embeddings` — the pgvector store backing the AI agent's
- * semantic search (§5.5 / §6.7 stage D).
+ * semantic search.
  *
  * The `embedding` column is a dimension-agnostic pgvector `vector` (no fixed
  * `(N)`, see migration 20260617T140000), which is NOT a native Kysely column
@@ -62,7 +62,7 @@ export class PageEmbeddingRepo {
    * reindex and on page deletion — a hard delete (not soft) guarantees search
    * never returns vectors for content that no longer exists.
    *
-   * #599 `fingerprints` — FINGERPRINT-SCOPED delete. When omitted (the default)
+   * `fingerprints` — FINGERPRINT-SCOPED delete. When omitted (the default)
    * EVERY row of the page is deleted, which is what the PURGE paths want (page
    * deleted / emptied / trashed: the page must vanish from every generation).
    *
@@ -71,8 +71,8 @@ export class PageEmbeddingRepo {
    * flight (active != target). Without that scope, editing a page mid-reindex
    * would delete its ACTIVE-generation rows too and, because the new rows carry
    * the TARGET fingerprint (which search does not serve until the flip), the page
-   * would silently drop out of semantic search for the whole reindex window
-   * (#599 acceptance 3). Scoping the delete to the target keeps the page's
+   * would silently drop out of semantic search for the whole reindex window.
+   * Scoping the delete to the target keeps the page's
    * active-generation rows intact and served until the pointer flips.
    *
    * NOTE the SQL `IN` semantics: rows with a NULL fingerprint (legacy) never match
@@ -97,7 +97,7 @@ export class PageEmbeddingRepo {
   }
 
   /**
-   * #599 GENERATIONAL GC: hard-delete every embedding row of this workspace whose
+   * GENERATIONAL GC: hard-delete every embedding row of this workspace whose
    * fingerprint is NOT one of `keep` — including legacy NULL-fingerprint rows,
    * which are simply a very old generation (nothing serves them: the search
    * vector arm filters `fingerprint = $active`, and NULL never equals anything).
@@ -115,33 +115,16 @@ export class PageEmbeddingRepo {
    * an aborted run whose config has since moved on is no longer active nor target,
    * so it is reclaimed here instead of lingering forever.
    *
-   * STORAGE / LATENCY TRADE-OFF (deliberate): between the start of a reindex and
-   * the post-flip GC, the workspace holds ~2x the pgvector rows (active + target
-   * generations). That is the price of a NON-DESTRUCTIVE swap — the old generation
-   * must stay readable while the new one is built, or search would lose all
-   * semantic recall for the whole reindex window. It costs both disk and LATENCY:
-   * the vector column carries no ANN index, so `<=>` is a brute-force seq scan and
-   * the scan must skip the other generation's (and any not-yet-vacuumed dead) rows.
-   * The GC caps this at 2 generations rather than letting every model change pile
-   * up another one; the post-flip GC brings it back down to 1.
+   * Between the start of a reindex and the post-flip GC the workspace holds ~2x
+   * the pgvector rows (active + target generations): the old generation must
+   * stay readable while the new one is built. With no ANN index the `<=>` seq
+   * scan also has to skip the other generation's rows. The GC caps this at 2
+   * generations; the post-flip GC brings it back to 1.
    *
-   * FAIL-CLOSED on an empty `keep` (#599 review F3). Both call sites derive `keep`
-   * from a RESOLVED provider fingerprint (a sha256 hex string), so an empty set is
-   * unreachable today — but this method is a bulk DELETE, and the cost of the two
-   * possible defensive branches is wildly asymmetric:
-   *
-   *   - fail-OPEN (drop the fingerprint predicate): the statement degenerates to
-   *     `DELETE FROM page_embeddings WHERE workspace_id = $1` — it WIPES the
-   *     workspace's entire vector index, including the generation that is being
-   *     served. Semantic search goes to zero recall until someone notices and runs
-   *     a full reindex. That is the exact "keep nothing" reading of an EMPTY array,
-   *     but an empty array here can only ever mean "the caller lost its fingerprints",
-   *     never "the admin asked to purge everything" (that is deleteByWorkspace).
-   *   - fail-CLOSED (this): delete nothing, log, return 0. The worst case is some
-   *     superseded rows linger until the next run's GC reclaims them — wasted disk,
-   *     no data loss.
-   *
-   * So an empty `keep` is treated as a caller bug, not as a purge order.
+   * FAIL-CLOSED on an empty `keep`: delete nothing, log, return 0. Dropping the
+   * fingerprint predicate instead would wipe the workspace's whole vector index,
+   * including the served generation; an empty set means the caller lost its
+   * fingerprints, never "purge everything" (that is deleteByWorkspace).
    *
    * Returns the number of rows deleted (0 when nothing to reclaim).
    */
@@ -182,13 +165,13 @@ export class PageEmbeddingRepo {
   }
 
   /**
-   * #599 — count DISTINCT non-deleted pages holding at least one row of ONE
+   * Count DISTINCT non-deleted pages holding at least one row of ONE
    * generation. This is the coverage NUMERATOR: how many pages the ACTIVE
    * fingerprint actually serves (`indexed`). Mirrors the vector arm's filters
    * (workspace + fingerprint, trashed pages excluded) so the number reflects what
    * search can really retrieve.
    *
-   * `changedSince` (#599 review F2) narrows the count to pages TOUCHED since a
+   * `changedSince` narrows the count to pages TOUCHED since a
    * given instant — i.e. how many of the pages the completed run's coverage
    * measurement no longer describes are nonetheless already covered by the active
    * generation (the event-driven indexer embedded them). computeCoverage subtracts
@@ -265,15 +248,14 @@ export class PageEmbeddingRepo {
   }
 
   /**
-   * #530: build the VECTOR candidate arm for SearchService's fused RRF union — a
+   * Build the VECTOR candidate arm for SearchService's fused RRF union — a
    * page-level nearest-neighbour sub-select. Returns a `sql` fragment (not an
    * executed query) so the caller can UNION ALL it with the lexical arm inside a
    * single ranked-ids query.
    *
    * SCALING BOUNDARY: the column is dimension-agnostic, so it carries NO ANN
-   * index — this is a brute-force O(N) KNN seq scan with `<=>`. Accepted for the
-   * small-tenant / homelab fork target (ANN + a pinned-dimension column are
-   * deferred). It is NOT unbounded, though: the caller (SearchService) runs this
+   * index — this is a brute-force O(N) KNN seq scan with `<=>`, accepted for
+   * small tenants. It is NOT unbounded, though: the caller (SearchService) runs this
    * fused query under a per-statement timeout (SEARCH_VECTOR_STATEMENT_TIMEOUT_MS)
    * and DEGRADES to lexical-only on a 57014 cancellation, so a pathological scan
    * can never hang the interactive search request.

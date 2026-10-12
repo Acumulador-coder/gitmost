@@ -6,7 +6,7 @@ import { isUrlAllowed } from './ssrf-guard';
 /**
  * Public view of an external MCP server row (§8.10). SECURITY: `headersEnc` is
  * NEVER part of this shape — only `hasHeaders` signals whether auth headers are
- * configured. Shared (#686) by the admin (`McpServersService`) and the personal
+ * configured. Shared by the admin (`McpServersService`) and the personal
  * (`AccountMcpServersService`) paths so the write-only-headers projection has a
  * SINGLE definition — a drift here would leak the encrypted blob on one path,
  * so per AGENTS invariant #7 both paths consume this one function, never a copy.

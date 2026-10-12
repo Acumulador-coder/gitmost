@@ -97,10 +97,9 @@ describe('agentSourceFields', () => {
   });
 
   it("stamps ONLY the source column 'git-sync' (no chat key) for a git-sync write", () => {
-    // The git-sync data plane (issue #194 §8.1) has no internal ai_chats row, so
-    // it stamps the *Source column 'git-sync' and OMITS the chat key entirely
-    // (unlike the agent branch, which also writes aiChatId). Pinned directly here
-    // because the page.service.spec only exercises it indirectly.
+    // The git-sync data plane has no internal ai_chats row, so it stamps the
+    // *Source column 'git-sync' and OMITS the chat key entirely (unlike the agent
+    // branch). Pinned here because page.service.spec only covers it indirectly.
     expect(
       agentSourceFields(
         { actor: 'git-sync', aiChatId: null },

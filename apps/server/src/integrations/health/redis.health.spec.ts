@@ -2,12 +2,10 @@ import type { HealthIndicatorService } from '@nestjs/terminus';
 import type { EnvironmentService } from '../environment/environment.service';
 
 /**
- * Integration guard for the /health Redis-probe handle leak (#486, commit 2).
- *
- * The bug: `pingCheck` built `new Redis(...)` per call and only disconnected on
- * the SUCCESS path, so when Redis is DOWN every probe tick added ANOTHER
- * forever-reconnecting client — an unbounded handle/client leak for the duration
- * of the outage. The fix reuses ONE long-lived probe client.
+ * Integration guard against a /health Redis-probe handle leak: a client built
+ * per probe and disconnected only on success would add another
+ * forever-reconnecting client on every tick while Redis is DOWN. The indicator
+ * must reuse ONE long-lived probe client.
  *
  * This is an OBSERVABLE-property test, not an assertion on a mocked return value:
  * we point the indicator at a REAL, refused TCP endpoint (a dead port) so ioredis
@@ -22,7 +20,7 @@ const mockLiveClients: Redis[] = [];
 
 /**
  * Fully tear a REAL ioredis client down so NO timer survives jest's 1s exit
- * window (this suite must exit cleanly WITHOUT forceExit; see #382).
+ * window (this suite must exit cleanly WITHOUT forceExit).
  *
  * `connector.disconnect()` arms a ~12s "force-destroy the stream" `setTimeout`
  * that is cleared ONLY by the stream's 'close' event — but only when the
@@ -155,16 +153,15 @@ describe('RedisHealthIndicator handle leak (#486)', () => {
 });
 
 /**
- * Happy-path regression guard (#486, B2): the FIRST probe against a LIVE Redis
- * must report UP.
+ * Happy path: the FIRST probe against a LIVE Redis must report UP.
  *
  * With `lazyConnect: true` + `enableOfflineQueue: false`, a freshly-built client
  * is in the `wait` state and the socket opens lazily. If the very first `ping()`
  * is issued before an explicit `connect()`, ioredis rejects it instantly with
  * "Stream isn't writeable and enableOfflineQueue options is false" — a FALSE
- * DOWN even though Redis is alive. The fix opens the socket before the first
- * ping. This exercises a REAL ioredis client against a REAL TCP redis server
- * (not a mock), so a regression genuinely reddens it.
+ * DOWN even though Redis is alive, so the indicator opens the socket before the
+ * first ping. This exercises a REAL ioredis client against a REAL TCP redis
+ * server (not a mock).
  */
 describe('RedisHealthIndicator live Redis first-probe (#486, B2)', () => {
   const indicatorService = {

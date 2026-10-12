@@ -38,7 +38,7 @@ export default function useAuth() {
     try {
       await login(data);
 
-      // Cross-user hygiene (#563). Logging OUT purges the persisted caches, but a
+      // Cross-user hygiene. Logging OUT purges the persisted caches, but a
       // session can also end without a logout (expired cookie, closed tab), which
       // leaves the previous user's tree + page-meta caches — and their `currentUser`
       // — in localStorage. Sign-in is an SPA navigation, and `currentUser` is only

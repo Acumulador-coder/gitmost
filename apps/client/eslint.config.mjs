@@ -6,9 +6,8 @@ import tseslint from "typescript-eslint";
 import pluginQuery from "@tanstack/eslint-plugin-query";
 
 export default tseslint.config(
-  // `dist` is build output. The Lucide catalog (issue #696) is a committed but
-  // machine-generated ~700 KB single-line artifact — linting it is pointless and
-  // slow, so it (and any sibling *.generated.ts) is skipped.
+  // `dist` is build output. The Lucide catalog is a committed, machine-generated
+  // ~700 KB single-line artifact — linting it is pointless and slow.
   { ignores: ["dist", "src/components/ui/lucide/lucide-catalog.generated.ts"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],

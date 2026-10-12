@@ -2,11 +2,9 @@ import { ClientTelemetryModule } from './client-telemetry.module';
 import { VitalsController } from './vitals.controller';
 import { VitalsService } from './vitals.service';
 
-// The register() gate is the CORE of the maintainer's E1=B decision: the public,
-// unauthenticated /api/telemetry/vitals endpoint must be OFF by default, so a
-// self-host deploy has no anonymous disk-fill surface into `client_metrics`. A
-// regression that inverts the flag (or a truthiness bug where "" / "false"
-// registers the route) would silently reopen that surface — pin it here.
+// The public, unauthenticated /api/telemetry/vitals endpoint must be OFF by
+// default, so a self-host deploy has no anonymous disk-fill surface into
+// `client_metrics`. Pins that "" / "false" / unset do not register the route.
 describe('ClientTelemetryModule.register (E1=B gate)', () => {
   const original = process.env.CLIENT_TELEMETRY_ENABLED;
   afterEach(() => {

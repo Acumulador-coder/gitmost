@@ -1,7 +1,7 @@
 /**
  * Pure block-level THREE-WAY merge planner (diff3) over arrays of opaque block
  * keys. Used by the git-sync body write to merge an incoming git body into the
- * live page using the last-synced version as the common ancestor (review #5):
+ * live page using the last-synced version as the common ancestor:
  *
  *   - a block only the human changed (live != base, git == base) -> keep LIVE
  *   - a block only git changed       (git != base, live == base) -> take GIT
@@ -116,8 +116,8 @@ interface LocalPick {
  * and git's NON-overlapping hunks (e.g. a human edit to one block plus a git
  * insert/delete of OTHER blocks in the same region) so neither change is lost.
  * Returns the merged region as region-local picks, or `null` when the two sides
- * changed the SAME base block — a genuine conflict the caller resolves by the
- * original all-or-nothing rule (git wins the whole region).
+ * changed the SAME base block — a genuine conflict the caller resolves by
+ * giving git the whole region.
  */
 function tryMergeRegion(
   o: string[],

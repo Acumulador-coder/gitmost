@@ -160,9 +160,8 @@ describe('AiAgentRoleRepo insert/update auto-start columns', () => {
  * parseSource is THE single form validator for the `source` jsonb column: a
  * JSON-string (legacy double-encoded) is parsed; a FULLY-VALID object
  * ({ slug, language, version }) passes through as a typed RoleSource; anything
- * partial or wrong-shaped degrades to null (= manual role). This is the
- * stricter-than-before guard that closes the drift where a weak `{}`/`{slug:123}`
- * value used to be stamped as a valid source by the read path.
+ * partial or wrong-shaped (e.g. `{}`, `{slug:123}`) degrades to null
+ * (= manual role).
  */
 describe('parseSource', () => {
   it('parses a legacy double-encoded JSON string into the typed source', () => {
