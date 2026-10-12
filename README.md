@@ -149,6 +149,9 @@ work inside one process.
 
 ### Git synchronization
 
+How it works, with screenshots — the repository layout, what each git change does in the wiki,
+conflicts and limits: **[docs/git-sync.md](docs/git-sync.md)**.
+
 Git sync is off by default. To turn it on, set two variables in `.env` (all `GIT_SYNC_*`
 options are described in [.env.example](.env.example)):
 
