@@ -53,7 +53,8 @@ describe('CollaborationGateway.handleYjsEvent (no-Redis fallback)', () => {
       payload as any,
     );
 
-    expect(fakeHandler).toHaveBeenCalledWith('doc-1', payload);
+    // No signal was passed: the handler gets `undefined` for it.
+    expect(fakeHandler).toHaveBeenCalledWith('doc-1', payload, undefined);
     expect(result).toEqual(verdict);
     expect(result).not.toBeUndefined();
   });

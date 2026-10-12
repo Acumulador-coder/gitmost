@@ -20,6 +20,8 @@ import { CaslModule } from '../../core/casl/casl.module';
 import { ThrottleModule } from '../../integrations/throttle/throttle.module';
 import { CacheModule } from '@nestjs/cache-manager';
 import KeyvRedis from '@keyv/redis';
+import { PageUpdatedPublisher } from '../page-updated-relay';
+import { CollabAccessSubscriber } from '../collab-access-relay';
 
 @Module({
   imports: [
@@ -54,6 +56,10 @@ import KeyvRedis from '@keyv/redis';
       ? [CollaborationController]
       : []),
   ],
-  providers: [AppService],
+  // PageUpdatedPublisher: the collab process's PAGE_UPDATED events reach
+  // git-sync in the API process (see page-updated-relay.ts).
+  // CollabAccessSubscriber: the API process's access events re-check the open
+  // connections held here (see collab-access-relay.ts).
+  providers: [AppService, PageUpdatedPublisher, CollabAccessSubscriber],
 })
 export class CollabAppModule {}

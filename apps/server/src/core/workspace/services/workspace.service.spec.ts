@@ -27,6 +27,7 @@ describe('WorkspaceService', () => {
       {} as any, // auditService
       {} as any, // userSessionRepo
       {} as any, // mcpClients (#686)
+      {} as any, // eventEmitter
     );
   });
 

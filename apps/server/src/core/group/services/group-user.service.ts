@@ -20,7 +20,9 @@ import {
   AUDIT_SERVICE,
   IAuditService,
 } from '../../../integrations/audit/audit.service';
-import { dbOrTx } from '@docmost/db/utils';
+import { dbOrTx, registerAfterCommit } from '@docmost/db/utils';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { emitCollabAccessChanged } from '../../../common/events/collab-access-changed';
 
 @Injectable()
 export class GroupUserService {
@@ -34,6 +36,7 @@ export class GroupUserService {
     private readonly favoriteRepo: FavoriteRepo,
     @InjectKysely() private readonly db: KyselyDB,
     @Inject(AUDIT_SERVICE) private readonly auditService: IAuditService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async getGroupUsers(
@@ -87,6 +90,15 @@ export class GroupUserService {
       .values(groupUsersToInsert)
       .onConflict((oc) => oc.columns(['userId', 'groupId']).doNothing())
       .execute();
+
+    const emitAccessChanged = () =>
+      emitCollabAccessChanged(this.eventEmitter, {
+        workspaceId,
+        userIds: validUsers.map((user) => user.id),
+      });
+    // Inside a caller's transaction the insert is committed by the caller.
+    if (trx) registerAfterCommit(trx, emitAccessChanged);
+    else emitAccessChanged();
 
     for (const user of validUsers) {
       this.auditService.log({
@@ -153,6 +165,11 @@ export class GroupUserService {
           { trx },
         );
       }
+    });
+
+    emitCollabAccessChanged(this.eventEmitter, {
+      workspaceId,
+      userIds: [userId],
     });
 
     this.auditService.log({

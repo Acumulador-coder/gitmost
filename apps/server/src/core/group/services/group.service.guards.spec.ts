@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { GroupService } from './group.service';
+import { EventName } from '../../../common/events/event.contants';
 
 // Direct-instantiation unit tests for GroupService's integrity guards:
 //  - the DEFAULT (system) group cannot be updated or deleted;
@@ -7,9 +8,9 @@ import { GroupService } from './group.service';
 //  - renaming a group to its OWN current name is allowed (no false positive).
 // Each rejection test also asserts that no destructive repo write fired.
 //
-// Constructor arg order (8 positional deps) is pinned: groupRepo, groupUserRepo,
+// Constructor arg order (9 positional deps) is pinned: groupRepo, groupUserRepo,
 // spaceMemberRepo, groupUserService, watcherRepo, favoriteRepo, db,
-// auditService.
+// auditService, eventEmitter.
 
 const WORKSPACE_ID = 'ws-1';
 
@@ -18,6 +19,8 @@ function buildService(opts?: {
   group?: any;
   // group returned by groupRepo.findByName (a name-collision probe)
   byName?: any;
+  // the members of the group being deleted
+  groupUserIds?: string[];
 }) {
   const groupRepo = {
     findById: jest.fn().mockResolvedValue(opts?.group ?? null),
@@ -30,7 +33,7 @@ function buildService(opts?: {
   };
 
   const groupUserRepo = {
-    getUserIdsByGroupId: jest.fn().mockResolvedValue([]),
+    getUserIdsByGroupId: jest.fn().mockResolvedValue(opts?.groupUserIds ?? []),
   };
   const spaceMemberRepo = {
     getSpaceIdsByGroupId: jest.fn().mockResolvedValue([]),
@@ -50,6 +53,7 @@ function buildService(opts?: {
     }),
   };
   const auditService = { log: jest.fn() };
+  const eventEmitter = { emit: jest.fn() };
 
   const service = new GroupService(
     groupRepo as any, // groupRepo
@@ -60,9 +64,10 @@ function buildService(opts?: {
     favoriteRepo as any, // favoriteRepo
     db as any, // db
     auditService as any, // auditService
+    eventEmitter as any, // eventEmitter
   );
 
-  return { service, groupRepo, auditService };
+  return { service, groupRepo, auditService, eventEmitter };
 }
 
 const authUser = { id: 'auth-1' } as any;
@@ -196,5 +201,24 @@ describe('GroupService.deleteGroup guard', () => {
     await service.deleteGroup('g-1', WORKSPACE_ID);
 
     expect(groupRepo.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits COLLAB_ACCESS_CHANGED for the deleted group's users (CO-2)", async () => {
+    const { service, eventEmitter } = buildService({
+      group: {
+        id: 'g-1',
+        name: 'Engineering',
+        description: null,
+        isDefault: false,
+      },
+      groupUserIds: ['u-1', 'u-2'],
+    });
+
+    await service.deleteGroup('g-1', WORKSPACE_ID);
+
+    expect(eventEmitter.emit).toHaveBeenCalledWith(
+      EventName.COLLAB_ACCESS_CHANGED,
+      { workspaceId: WORKSPACE_ID, userIds: ['u-1', 'u-2'] },
+    );
   });
 });

@@ -63,6 +63,7 @@ describe('WorkspaceService.update — treeQuickActions toggle persistence (real 
       auditService as any, // auditService
       {} as any, // userSessionRepo
       {} as any, // mcpClients (#686)
+      {} as any, // eventEmitter
     );
 
     return {

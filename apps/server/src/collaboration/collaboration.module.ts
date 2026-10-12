@@ -17,6 +17,7 @@ import { TransclusionModule } from '../core/page/transclusion/transclusion.modul
 import { StorageModule } from '../integrations/storage/storage.module';
 import { EnvironmentModule } from '../integrations/environment/environment.module';
 import { ApiKeyModule } from '../core/api-key/api-key.module';
+import { PageUpdatedSubscriber } from './page-updated-relay';
 
 @Module({
   providers: [
@@ -28,6 +29,7 @@ import { ApiKeyModule } from '../core/api-key/api-key.module';
     CollabHistoryService,
     CollaborationHandler,
     TransclusionService,
+    PageUpdatedSubscriber,
   ],
   exports: [CollaborationGateway],
   imports: [

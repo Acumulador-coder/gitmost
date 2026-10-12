@@ -1,5 +1,9 @@
 export enum EventName {
   COLLAB_PAGE_UPDATED = 'collab.page.updated',
+  COLLAB_ACCESS_CHANGED = 'collab.access.changed',
+  // An access event re-emitted in the collab process from the API process
+  // (collab-access-relay.ts), as `{ event, payload }`.
+  COLLAB_ACCESS_RELAYED = 'collab.access.relayed',
   PAGE_CREATED = 'page.created',
   PAGE_UPDATED = 'page.updated',
   PAGE_CONTENT_UPDATED = 'page-content-updated',
