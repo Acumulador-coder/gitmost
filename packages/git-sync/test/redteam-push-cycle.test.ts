@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   runPush,
-  DOCMOST_BRANCH,
   CONFLICT_MARKERS_FAILURE_REASON,
 } from '../src/engine/push';
+import { DOCMOST_BRANCH, PUSH_REF } from '../src/engine/vault-refs';
 import type { PushDeps } from '../src/engine/push';
 import type { Settings } from '../src/engine/settings';
 import { runCycle, type RunCycleDeps } from '../src/engine/cycle';
@@ -16,14 +16,11 @@ function makeSettings(): Settings {
   return {
     docmostSpaceId: 'space-1',
     vaultPath: '/vault',
-    pollIntervalMs: 15000,
-    debounceMs: 2000,
-    logLevel: 'info',
   } as Settings;
 }
 
 // ---------------------------------------------------------------------------
-// #13 — conflict markers must never reach Docmost (SPEC §9), even when there is
+// #13 — conflict markers must never reach Docmost (DESIGN.md §7), even when there is
 // NO in-progress merge (markers committed on `main` by some other path). The
 // behavior is now gated by the per-space `autoMergeConflicts` setting:
 //   - DEFAULT (off): a still-conflicted page is NOT pushed — it is recorded as a
@@ -115,7 +112,8 @@ describe('#13 conflict markers reach Docmost', () => {
     expect(importPageMarkdown).not.toHaveBeenCalled();
 
     // It is recorded as a per-page failure (so the user resolves the git conflict
-    // first), and because there is a failure the last-pushed ref is NOT advanced.
+    // first), and because there is a failure the push is not clean: no ref is
+    // advanced (the only ref written is PUSH_REF, the push's write marker).
     expect(res.applied?.failures).toEqual([
       expect.objectContaining({
         kind: 'update',
@@ -124,8 +122,8 @@ describe('#13 conflict markers reach Docmost', () => {
       }),
     ]);
     expect(res.applied?.failures[0].error).toMatch(/conflict markers/i);
-    expect(res.applied?.lastPushedAdvanced).toBe(false);
-    expect(calls.updateRef).toHaveLength(0);
+    expect(res.applied?.clean).toBe(false);
+    expect(calls.updateRef).toEqual([{ ref: PUSH_REF, target: 'main' }]);
   });
 
   it('autoMergeConflicts on: strips the markers and pushes a clean body', async () => {
@@ -270,9 +268,9 @@ describe('#13 conflict markers reach Docmost', () => {
       }),
     ]);
 
-    // A failure prevents advancing the last-pushed ref.
-    expect(res.applied?.lastPushedAdvanced).toBe(false);
-    expect(calls.updateRef).toHaveLength(0);
+    // A failure means the push is not clean: no ref is advanced.
+    expect(res.applied?.clean).toBe(false);
+    expect(calls.updateRef).toEqual([{ ref: PUSH_REF, target: 'main' }]);
   });
 
   it('CREATE branch (autoMergeConflicts on): strips the markers and createPage gets a CLEAN body; the vault file is rewritten clean', async () => {
@@ -328,6 +326,77 @@ describe('#13 conflict markers reach Docmost', () => {
     expect(newWrite![1]).not.toMatch(/[<>=]{7}/);
     expect(newWrite![1]).toContain('my line');
     expect(newWrite![1]).toContain('their line');
+  });
+
+  /** Push one changed page `Doc.md` with `body`; the body sent to Docmost, or null. */
+  async function pushBody(body: string, settings: Settings) {
+    const { git } = makePushGit({ changes: [{ status: 'M', path: 'Doc.md' }] });
+    const importPageMarkdown = vi.fn(async () => ({ success: true }));
+    const client = {
+      listSpaceTree: vi.fn(async () => ({ pages: [], complete: true })),
+      importPageMarkdown,
+      createPage: vi.fn(),
+      deletePage: vi.fn(),
+      movePage: vi.fn(),
+      renamePage: vi.fn(),
+    };
+    const file = serializePageFile('p-1', body);
+    const res = await runPush(
+      {
+        settings,
+        git,
+        makeClient: () => client as any,
+        readFile: vi.fn(async (p: string) => {
+          if (p === 'Doc.md') return file;
+          throw new Error(`no such file: ${p}`);
+        }),
+        writeFile: vi.fn(async () => {}),
+        log: () => {},
+      },
+      { dryRun: false },
+    );
+    const sent = importPageMarkdown.mock.calls[0]?.[1] as string | undefined;
+    return { res, sent: sent ?? null };
+  }
+
+  it('marker-like lines that form no conflict block are ordinary text: pushed as they are', async () => {
+    // A setext heading underline, a quoted `<<<<<<<` and `>>>>>>>` without a
+    // separator between them, and markers out of order.
+    const body =
+      'Release notes\n=======\n\n' +
+      '<<<<<<< this is how git marks a conflict\n\n' +
+      'some text\n\n' +
+      '>>>>>>> and this is its end\n\n' +
+      '>>>>>>> end first\n\n=======\n\n<<<<<<< begin last\n';
+
+    for (const autoMergeConflicts of [false, true]) {
+      const { res, sent } = await pushBody(body, {
+        ...makeSettings(),
+        autoMergeConflicts,
+      });
+      expect(res.applied?.failures).toEqual([]);
+      // The push sends the body without its final newline.
+      expect(sent).toBe(body.trimEnd());
+    }
+  });
+
+  it('autoMergeConflicts on: strips only the conflict block, not marker-like lines in a code fence or elsewhere', async () => {
+    const body =
+      'Title\n=======\n\n' +
+      '```\n<<<<<<< ours\nfenced\n=======\nfenced too\n>>>>>>> theirs\n```\n\n' +
+      '<<<<<<< HEAD\nmy line\n=======\ntheir line\n>>>>>>> feature\n';
+
+    const { res, sent } = await pushBody(body, {
+      ...makeSettings(),
+      autoMergeConflicts: true,
+    });
+
+    expect(res.applied?.failures).toEqual([]);
+    expect(sent).toBe(
+      'Title\n=======\n\n' +
+        '```\n<<<<<<< ours\nfenced\n=======\nfenced too\n>>>>>>> theirs\n```\n\n' +
+        'my line\ntheir line',
+    );
   });
 });
 
@@ -419,7 +488,7 @@ describe('#15 divergence dropped by runCycle', () => {
     );
 
     // DESIRED: the cycle result surfaces the divergence (some warning/flag), so a
-    // caller driving runCycle can see the §5 invariant breach without scraping
+    // caller driving runCycle can see the mirror invariant breach (DESIGN.md §3) without scraping
     // logs. Today RunCycleResult.push is only {mode, failures}.
     const divergence =
       (res as any).divergentDocmost ??

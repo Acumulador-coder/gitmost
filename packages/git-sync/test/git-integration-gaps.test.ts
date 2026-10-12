@@ -1,3 +1,4 @@
+import './git-env';
 import { execFile } from 'node:child_process';
 import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -181,7 +182,7 @@ describe('VaultGit integration gaps (temp repo)', () => {
   // --- 9. commit: per-invocation committer/author does NOT leak into config ----
   //
   // The engine sets author + committer identity via GIT_AUTHOR_*/GIT_COMMITTER_*
-  // env vars per `git commit` invocation (commitRaw). This underpins the §10
+  // env vars per `git commit` invocation (commitRaw). This underpins the DESIGN.md §11
   // provenance/loop-guard: the identity must travel WITH the commit, not be
   // written into the repo config (which would make it global to every later
   // hand-run commit). We commit with the distinct "Local" identity (different

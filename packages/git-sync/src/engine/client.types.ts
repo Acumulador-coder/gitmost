@@ -49,7 +49,7 @@ export interface GitSyncClient {
    * Full tree of page nodes for the space (or the subtree rooted at
    * `rootPageId`), each WITHOUT body content. `complete` is `false` when the
    * walk was truncated / a fetch failed — the pull side suppresses absence
-   * deletions on an incomplete tree (SPEC §8). Native impl returns
+   * deletions on an incomplete tree (DESIGN.md §5). Native impl returns
    * `complete: true` always (reads the DB, not a paginated REST endpoint).
    */
   listSpaceTree(
@@ -100,12 +100,13 @@ export interface GitSyncClient {
    * the file's body with the frontmatter AND any git conflict markers already
    * stripped — NOT the raw self-contained file — so `fullMarkdown` here is clean
    * body text (the datasource re-parses defensively). The collab/Yjs write path
-   * (SPEC §2/§15.6) — never a raw jsonb overwrite. `applyPushActions` reads only
-   * an optional `updatedAt` off the result (via `extractUpdatedAt`).
+   * — never a raw jsonb overwrite. `applyPushActions` reads only an optional
+   * `updatedAt` off the result (via `extractUpdatedAt`).
    *
-   * `baseMarkdown` is the last-synced body (from `refs/docmost/last-pushed`,
-   * likewise stripped), the common ancestor for a THREE-WAY merge against the
-   * live doc so concurrent human edits survive (review #5). Optional/null -> 2-way.
+   * `baseMarkdown` is the body Docmost last held, read from the push's diff base
+   * merge-base(`docmost`, `main`) (DESIGN.md §7), likewise stripped: the common
+   * ancestor for a THREE-WAY merge against the live doc so concurrent human
+   * edits survive (review #5). Optional/null -> 2-way.
    */
   importPageMarkdown(
     pageId: string,
@@ -125,7 +126,7 @@ export interface GitSyncClient {
     parentPageId?: string,
   ): Promise<{ data: { id: string }; updatedAt?: string; [key: string]: unknown }>;
 
-  /** Soft-delete a page to Trash (SPEC §8). Result is not inspected. */
+  /** Soft-delete a page to Trash (DESIGN.md §7). Result is not inspected. */
   deletePage(pageId: string): Promise<unknown>;
 
   /**
@@ -145,7 +146,7 @@ export interface GitSyncClient {
   // --- continuous (phase B+) ------------------------------------------------
 
   /**
-   * Pages updated since `sinceIso` (the poll-safety reconciliation, SPEC §8).
+   * Pages updated since `sinceIso` (the poll-safety reconciliation).
    * `spaceId` may be undefined (all spaces); `hardPageCap` bounds the walk.
    */
   listRecentSince(

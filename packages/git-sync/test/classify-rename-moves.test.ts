@@ -7,10 +7,10 @@ import type {
 } from '../src/engine/push';
 import type { DocmostMdMeta } from '@docmost/prosemirror-markdown';
 
-// FS→Docmost push #3 (SPEC §5/§6/§16). `classifyRenameMoves` is the PURE half of
+// FS→Docmost push #3 (DESIGN.md §4, §7). `classifyRenameMoves` is the PURE half of
 // the move/rename apply: it resolves each `{pageId, oldPath, newPath}` into the
 // Docmost op(s) it needs, with NO IO (both resolvers are injected). The key
-// design (SPEC §5) is that the file PATH is the source of truth for tree
+// design (DESIGN.md §4) is that the file PATH is the source of truth for tree
 // position — the NEW parent comes from the new path, the OLD parent from the old
 // path — and the title comes from the meta. An op is emitted ONLY when something
 // really changed; a path-only rename (same parent + same title) is a noop and
@@ -147,7 +147,7 @@ describe('classifyRenameMoves — both (parent AND title changed)', () => {
 });
 
 describe('classifyRenameMoves — noop (path-only rename, same parent + title)', () => {
-  it('emits noop and NEITHER move NOR rename (SPEC §5: page is its pageId)', () => {
+  it('emits noop and NEITHER move NOR rename (DESIGN.md §4: page is its pageId)', () => {
     const rms: RenameMoveAction[] = [
       { pageId: 'p4', oldPath: 'Folder/A.md', newPath: 'Folder/B.md' },
     ];

@@ -1,3 +1,4 @@
+import "./git-env";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { serializePageFile } from "@docmost/prosemirror-markdown";
 import { recoverVault, runCycle } from "../src/engine/cycle";
 import { VaultGit } from "../src/engine/git";
+import { RECEIVE_REF } from "../src/engine/vault-refs";
 import {
   execFileAsync,
   git,
@@ -235,6 +237,43 @@ describe("runCycle — dirty working tree left by an interrupted cycle", () => {
       expect(existsSync(join(dir, "Page ~git.md"))).toBe(false);
       expect(await git(dir, "show", "main:Page.md")).toContain("original body");
       expect(warn.mock.calls[0][0]).toContain("discarded");
+    });
+
+    it("a receive-pack cut off before it moved `main` is discarded, not committed: the marker goes and the retried push lands", async () => {
+      if (!available) return;
+      const { dir, vault } = await syncedVault([page()]);
+      const clone = await cloneWithCommit(dir, "Pushed.md");
+      const mainBefore = await git(dir, "rev-parse", "main");
+
+      // The server set the marker; the receive-pack then checked the pushed
+      // commit out into `main`'s working tree (what updateInstead runs) and was
+      // killed before it moved `main`, one more file cut off part-way.
+      await git(dir, "update-ref", RECEIVE_REF, "main");
+      await git(dir, "fetch", "--quiet", clone, "HEAD");
+      await git(dir, "read-tree", "-u", "-m", "HEAD", "FETCH_HEAD");
+      await writeFile(join(dir, "Partial.md"), "cut o", "utf8");
+
+      const warn = vi.fn();
+      expect(
+        await recoverVault({ spaceId: "space-1", vault, log: () => undefined, warn }),
+      ).toBe(true);
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("space-1");
+      expect(warn.mock.calls[0][0]).toContain("discarded");
+      // Nothing of the cut-off push was committed: `main` did not move and the
+      // tree is back to it.
+      expect(await git(dir, "rev-parse", "main")).toBe(mainBefore);
+      expect(existsSync(join(dir, "Pushed.md"))).toBe(false);
+      expect(existsSync(join(dir, "Partial.md"))).toBe(false);
+      expect(await git(dir, "status", "--porcelain")).toBe("");
+      expect(await vault.readRef(RECEIVE_REF)).toBeNull();
+
+      // The client never saw its push accepted and pushes again: it lands.
+      await git(clone, "push", "--quiet", "origin", "HEAD:main");
+      expect(await readFile(join(dir, "Pushed.md"), "utf8")).toBe(
+        "pushed from a clone\n",
+      );
     });
 
     it("an interrupted push's id write-backs are committed: a clone up to date with `main` pushes", async () => {

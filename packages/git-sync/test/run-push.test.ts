@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runPush, LAST_PUSHED_REF, DOCMOST_BRANCH } from '../src/engine/push';
+import { runPush } from '../src/engine/push';
+import { DOCMOST_BRANCH, PUSH_REF } from '../src/engine/vault-refs';
 import type { PushDeps } from '../src/engine/push';
 import type { Settings } from '../src/engine/settings';
 import { serializePageFile } from '@docmost/prosemirror-markdown';
@@ -9,7 +10,7 @@ function fileFor(pageId: string, body = 'body'): string {
   return serializePageFile(pageId, body);
 }
 
-// runPush orchestration (SPEC §6 "ФС → Docmost"), DRY-RUN BY DEFAULT. Driven by
+// runPush orchestration (DESIGN.md §7), DRY-RUN BY DEFAULT. Driven by
 // FAKES only — no live Docmost, git, fs, or network. Asserts the SAFE-BY-DEFAULT
 // contract: a dry-run builds NO client, makes ZERO Docmost calls, advances NO
 // refs; `--apply` is the ONLY path that writes. Also covers the merge-in-progress
@@ -20,9 +21,6 @@ function makeSettings(): Settings {
   return {
     docmostSpaceId: 'space-1',
     vaultPath: '/vault',
-    pollIntervalMs: 15000,
-    debounceMs: 2000,
-    logLevel: 'info',
   };
 }
 
@@ -50,6 +48,7 @@ function makeGit(opts?: {
     stageAll: 0,
     commit: [] as string[],
     updateRef: [] as { ref: string; target: string }[],
+    deleteRef: [] as string[],
     fastForwardBranch: [] as { branch: string; toCommit: string }[],
     diffNameStatus: [] as { from: string; to: string }[],
     mergeBase: [] as { a: string; b: string }[],
@@ -98,6 +97,9 @@ function makeGit(opts?: {
     fastForwardBranch: vi.fn(async (branch: string, toCommit: string) => {
       calls.fastForwardBranch.push({ branch, toCommit });
       return opts?.ffResult ?? { ok: true };
+    }),
+    deleteRef: vi.fn(async (ref: string) => {
+      calls.deleteRef.push(ref);
     }),
   };
   return {
@@ -206,7 +208,7 @@ describe('runPush — dry-run is the DEFAULT (safe)', () => {
 
     await runPush(deps, { dryRun: true });
 
-    // The first commit is the human working-tree commit on main (SPEC §7.3).
+    // The first commit is the human working-tree commit on main (DESIGN.md §11).
     expect(calls.commit[0]).toBe('local: working-tree changes');
     expect(calls.stageAll).toBeGreaterThanOrEqual(1);
     const trailerArg = (git.commit as any).mock.calls[0][1];
@@ -215,7 +217,7 @@ describe('runPush — dry-run is the DEFAULT (safe)', () => {
 });
 
 describe('runPush — --apply is the ONLY write path', () => {
-  it('builds the client, calls applyPushActions, records created pageIds, advances last-pushed', async () => {
+  it('builds the client, calls applyPushActions, records created pageIds, fast-forwards docmost', async () => {
     // A brand-new local file: meta has title + spaceId but NO pageId yet.
     // A brand-new hand-written file with NO frontmatter (title = filename `New`).
     const newFile = 'fresh body\n';
@@ -245,17 +247,21 @@ describe('runPush — --apply is the ONLY write path', () => {
     expect(fs.store['New.md']).toMatch(/page-new/);
     // A "record created pageIds" commit persisted the write-back.
     expect(calls.commit).toContain('local: record created pageIds');
-    // last-pushed was advanced — first by the applier (main-1), then re-advanced
-    // to the write-back commit (main-2).
-    const lastPushedAdvances = calls.updateRef.filter(
-      (u) => u.ref === LAST_PUSHED_REF,
-    );
-    expect(lastPushedAdvances.map((u) => u.target)).toEqual(['main-1', 'main-2']);
+    // `docmost` was fast-forwarded — first by the applier (main-1), then to the
+    // write-back commit (main-2).
+    expect(calls.fastForwardBranch).toEqual([
+      { branch: DOCMOST_BRANCH, toCommit: 'main-1' },
+      { branch: DOCMOST_BRANCH, toCommit: 'main-2' },
+    ]);
+    // PUSH_REF marked the push's writes on main until they were committed; no
+    // other ref is written.
+    expect(calls.updateRef).toEqual([{ ref: PUSH_REF, target: 'main' }]);
+    expect(calls.deleteRef).toEqual([PUSH_REF]);
     expect(res.divergentDocmost).toBe(false);
     expect(res.failures).toEqual([]);
   });
 
-  it('ESCALATES a divergent docmost mirror in the write-back branch too (SPEC §5, symmetric)', async () => {
+  it('ESCALATES a divergent docmost mirror in the write-back branch too (symmetric)', async () => {
     // A create -> the pageId is written back and a "record created pageIds"
     // commit is made, which triggers the write-back-branch ff. Here the applier's
     // MAIN push ff succeeds (ok) but the WRITE-BACK ff diverges — the write-back
@@ -292,7 +298,7 @@ describe('runPush — --apply is the ONLY write path', () => {
     // The apply still happened, but the write-back divergence is escalated.
     expect(res.applied?.created).toBe(1);
     expect(res.divergentDocmost).toBe(true);
-    // The SAME prominent WARNING (DIVERGED + §5) — not a soft warning.
+    // The SAME prominent WARNING (DIVERGED) — not a soft warning.
     expect(logs.join('\n')).toMatch(/WARNING/);
     expect(logs.join('\n')).toMatch(/DIVERGED/);
     expect(logs.join('\n')).toMatch(/write-back/);
@@ -353,7 +359,7 @@ describe('runPush — --apply is the ONLY write path', () => {
   });
 });
 
-describe('runPush — merge-in-progress aborts (SPEC §9/§12)', () => {
+describe('runPush — merge-in-progress aborts', () => {
   it('stops with a clear message, no diff, no client, no apply', async () => {
     const { git, calls } = makeGit({ mergeInProgress: true });
     const fs = makeFs();
@@ -367,11 +373,11 @@ describe('runPush — merge-in-progress aborts (SPEC §9/§12)', () => {
     expect(makeClient).not.toHaveBeenCalled();
     expect(calls.checkout).toEqual([]);
     expect(logs.join('\n')).toMatch(/unresolved merge/);
-    expect(logs.join('\n')).toMatch(/SPEC §9/);
+    expect(logs.join('\n')).toMatch(/conflict markers must never reach Docmost/);
   });
 });
 
-describe('runPush — divergent docmost escalation (SPEC §5)', () => {
+describe('runPush — divergent docmost escalation', () => {
   it('sets the escalation flag and logs a WARNING, but the apply still happened', async () => {
     const file = fileFor('p-1', 'body');
     const { git } = makeGit({
@@ -428,8 +434,11 @@ describe('runPush — the diff base is merge-base(docmost, main)', () => {
     for (const [ref] of (git.showFileAtRef as any).mock.calls) {
       expect(ref).toBe('mb-sha');
     }
-    // last-pushed is still advanced as the clean-push marker.
-    expect(calls.updateRef).toEqual([{ ref: LAST_PUSHED_REF, target: 'main-sha-1' }]);
+    // A clean push fast-forwards `docmost`; no other ref but PUSH_REF is written.
+    expect(calls.fastForwardBranch).toEqual([
+      { branch: DOCMOST_BRANCH, toCommit: 'main-sha-1' },
+    ]);
+    expect(calls.updateRef).toEqual([{ ref: PUSH_REF, target: 'main' }]);
   });
 
   it('throws when docmost and main share no history, before diffing or building a client', async () => {
@@ -480,8 +489,9 @@ describe('runPush --apply — applyPushActions edge branches', () => {
     // String(err) of the thrown string 'boom' — NOT 'undefined' and NOT
     // '[object Object]'. This is the load-bearing assertion for line 763.
     expect(failure.error).toBe('boom');
-    // A failure means the refs are NOT advanced (partial push, SPEC §12).
-    expect(calls.updateRef).toEqual([]);
+    // A failure means `docmost` is NOT fast-forwarded (partial push); the only
+    // ref written is PUSH_REF, the push's write marker.
+    expect(calls.updateRef).toEqual([{ ref: PUSH_REF, target: 'main' }]);
     expect(calls.fastForwardBranch).toEqual([]);
   });
 

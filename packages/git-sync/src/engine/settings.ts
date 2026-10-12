@@ -10,9 +10,6 @@
 export type Settings = {
   docmostSpaceId: string;
   vaultPath: string;
-  pollIntervalMs: number;
-  debounceMs: number;
-  logLevel: 'debug' | 'info' | 'warn' | 'error';
   /**
    * Per-space PUSH policy for a page whose committed body still contains
    * unresolved git conflict markers (`<<<<<<<` / `=======` / `>>>>>>>`):

@@ -1,10 +1,12 @@
+import './git-env';
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { runPush, LAST_PUSHED_REF } from '../src/engine/push';
+import { runPush } from '../src/engine/push';
+import { PUSH_REF } from '../src/engine/vault-refs';
 import type { PushDeps } from '../src/engine/push';
 import { VaultGit } from '../src/engine/git';
 import type { Settings } from '../src/engine/settings';
@@ -35,9 +37,6 @@ function makeSettings(vaultPath: string): Settings {
   return {
     docmostSpaceId: 'space-1',
     vaultPath,
-    pollIntervalMs: 15000,
-    debounceMs: 2000,
-    logLevel: 'info',
   };
 }
 
@@ -75,7 +74,7 @@ describe('runPush --apply against a REAL VaultGit (binding contract)', () => {
     }
   });
 
-  it('writes through real git: createPage runs, last-pushed advances, no throw', async () => {
+  it('writes through real git: createPage runs, docmost advances, no throw', async () => {
     if (!available) return; // skip gracefully when git is unavailable
 
     // Temp vault repo under the OS tmpdir (mirrors test/git.test.ts setup).
@@ -100,8 +99,7 @@ describe('runPush --apply against a REAL VaultGit (binding contract)', () => {
       authorEmail: 'human@local',
     });
 
-    // last-pushed must be UNSET so the run actually advances it for the first time.
-    expect(await git.revParse(LAST_PUSHED_REF)).toBeNull();
+    const docmostBefore = await git.revParse('docmost');
 
     const client = makeClientFake();
     const logs: string[] = [];
@@ -133,10 +131,14 @@ describe('runPush --apply against a REAL VaultGit (binding contract)', () => {
     // The assigned pageId was written back to disk + committed.
     expect(res.applied?.writtenBack).toEqual([{ path: 'New.md', pageId: 'new-id' }]);
 
-    // CRITICALLY: refs/docmost/last-pushed ACTUALLY advanced in the real repo —
-    // it now resolves to a real commit (proving updateRef ran with binding).
-    const lastPushed = await git.revParse(LAST_PUSHED_REF);
-    expect(lastPushed).toMatch(/^[0-9a-f]{40}$/);
+    // CRITICALLY: `docmost` ACTUALLY advanced in the real repo to `main`, the
+    // write-back commit (proving fastForwardBranch ran with binding), and the
+    // push's write marker is gone.
+    const docmostAfter = await git.revParse('docmost');
+    expect(docmostAfter).toMatch(/^[0-9a-f]{40}$/);
+    expect(docmostAfter).not.toBe(docmostBefore);
+    expect(docmostAfter).toBe(await git.revParse('main'));
+    expect(await git.readRef(PUSH_REF)).toBeNull();
     expect(res.divergentDocmost).toBe(false);
   });
 });

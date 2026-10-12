@@ -4,6 +4,7 @@
  * engine `Settings`, a git-availability probe, a mutable fake Docmost client and
  * small git shell helpers.
  */
+import "./git-env";
 import { execFile } from "node:child_process";
 import { lstat, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -36,9 +37,6 @@ export function makeSettings(vaultPath: string): Settings {
   return {
     docmostSpaceId: "space-1",
     vaultPath,
-    pollIntervalMs: 15000,
-    debounceMs: 2000,
-    logLevel: "info",
   } as Settings;
 }
 

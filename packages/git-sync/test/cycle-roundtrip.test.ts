@@ -1,3 +1,4 @@
+import "./git-env";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,9 +34,6 @@ function makeSettings(vaultPath: string): Settings {
   return {
     docmostSpaceId: "space-1",
     vaultPath,
-    pollIntervalMs: 15000,
-    debounceMs: 2000,
-    logLevel: "info",
   } as Settings;
 }
 

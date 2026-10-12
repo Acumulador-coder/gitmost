@@ -17,11 +17,14 @@ export {
   serializeDocmostMarkdownBody,
   parseDocmostMarkdown,
   convertProseMirrorToMarkdown,
-  markdownToProseMirror,
   canonicalizeContent,
   docsCanonicallyEqual,
 } from "@docmost/prosemirror-markdown";
 export type { DocmostMdMeta } from "@docmost/prosemirror-markdown";
+// The converter's markdownToProseMirror, same signature, run on the converter
+// worker pool (input budget + deadline) so a big page never blocks the
+// caller's event loop.
+export { markdownToProseMirror } from "./engine/convert-pool.js";
 
 // Pure engine (no IO): reconcile planner, vault layout, sanitize, stabilize,
 // loop-guard body hash.
@@ -63,6 +66,7 @@ export {
   BOT_AUTHOR_NAME,
   BOT_AUTHOR_EMAIL,
   DEFAULT_BRANCH,
+  PUSH_BUDGET,
 } from "./engine/git.js";
 export type { DiffEntry, MergeResult, CommitOptions } from "./engine/git.js";
 
@@ -77,6 +81,7 @@ export type {
   PullActions,
   ApplyPullActionsDeps,
   ApplyResult,
+  PullFailure,
 } from "./engine/pull.js";
 
 export {
@@ -85,8 +90,6 @@ export {
   applyPushActions,
   runPush,
   parentFolderFile,
-  LAST_PUSHED_REF,
-  DOCMOST_BRANCH,
   LOCAL_AUTHOR_NAME,
   LOCAL_AUTHOR_EMAIL,
   LOCAL_SOURCE_TRAILER,
@@ -112,6 +115,13 @@ export type {
 } from "./engine/push.js";
 
 export type { Settings } from "./engine/settings.js";
+
+// The engine's mirror branch, and the marker the server sets around an
+// external push's receive-pack (DESIGN.md §3).
+export { DOCMOST_BRANCH, RECEIVE_REF } from "./engine/vault-refs.js";
+
+// What a cycle stopped by its AbortSignal throws (DESIGN.md §9).
+export { CycleAbortedError } from "./engine/abort.js";
 
 export { runCycle, recoverVault } from "./engine/cycle.js";
 export type {

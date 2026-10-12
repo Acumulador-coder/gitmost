@@ -1,7 +1,8 @@
+import "./git-env";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runCycle } from "../src/engine/cycle";
 import { VaultGit } from "../src/engine/git";
 import {
@@ -12,6 +13,22 @@ import {
   nodeFs,
   type FakePage,
 } from "./cycle-realgit-helpers";
+
+// The pull's markdown -> ProseMirror conversion, made to throw where a test
+// sets `convert.fail`; the real (worker-backed) conversion otherwise.
+const convert = vi.hoisted(() => ({ fail: false }));
+vi.mock("../src/engine/convert-pool", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/engine/convert-pool")>();
+  return {
+    ...real,
+    markdownToProseMirror: (
+      ...args: Parameters<typeof real.markdownToProseMirror>
+    ) =>
+      convert.fail
+        ? Promise.reject(new Error("converter exploded"))
+        : real.markdownToProseMirror(...args),
+  };
+});
 
 // The push half of a cycle must carry only what `main` has and Docmost lacks.
 // The pull merges its own `docmost` export into `main`; pushing that back would
@@ -54,6 +71,7 @@ describe("runCycle — the push never echoes the pull's export", () => {
   });
 
   afterEach(async () => {
+    convert.fail = false;
     if (dir) await rm(dir, { recursive: true, force: true });
     dir = undefined;
   });
@@ -70,6 +88,7 @@ describe("runCycle — the push never echoes the pull's export", () => {
     const vault = new VaultGit(root);
     const client = makeClient(pages);
     const exportKeys = new Map<string, string>();
+    const warnings: string[] = [];
     const cycle = (fs = nodeFs, v = vault, signal?: AbortSignal) =>
       runCycle({
         spaceId: "space-1",
@@ -79,7 +98,7 @@ describe("runCycle — the push never echoes the pull's export", () => {
         fs,
         signal,
         log: () => undefined,
-        warn: () => undefined,
+        warn: (line: string) => warnings.push(line),
         exportKeys,
       });
     // Cycle 1: the initial export.
@@ -127,6 +146,7 @@ describe("runCycle — the push never echoes the pull's export", () => {
       humanEdit,
       humanCommit,
       mainFiles,
+      warnings,
     };
   }
 
@@ -948,6 +968,52 @@ describe("runCycle — the push never echoes the pull's export", () => {
       "New.md",
       "Page.md",
     ]);
+  });
+
+  it("a cut-off create whose git file the converter cannot take is not taken over: the pull goes on, git's file becomes a copy", async () => {
+    if (!available) return;
+    const { pages, client, cycle, humanCommit, mainFiles, warnings } =
+      await setup("alpha");
+    const S = "019f2800-0000-7000-8000-0000000000ce";
+
+    // A cut-off create (as above) that would be taken over, but converting
+    // git's file to compare it with the page throws.
+    await humanCommit(async (root) => {
+      await writeFile(join(root, "New.md"), "brand new content\n", "utf8");
+    });
+    pages.push({
+      id: S,
+      slugId: "s",
+      title: "New",
+      parentPageId: null,
+      updatedAt: T1,
+      text: "brand new content",
+      lastUpdatedSource: "git-sync",
+    });
+    convert.fail = true;
+
+    const res = await cycle();
+
+    expect(res.ran).toBe(true);
+    expect(res.push.failures).toBe(0);
+    expect(pages.find((p) => p.id === S)?.text).toBe("brand new content");
+    expect(client.importPageMarkdown).not.toHaveBeenCalled();
+    expect(client.createPage).toHaveBeenCalledWith(
+      "New ~git",
+      "brand new content",
+      "space-1",
+      undefined,
+    );
+    expect(Object.keys(await mainFiles()).sort()).toEqual([
+      "New ~git.md",
+      "New.md",
+      "Page.md",
+    ]);
+    expect(
+      warnings.some(
+        (w) => w.includes("could not convert") && w.includes("converter exploded"),
+      ),
+    ).toBe(true);
   });
 
   it("a git-written page stored with the editor's trailing paragraph exports to git's bytes: idle cycles change nothing", async () => {

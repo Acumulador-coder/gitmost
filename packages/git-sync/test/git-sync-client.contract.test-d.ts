@@ -58,7 +58,7 @@ describe('GitSyncClient contract (type-level)', () => {
     expect(true).toBe(true);
   });
 
-  it('listSpaceTree returns { pages, complete } (complete gates §8 suppression)', () => {
+  it('listSpaceTree returns { pages, complete } (complete gates the DESIGN.md §5 suppression)', () => {
     type Tree = Awaited<ReturnType<GitSyncClient['listSpaceTree']>>;
     expectTypeOf<Tree['complete']>().toEqualTypeOf<boolean>();
     expectTypeOf<Tree['pages']>().toEqualTypeOf<GitSyncPageNodeLite[]>();

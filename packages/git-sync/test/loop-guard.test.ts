@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { bodyHash } from '../src/engine/loop-guard.js';
 
-// Loop-guard body hash (SPEC §10 "хэш тела"). The hash is the signal a future
+// Loop-guard body hash (DESIGN.md §11). The hash is the signal a future
 // pull-side poll-suppression uses to recognize our OWN write. It MUST be
 // deterministic (same input -> same hash) and discriminating (different input ->
 // different hash).
 
-describe('bodyHash (pure, SPEC §10)', () => {
+describe('bodyHash (pure, DESIGN.md §11)', () => {
   it('is deterministic — same input yields the same hash', () => {
     const body = '# Title\n\nsome body with <span data-comment-id="x">mark</span>\n';
     expect(bodyHash(body)).toBe(bodyHash(body));

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { applyPushActions, LAST_PUSHED_REF } from '../src/engine/push';
+import { applyPushActions } from '../src/engine/push';
 import { bodyHash } from '../src/engine/loop-guard';
 import type { ApplyPushDeps, PushActions } from '../src/engine/push';
 import { parsePageFile, serializePageFile } from '@docmost/prosemirror-markdown';
@@ -10,12 +10,12 @@ const SPACE_ID = 'sp-test';
 // The commit the push diff was computed from (runPush: merge-base(docmost, main)).
 const BASE_REF = 'base-commit';
 
-// FS→Docmost push, FIRST increment (SPEC §6). `applyPushActions` is the THIN IO
+// FS→Docmost push, FIRST increment (DESIGN.md §7). `applyPushActions` is the THIN IO
 // half: create/update/delete via FAKES that record every call — no real network,
-// git, or fs. Asserts: update uses importPageMarkdown (collab path, SPEC
-// §2/§15.6); create writes the assigned pageId BACK into the file meta; delete
-// soft-deletes; rename/move is returned as `deferred` with NO client call; the
-// last-pushed ref is advanced.
+// git, or fs. Asserts: update uses importPageMarkdown (collab path,
+// DESIGN.md §7); create writes the assigned pageId BACK into the file meta; delete
+// soft-deletes; rename/move is returned as `deferred` with NO client call; a
+// clean push fast-forwards the `docmost` mirror.
 
 /** A recording client fake; createPage returns a configurable assigned id. */
 function makeClient(opts?: { createId?: string }) {
@@ -54,13 +54,25 @@ function makeClient(opts?: { createId?: string }) {
       pageId,
       title,
     })),
+    // The retry-adopt check reads the candidate page: by default an empty page
+    // git-sync wrote last — its own create, cut off before the id write-back.
+    getPageJson: vi.fn(async (pageId: string) => ({
+      id: pageId,
+      slugId: 'slug',
+      title: 'T',
+      parentPageId: null as string | null,
+      spaceId: SPACE_ID,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      content: { type: 'doc', content: [] } as unknown,
+      lastUpdatedSource: 'git-sync' as string | null,
+    })),
   };
   return client;
 }
 
 /**
- * A recording git fake: `updateRef` (advance last-pushed) and `fastForwardBranch`
- * (advance the `docmost` mirror, the loop-close). `ffResult` configures what the
+ * A recording git fake: `updateRef` (the applier must never call it) and
+ * `fastForwardBranch` (advance the `docmost` mirror, the loop-close). `ffResult` configures what the
  * ff returns (default a successful advance).
  */
 function makeGit(opts?: {
@@ -80,7 +92,7 @@ function makeGit(opts?: {
       return opts?.ffResult ?? { ok: true };
     }),
     // The update base and the move/rename classifier's PREVIOUS side are read at
-    // BASE_REF via this; `null` when absent there (SPEC §5).
+    // BASE_REF via this; `null` when absent there (DESIGN.md §4).
     showFileAtRef: vi.fn(async (_ref: string, path: string) =>
       path in prevTree ? prevTree[path] : null,
     ),
@@ -147,7 +159,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('applyPushActions — update (collab path, SPEC §2/§15.6)', () => {
+describe('applyPushActions — update (collab path, DESIGN.md §7)', () => {
   it('reads the file and calls importPageMarkdown with the STRIPPED body', async () => {
     const fileBody = fileFor('p-1', 'updated body');
     const client = makeClient();
@@ -415,7 +427,7 @@ describe('applyPushActions — create RETRY-ADOPT idempotency (#1)', () => {
     expect(parsePageFile(fs.store['Parent/My New Page.md']).id).toBe('page-new-99');
   });
 
-  it('a thrown adopt is isolated as a `create` failure (per-page isolation, SPEC §12)', async () => {
+  it('a thrown adopt is isolated as a `create` failure (per-page isolation, DESIGN.md §8)', async () => {
     const client = makeClient({ createId: 'unused' });
     client.listSpaceTree.mockResolvedValue({
       pages: [{ id: 'existing-1', parentPageId: null, title: 'Doc' }],
@@ -437,13 +449,112 @@ describe('applyPushActions — create RETRY-ADOPT idempotency (#1)', () => {
     expect(res.failures).toEqual([
       { kind: 'create', path: 'Doc.md', error: 'adopt boom' },
     ]);
-    // A failure means the refs are NOT advanced (re-run retries cleanly, §12).
-    expect(res.lastPushedAdvanced).toBe(false);
+    // A failure means the refs are NOT advanced (re-run retries cleanly).
+    expect(res.clean).toBe(false);
     expect(updateRefCalls).toEqual([]);
+  });
+
+  // GL-4: a page that merely shares the file's (parent, title) is never written
+  // over — only git-sync's own cut-off create of this file is adopted.
+  it('does NOT adopt a same-title page a person edited last: a new page is created', async () => {
+    const client = makeClient({ createId: 'page-new-1' });
+    client.listSpaceTree.mockResolvedValue({
+      pages: [{ id: 'users-page', parentPageId: null, title: 'Doc' }],
+      complete: true,
+    });
+    client.getPageJson.mockImplementation(async (pageId: string) => ({
+      id: pageId,
+      slugId: 'slug',
+      title: 'Doc',
+      parentPageId: null,
+      spaceId: SPACE_ID,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      content: { type: 'doc', content: [] },
+      lastUpdatedSource: 'user',
+    }));
+    const { git } = makeGit();
+    const fs = makeFs({ 'Doc.md': '# Doc\n\nbody\n' });
+
+    const res = await applyPushActions(
+      deps(client, git, fs),
+      actions({ creates: [{ path: 'Doc.md' }] }),
+    );
+
+    expect(client.getPageJson).toHaveBeenCalledWith('users-page');
+    expect(client.importPageMarkdown).not.toHaveBeenCalled();
+    expect(client.createPage).toHaveBeenCalledTimes(1);
+    expect(parsePageFile(fs.store['Doc.md']).id).toBe('page-new-1');
+  });
+
+  it('does NOT adopt a same-title page git-sync wrote that holds OTHER text: a new page is created', async () => {
+    const client = makeClient({ createId: 'page-new-2' });
+    client.listSpaceTree.mockResolvedValue({
+      pages: [{ id: 'other-page', parentPageId: null, title: 'Doc' }],
+      complete: true,
+    });
+    client.getPageJson.mockImplementation(async (pageId: string) => ({
+      id: pageId,
+      slugId: 'slug',
+      title: 'Doc',
+      parentPageId: null,
+      spaceId: SPACE_ID,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      content: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'Someone else wrote this.' }] },
+        ],
+      },
+      lastUpdatedSource: 'git-sync',
+    }));
+    const { git } = makeGit();
+    const fs = makeFs({ 'Doc.md': 'A different body.\n' });
+
+    const res = await applyPushActions(
+      deps(client, git, fs),
+      actions({ creates: [{ path: 'Doc.md' }] }),
+    );
+
+    expect(client.importPageMarkdown).not.toHaveBeenCalled();
+    expect(client.createPage).toHaveBeenCalledTimes(1);
+    expect(res.writtenBack).toEqual([{ path: 'Doc.md', pageId: 'page-new-2' }]);
+  });
+
+  it('ADOPTS a page git-sync wrote that already holds this file body', async () => {
+    const client = makeClient({ createId: 'should-not-be-used' });
+    client.listSpaceTree.mockResolvedValue({
+      pages: [{ id: 'own-create', parentPageId: null, title: 'Doc' }],
+      complete: true,
+    });
+    client.getPageJson.mockImplementation(async (pageId: string) => ({
+      id: pageId,
+      slugId: 'slug',
+      title: 'Doc',
+      parentPageId: null,
+      spaceId: SPACE_ID,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      content: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'Same body.' }] },
+        ],
+      },
+      lastUpdatedSource: 'git-sync',
+    }));
+    const { git } = makeGit();
+    const fs = makeFs({ 'Doc.md': 'Same body.\n' });
+
+    const res = await applyPushActions(
+      deps(client, git, fs),
+      actions({ creates: [{ path: 'Doc.md' }] }),
+    );
+
+    expect(client.createPage).not.toHaveBeenCalled();
+    expect(res.writtenBack).toEqual([{ path: 'Doc.md', pageId: 'own-create' }]);
   });
 });
 
-describe('applyPushActions — delete (soft-delete to Trash, SPEC §8)', () => {
+describe('applyPushActions — delete (soft-delete to Trash, DESIGN.md §7)', () => {
   it('calls deletePage(pageId)', async () => {
     const client = makeClient();
     const { git } = makeGit();
@@ -462,12 +573,12 @@ describe('applyPushActions — delete (soft-delete to Trash, SPEC §8)', () => {
   });
 });
 
-// FS→Docmost push #3 (SPEC §5/§6/§16): the move/rename APPLY. The classifier
+// FS→Docmost push #3 (DESIGN.md §4, §7): the move/rename APPLY. The classifier
 // resolves the parent from the FILE PATH (the enclosing folder's `.md`), not
 // stale `meta.parentPageId`, then `applyPushActions` calls move_page / rename_page
 // (both for a reparent+retitle) or records a path-only NO-OP with NO client call.
 
-describe('applyPushActions — move (parent changed, title same; SPEC §5/§16)', () => {
+describe('applyPushActions — move (parent changed, title same; DESIGN.md §4)', () => {
   it('calls movePage(pageId, newParent) and NOT renamePage', async () => {
     // The page moved from the space root (Doc.md) under a folder (Parent/Doc.md).
     // The new parent page owns folder `Parent/`, so its file is the FOLDER-NOTE
@@ -502,7 +613,7 @@ describe('applyPushActions — move (parent changed, title same; SPEC §5/§16)'
   });
 });
 
-describe('applyPushActions — move-to-root (newParent null; SPEC §16)', () => {
+describe('applyPushActions — move-to-root (newParent null; DESIGN.md §4)', () => {
   it('calls movePage(pageId, null) when the file lands at the space root', async () => {
     const client = makeClient();
     const { git } = makeGit({
@@ -531,7 +642,7 @@ describe('applyPushActions — move-to-root (newParent null; SPEC §16)', () => 
   });
 });
 
-describe('applyPushActions — rename (same parent, title changed; SPEC §5/§6)', () => {
+describe('applyPushActions — rename (same parent, title changed; DESIGN.md §4)', () => {
   it('calls renamePage(pageId, title-from-filename) and NOT movePage', async () => {
     // Same enclosing folder on both sides (parent unchanged), the FILENAME (=
     // title) changed Old -> New -> a pure rename to the new filename's title.
@@ -605,7 +716,7 @@ describe('applyPushActions — both (reparent + retitle; move THEN rename)', () 
   });
 });
 
-describe('applyPushActions — noop (parent folder renamed; NO Docmost call; SPEC §5)', () => {
+describe('applyPushActions — noop (parent folder renamed; NO Docmost call; DESIGN.md §4)', () => {
   it('calls NEITHER movePage NOR renamePage and records the noop', async () => {
     // The PARENT folder was renamed Old/ -> New/ (a retitle of the parent page,
     // whose folder-note kept the SAME gitmost_id). For this CHILD, neither its
@@ -648,7 +759,7 @@ describe('applyPushActions — noop (parent folder renamed; NO Docmost call; SPE
   });
 });
 
-describe('applyPushActions — move whose client call throws (SPEC §12 isolation)', () => {
+describe('applyPushActions — move whose client call throws (DESIGN.md §8 isolation)', () => {
   it('isolates the failure into `failures` and does NOT advance the refs', async () => {
     const client = makeClient();
     client.movePage.mockImplementation(async () => {
@@ -684,15 +795,15 @@ describe('applyPushActions — move whose client call throws (SPEC §12 isolatio
     ]);
     // A failure means the applier advances no ref; runPush records per page
     // what reached Docmost (both paths of the failed move stay out).
-    expect(res.lastPushedAdvanced).toBe(false);
+    expect(res.clean).toBe(false);
     expect(updateRefCalls).toEqual([]);
     expect(ffCalls).toEqual([]);
     expect(git.updateRef).not.toHaveBeenCalled();
   });
 });
 
-describe('applyPushActions — loop-close: ref advance + docmost ff (SPEC §6 step 3 / §10)', () => {
-  it('advances last-pushed AND fast-forwards the docmost mirror on a clean push', async () => {
+describe('applyPushActions — loop-close: ref advance + docmost ff (DESIGN.md §7, §11)', () => {
+  it('fast-forwards the docmost mirror on a clean push (and writes no other ref)', async () => {
     const client = makeClient();
     const { git, updateRefCalls, ffCalls } = makeGit();
     const fs = makeFs();
@@ -703,10 +814,8 @@ describe('applyPushActions — loop-close: ref advance + docmost ff (SPEC §6 st
       'commit-sha-abc',
     );
 
-    expect(res.lastPushedAdvanced).toBe(true);
-    expect(updateRefCalls).toEqual([
-      { ref: LAST_PUSHED_REF, target: 'commit-sha-abc' },
-    ]);
+    expect(res.clean).toBe(true);
+    expect(updateRefCalls).toEqual([]);
     // The loop-close: the docmost mirror is fast-forwarded to the pushed commit.
     expect(ffCalls).toEqual([{ branch: 'docmost', toCommit: 'commit-sha-abc' }]);
     expect(res.docmostFastForward).toEqual({ ok: true });
@@ -726,10 +835,10 @@ describe('applyPushActions — loop-close: ref advance + docmost ff (SPEC §6 st
       'sha-div',
     );
 
-    // last-pushed still advances (it is our own marker), but the ff result is
-    // surfaced so the caller can log the refusal.
-    expect(res.lastPushedAdvanced).toBe(true);
-    expect(updateRefCalls).toEqual([{ ref: LAST_PUSHED_REF, target: 'sha-div' }]);
+    // The push itself was clean, but the ff result is surfaced so the caller
+    // can log the refusal.
+    expect(res.clean).toBe(true);
+    expect(updateRefCalls).toEqual([]);
     expect(ffCalls).toEqual([{ branch: 'docmost', toCommit: 'sha-div' }]);
     expect(res.docmostFastForward).toEqual({ ok: false, reason: 'not-fast-forward' });
   });
@@ -744,7 +853,7 @@ describe('applyPushActions — loop-close: ref advance + docmost ff (SPEC §6 st
       actions({ updates: [] }),
     );
 
-    expect(res.lastPushedAdvanced).toBe(false);
+    expect(res.clean).toBe(false);
     expect(updateRefCalls).toEqual([]);
     expect(res.docmostFastForward).toBeNull();
     expect(git.updateRef).not.toHaveBeenCalled();
@@ -752,7 +861,7 @@ describe('applyPushActions — loop-close: ref advance + docmost ff (SPEC §6 st
   });
 });
 
-describe('applyPushActions — per-page error isolation + refs gated on success (SPEC §12)', () => {
+describe('applyPushActions — per-page error isolation + refs gated on success (DESIGN.md §7)', () => {
   it('continues the batch when an update throws; records the failure; refs NOT advanced', async () => {
     // A client whose 2nd importPageMarkdown call throws — the 1st and 3rd must
     // still be applied, the 2nd recorded as a failure, and NO ref advanced.
@@ -799,8 +908,9 @@ describe('applyPushActions — per-page error isolation + refs gated on success 
     // Only the successful pages carry a loop-guard push record.
     expect(res.pushed.map((p) => p.pageId)).toEqual(['p-a', 'p-c']);
 
-    // A PARTIAL push advances NEITHER ref, so a re-run retries cleanly (§12).
-    expect(res.lastPushedAdvanced).toBe(false);
+    // A PARTIAL push does not move `docmost`; runPush records per page what
+    // reached Docmost.
+    expect(res.clean).toBe(false);
     expect(updateRefCalls).toEqual([]);
     expect(ffCalls).toEqual([]);
     expect(res.docmostFastForward).toBeNull();
@@ -809,7 +919,7 @@ describe('applyPushActions — per-page error isolation + refs gated on success 
   });
 });
 
-describe('applyPushActions — loop-guard push record (SPEC §10)', () => {
+describe('applyPushActions — loop-guard push record (DESIGN.md §11)', () => {
   it('records pageId + updatedAt + bodyHash per applied update', async () => {
     const fileBody = fileFor('p-1', 'updated body');
     const client = {
@@ -884,11 +994,11 @@ describe('applyPushActions — mixed batch + skipped passthrough', () => {
       created: 1,
       updated: 1,
       deleted: 1,
-      lastPushedAdvanced: true,
+      clean: true,
     });
     expect(res.writtenBack).toEqual([{ path: 'N.md', pageId: 'created-1' }]);
     expect(res.skipped).toEqual(skipped);
-    expect(updateRefCalls).toEqual([{ ref: LAST_PUSHED_REF, target: 'sha-9' }]);
+    expect(updateRefCalls).toEqual([]);
     // The update pushes the STRIPPED body ('upd'), not the frontmatter file.
     expect(client.importPageMarkdown).toHaveBeenCalledWith('u-1', 'upd', null);
     expect(client.deletePage).toHaveBeenCalledWith('d-1');

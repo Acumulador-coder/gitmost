@@ -1,14 +1,12 @@
+import "./git-env";
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runCycle } from "../src/engine/cycle";
-import { VaultGit } from "../src/engine/git";
-import {
-  LAST_PUSHED_REF,
-  MAX_GIT_COPY_CREATES,
-  RECORD_REF,
-} from "../src/engine/push";
+import { BOT_AUTHOR_NAME, VaultGit } from "../src/engine/git";
+import { MAX_GIT_COPY_CREATES } from "../src/engine/push";
+import { RECORD_REF } from "../src/engine/vault-refs";
 import { git, gitAvailable, makeSettings, nodeFs } from "./cycle-realgit-helpers";
 
 // A push where some pages fail must still advance the merge base over the pages
@@ -325,6 +323,25 @@ describe("runCycle — a push with failures advances the base per page", () => {
     expect((await h.mainFiles()).sort()).toEqual(["Bad.md", "New.md", "Page.md"]);
     expect(h.pages.map((p) => p.title).sort()).toEqual(["Bad", "New", "Page"]);
     expect(h.pages.find((p) => p.id === BAD)?.text).toBe("bad GIT");
+
+    // The per-page record and its merge into main are bot commits carrying the
+    // docmost provenance trailer (DESIGN.md §11), like the pull's commits.
+    for (const subject of [
+      "docmost: record pushed pages",
+      "Merge the pushed pages record into main",
+    ]) {
+      expect(
+        await git(
+          h.root,
+          "log",
+          "-1",
+          "--fixed-strings",
+          `--grep=${subject}`,
+          "--format=%an|%(trailers:key=Docmost-Sync-Source,valueonly)",
+          "main",
+        ),
+      ).toBe(`${BOT_AUTHOR_NAME}|docmost`);
+    }
   });
 
   it.each([
@@ -502,8 +519,8 @@ describe("runCycle — a push with failures advances the base per page", () => {
 
     expect(res.push?.failures).toBe(0);
     expect(h.calls).toEqual([["import", P]]);
-    expect(await git(h.root, "rev-parse", "main", "docmost", LAST_PUSHED_REF)).toBe(
-      [edited, edited, edited].join("\n"),
+    expect(await git(h.root, "rev-parse", "main", "docmost")).toBe(
+      [edited, edited].join("\n"),
     );
     await expect(
       git(h.root, "rev-parse", "--verify", "--quiet", RECORD_REF),

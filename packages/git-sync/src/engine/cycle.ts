@@ -5,25 +5,25 @@ import {
   readExisting,
   computePullActions,
   applyPullActions,
+  type PullFailure,
 } from "./pull.js";
 import {
   runPush,
   commitLocalWorkingTree,
   finishPushRecord,
-  DOCMOST_BRANCH,
-  RECORD_REF,
+  finishPushWrites,
   type PushFailure,
 } from "./push.js";
 import { assertVaultPathSafe, type PathGuardIo } from "./path-guard.js";
-
-/**
- * Set for the whole pull, from before it checks out `docmost` until
- * `applyPullActions` returns on `main`. Everything the pull leaves uncommitted
- * on `main` is engine work derived from committed `main` and from Docmost, so
- * the next cycle DISCARDS it and redoes the pull (preflight 2b) instead of
- * committing it as user work.
- */
-const PULL_REF = "refs/docmost/pulling";
+import { throwIfAborted } from "./abort.js";
+import {
+  DOCMOST_BRANCH,
+  PULL_REF,
+  PUSH_REF,
+  RECEIVE_REF,
+  RECORD_REF,
+  RETIRED_REFS,
+} from "./vault-refs.js";
 
 /** The most per-page push failures one cycle names in the log. */
 const LOGGED_PUSH_FAILURES = 20;
@@ -70,13 +70,15 @@ export interface RunCycleDeps {
    */
   exportKeys?: Map<string, string>;
   /**
-   * Optional cooperative-abort signal. The caller (orchestrator) wires this to
-   * the per-space lock: if a heartbeat refresh cannot CONFIRM the lock is still
-   * held (CAS-miss / Redis error), the signal is aborted and the cycle bails at
-   * its next checkpoint (before the pull-apply and before the push-apply — the
-   * two destructive write phases) instead of writing blind after a possible
-   * lock loss. This is a COARSE best-effort guard; a fully fenced cross-process
-   * single-writer still needs the fencing-token redesign (follow-up).
+   * Optional cooperative-abort signal (DESIGN.md §9). The caller (orchestrator)
+   * aborts it when the per-space lock cannot be CONFIRMED (heartbeat CAS-miss /
+   * Redis error) or the cycle's deadline passes. The cycle checks it before the
+   * pull-apply and before the push-apply, the pull and the push check it between
+   * page operations, and every conversion is handed it; an abort ends the cycle
+   * with a `CycleAbortedError` instead of writing blind after a possible lock
+   * loss, and the next cycle's recovery repairs the vault. A fully fenced
+   * cross-process single-writer still needs the fencing-token redesign
+   * (follow-up).
    */
   signal?: AbortSignal;
 }
@@ -85,14 +87,26 @@ export interface RunCycleResult {
   ran: boolean;
   /** Set when the cycle short-circuited without running pull/push. */
   skipped?: "merge-in-progress";
-  pull?: { written: number; deleted: number; conflict: boolean };
+  /**
+   * `failures` counts the live pages the pull could not write into the vault
+   * (they did not reach git this cycle and are retried the next);
+   * `firstFailure` is the first of them (absent when none).
+   */
+  pull?: {
+    written: number;
+    deleted: number;
+    conflict: boolean;
+    failures: number;
+    firstFailure?: PullFailure;
+  };
   /** `firstFailure` is the first per-page push failure (absent when none). */
   push?: { mode: string; failures: number; firstFailure?: PushFailure };
   /**
    * Forwarded from the push result: `true` when the push REFUSED to fast-forward
-   * a divergent `docmost` mirror (the §5 invariant — `docmost` mirrors what
-   * Docmost contains — is broken). Surfaced here so a caller driving `runCycle`
-   * can detect the breach without scraping logs (red-team #15).
+   * a divergent `docmost` mirror (the mirror invariant of DESIGN.md §3 —
+   * `docmost` mirrors what Docmost contains — is broken). Surfaced here so a
+   * caller driving `runCycle` can detect the breach without scraping logs
+   * (red-team #15).
    */
   divergentDocmost?: boolean;
 }
@@ -103,10 +117,9 @@ export interface RunCycleResult {
  * the single entry point the app drives — it owns the staging order so it can
  * never drift from the engine it ships with.
  *
- * Staging (the ⭐ data-loss-critical order, SPEC §6/§9):
+ * Staging (the ⭐ data-loss-critical order, DESIGN.md §2):
  *   1. assertGitAvailable + ensureRepo (the git state store must exist).
- *   2. refuse on an unresolved merge (a prior conflicting pull); next checkout
- *      would fail otherwise.
+ *   2. repair what an interrupted cycle left (`recoverVault`, DESIGN.md §8).
  *   3. ensureBranch('docmost','main') + checkout('docmost'). Pull writes MUST
  *      land on `docmost`, not `main`: applyPullActions commits on `docmost`,
  *      then checks out `main` and merges docmost -> main. Writing Docmost
@@ -173,7 +186,7 @@ export async function recoverVault(deps: RecoverVaultDeps): Promise<boolean> {
   //     wedging the space forever. Re-create it from `docmost`/HEAD before use.
   if (await vault.ensureMainBranch()) recovered = true;
 
-  // 2. RECOVER from a vault left mid-merge by a PRIOR cycle (SPEC §9 wedge fix).
+  // 2. RECOVER from a vault left mid-merge by a PRIOR cycle (DESIGN.md §8).
   //    A leftover merge used to WEDGE THE WHOLE SPACE: this check returned
   //    `skipped: "merge-in-progress"` so EVERY later cycle skipped the entire
   //    space (all pages, both directions) forever, with no recovery. The pull
@@ -188,13 +201,13 @@ export async function recoverVault(deps: RecoverVaultDeps): Promise<boolean> {
     recovered = true;
     log(
       `vault was left mid-merge by a prior cycle — aborting the stale merge and ` +
-        `continuing so the space is not wedged (SPEC §9 recovery).`,
+        `continuing so the space is not wedged.`,
     );
     await vault.abortMerge();
     if (await vault.isMergeInProgress()) {
       log(
         `vault still mid-merge after 'merge --abort' — hard-resetting to HEAD ` +
-          `to recover (SPEC §9).`,
+          `to recover.`,
       );
       await vault.resetHardToHead();
     }
@@ -215,15 +228,43 @@ export async function recoverVault(deps: RecoverVaultDeps): Promise<boolean> {
   //     alignment, a merge and its resolution), so it is discarded and the pull
   //     redoes it — committing it as user work would record a half-done
   //     operation (pages deleted, duplicated or merged into the wrong file).
+  //     And EXCEPT on `main` left by an interrupted PUSH (PUSH_REF set): what is
+  //     uncommitted there is the push's own write-backs, so a complete one is
+  //     committed and one cut off part-way is put back (`finishPushWrites`) —
+  //     an emptied or truncated file must never reach Docmost as page content.
+  //     And EXCEPT on `main` left by an external push's receive-pack cut off
+  //     before it moved `main` (RECEIVE_REF set): what is uncommitted there is
+  //     a possibly partial checkout of a push the client never saw accepted,
+  //     so it is discarded; the client pushes again.
   const pulling = (await vault.readRef(PULL_REF)) !== null;
+  const pushing = (await vault.readRef(PUSH_REF)) !== null;
+  const receiving = (await vault.readRef(RECEIVE_REF)) !== null;
   if (await vault.isWorkingTreeDirty()) {
     const branch = await vault.currentBranch();
-    if (branch === DEFAULT_BRANCH && pulling) {
+    if (branch === DEFAULT_BRANCH && receiving) {
+      await vault.discardWorkingTreeChanges();
+      recovered = true;
+      warn(
+        `space ${spaceId}: '${DEFAULT_BRANCH}' had uncommitted changes left by ` +
+          `an interrupted external push (receive-pack cut off before it moved ` +
+          `'${DEFAULT_BRANCH}') — discarded them; the push was not accepted.`,
+      );
+    } else if (branch === DEFAULT_BRANCH && pulling) {
       await vault.discardWorkingTreeChanges();
       recovered = true;
       warn(
         `space ${spaceId}: '${DEFAULT_BRANCH}' had uncommitted pull writes ` +
           `left by an interrupted cycle — discarded them; the pull redoes them.`,
+      );
+    } else if (branch === DEFAULT_BRANCH && pushing) {
+      const { kept, restored } = await finishPushWrites(vault);
+      recovered = true;
+      warn(
+        `space ${spaceId}: '${DEFAULT_BRANCH}' had uncommitted push write-backs ` +
+          `left by an interrupted cycle — committed ${kept.length} complete ` +
+          `one(s)${kept.length ? ` (${kept.join(", ")})` : ""} and put ` +
+          `${restored.length} cut-off one(s) back to their committed ` +
+          `state${restored.length ? ` (${restored.join(", ")})` : ""}.`,
       );
     } else if (branch === DEFAULT_BRANCH) {
       await commitLocalWorkingTree(vault);
@@ -245,6 +286,14 @@ export async function recoverVault(deps: RecoverVaultDeps): Promise<boolean> {
   }
 
   if (pulling) await vault.deleteRef(PULL_REF);
+  if (pushing) await vault.deleteRef(PUSH_REF);
+  if (receiving) await vault.deleteRef(RECEIVE_REF);
+
+  // A ref an older build kept and nothing reads any more (vault-refs.ts):
+  // removed so a vault converges on the current set of refs.
+  for (const ref of RETIRED_REFS) {
+    if ((await vault.readRef(ref)) !== null) await vault.deleteRef(ref);
+  }
 
   // 2c. FINISH a per-page push record cut off between moving `docmost` and
   //     merging the record into `main` (push.ts `recordPushedPages`). Left
@@ -306,8 +355,8 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
   try {
     // 3. Pull writes happen on `docmost`; be on it BEFORE applying (see docstring).
     await vault.updateRef(PULL_REF, "HEAD");
-    await vault.ensureBranch("docmost", "main");
-    await vault.checkout("docmost");
+    await vault.ensureBranch(DOCMOST_BRANCH, DEFAULT_BRANCH);
+    await vault.checkout(DOCMOST_BRANCH);
 
     // 4. PULL ------------------------------------------------------------------
     const existing = await readExisting({
@@ -352,7 +401,7 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
     });
 
     // Bail before the first destructive write phase if the lock was lost.
-    signal?.throwIfAborted();
+    throwIfAborted(signal, "before applying the pull");
 
     const pullResult = await applyPullActions(
       {
@@ -363,11 +412,23 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
         rm: (absPath) => safeFs.rm(absPath),
         log,
         warn,
+        signal,
       },
       pullActions,
       vaultRoot,
     );
     await vault.deleteRef(PULL_REF);
+
+    // Pages the pull could not export never reach git while the cycle itself
+    // succeeds: WARN the count and the first one (the pull's log names each).
+    if (pullResult.failed > 0) {
+      const first = pullResult.firstFailure;
+      warn(
+        `space ${spaceId}: pull could not write ${pullResult.failed} page(s) ` +
+          `into the vault (retried next cycle)` +
+          (first ? `; first: page ${first.pageId}: ${first.error}` : ""),
+      );
+    }
 
     // 5. PUSH ------------------------------------------------------------------
     const pushDeps = {
@@ -378,10 +439,11 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
       writeFile: (relPath: string, text: string) =>
         safeFs.writeFile(abs(relPath), text),
       log,
+      signal,
     };
 
     // Bail before pushing to Docmost if the lock was lost during pull.
-    signal?.throwIfAborted();
+    throwIfAborted(signal, "before applying the push");
 
     const pushResult = await runPush(pushDeps, { dryRun: false });
 
@@ -416,6 +478,10 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
         written: pullResult.written,
         deleted: pullResult.deleted,
         conflict: pullResult.merge.conflict,
+        failures: pullResult.failed,
+        ...(pullResult.firstFailure
+          ? { firstFailure: pullResult.firstFailure }
+          : {}),
       },
       push: {
         mode: pushResult.mode,
@@ -424,8 +490,8 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
           ? { firstFailure: pushResult.failures[0] }
           : {}),
       },
-      // Forward a divergent-`docmost` escalation so the caller can act on the §5
-      // invariant breach without scraping logs (red-team #15).
+      // Forward a divergent-`docmost` escalation so the caller can act on the
+      // mirror invariant breach without scraping logs (red-team #15).
       divergentDocmost: pushResult.divergentDocmost ?? false,
     };
   } finally {
@@ -436,13 +502,18 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
     // `docmost`; restore it here so the advertised default branch is `main` BETWEEN
     // cycles. Best-effort: skipped if the lock was lost (do not write the working
     // tree after a possible takeover), and a failing checkout (e.g. a dirty tree
-    // from an aborted write) is swallowed — the next cycle's recovery resyncs and
-    // the read advertisement pins HEAD under the lock regardless.
+    // from an aborted write) is reported and left — the next cycle's recovery
+    // resyncs and the read advertisement pins HEAD under the lock regardless.
     if (!signal?.aborted) {
       try {
         await vault.checkout(DEFAULT_BRANCH);
-      } catch {
-        /* best-effort: next cycle recovers; advertisement pins HEAD under lock */
+      } catch (err) {
+        warn(
+          `space ${spaceId}: could not put HEAD back on '${DEFAULT_BRANCH}' ` +
+            `after the cycle (the next cycle's recovery resyncs it): ${
+              err instanceof Error ? (err.stack ?? err.message) : String(err)
+            }`,
+        );
       }
     }
   }

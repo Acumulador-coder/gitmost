@@ -1,5 +1,5 @@
 /**
- * Pure page-tree -> vault path mapping (SPEC §12).
+ * Pure page-tree -> vault path mapping (DESIGN.md §4).
  *
  * Given the flat list of page nodes for a space (as returned by
  * `listAllSpacePages`), compute for every page a deterministic, collision-free

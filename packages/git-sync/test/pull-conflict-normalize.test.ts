@@ -1,3 +1,4 @@
+import './git-env';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,7 +10,11 @@ import {
   BOT_AUTHOR_NAME,
   BOT_AUTHOR_EMAIL,
 } from '../src/engine/git';
-import { applyPullActions, type PullActions } from '../src/engine/pull';
+import {
+  applyPullActions,
+  normalizeTrailingWhitespace,
+  type PullActions,
+} from '../src/engine/pull';
 
 /**
  * QA #119 round-2 — the docmost -> main merge must NEVER commit raw conflict
@@ -296,5 +301,21 @@ describe('pull merge — spurious vs genuine conflict (real git)', () => {
     expect(await git.showFileAtRef('main', 'B.md')).toBeNull();
     expect(await git.showFileAtRef('main', 'A.md')).toBe(PAGE('Base body'));
     expect(await git.isWorkingTreeDirty()).toBe(false);
+  });
+});
+
+describe('normalizeTrailingWhitespace — a hostile whitespace run', () => {
+  it('normalizes a body with a 1 MB whitespace run in linear time', () => {
+    const run = ' \t\n'.repeat(350_000);
+    const started = performance.now();
+
+    // The run followed by more text: every start position of the run used to
+    // be retried against the end of the text.
+    expect(normalizeTrailingWhitespace(`x${run}y`)).toBe(`x${run}y\n`);
+    expect(normalizeTrailingWhitespace(`x${run}`)).toBe('x\n');
+    expect(normalizeTrailingWhitespace(`x${run}\uFEFF\r\n`)).toBe('x\n');
+    expect(normalizeTrailingWhitespace(run)).toBe('\n');
+
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

@@ -11,6 +11,7 @@
  * Style mirrors git.test.ts: real `git` binary, real temp repos under
  * os.tmpdir(), gitAvailable()-gated, temp dirs cleaned in afterEach.
  */
+import './git-env';
 import { execFile } from 'node:child_process';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -179,7 +180,7 @@ describe('VaultGit error paths (integration; temp repo)', () => {
       let err: unknown;
       try {
         // Second ensureRepo(): identity is already set (reads pass), so the
-        // FIRST write it attempts is the SPEC §11 config-pin block, which now
+        // FIRST write it attempts is the config-pin block (DESIGN.md §12), which now
         // cannot lock -> the try/catch rethrows the actionable error.
         await git.ensureRepo();
       } catch (e) {

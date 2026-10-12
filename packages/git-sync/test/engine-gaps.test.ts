@@ -18,7 +18,7 @@ import { serializePageFile, parsePageFile } from '@docmost/prosemirror-markdown'
 // --- 1. push.ts:parentFolderFile — move<->rename classification lynchpin -----
 //
 // `parentFolderFile(path)` returns the parent PAGE's file for a vault-relative
-// path (SPEC §5 path-as-truth), or `null` for a root-level page. In the native-
+// path (DESIGN.md §4 path-as-truth), or `null` for a root-level page. In the native-
 // Obsidian FOLDER-NOTE layout the parent page that owns a folder is its folder-
 // note `<dir>/<base>.md` (NOT `<dir>.md`). For a file that IS its folder's
 // folder-note, the parent is ONE LEVEL UP (the grandparent folder's note, or
@@ -329,11 +329,11 @@ describe('applyPushActions (push.ts) — move prefetch isolation', () => {
     expect(res.noops).toHaveLength(1);
     expect(res.noops[0]).toMatchObject({ pageId: 'pg', reason: 'path-only-rename' });
 
-    // No failures -> the refs advance (a clean batch is not blocked by the
-    // isolated, gracefully-handled move).
+    // No failures -> the push is clean and `docmost` advances (a clean batch is
+    // not blocked by the isolated, gracefully-handled move).
     expect(res.failures).toEqual([]);
-    expect(res.lastPushedAdvanced).toBe(true);
-    expect(git.updateRef).toHaveBeenCalledWith(expect.any(String), 'COMMIT-SHA');
+    expect(res.clean).toBe(true);
+    expect(git.fastForwardBranch).toHaveBeenCalledWith('docmost', 'COMMIT-SHA');
   });
 });
 

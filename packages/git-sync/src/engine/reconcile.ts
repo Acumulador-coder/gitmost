@@ -1,10 +1,10 @@
 /**
- * Pure reconciliation planner (SPEC §5/§6/§8).
+ * Pure reconciliation planner (DESIGN.md §4, §5).
  *
  * Given the desired live set of files (computed from the current Docmost tree)
  * and the set of files currently tracked in the vault, compute what to write,
  * what to move (old path to remove), and what to delete. Identity is `pageId`
- * (the stable file<->page anchor, SPEC §4): a page that keeps its pageId but
+ * (the stable file<->page anchor, DESIGN.md §4): a page that keeps its pageId but
  * changes relPath is a MOVE, not delete+add; a tracked pageId that is gone from
  * the live tree is a DELETE.
  *
@@ -60,7 +60,7 @@ export interface ReconciliationPlan {
    * the OLD paths of moved pages are NOT here (they live in `moved` and are
    * applied separately by the caller). Keeping the two apart lets pull.ts gate
    * absence deletions behind the incomplete-fetch suppression + mass-delete
-   * guard (SPEC §8) while still applying real moves.
+   * guard (DESIGN.md §5) while still applying real moves.
    */
   toDelete: string[];
   /**
@@ -178,11 +178,11 @@ export type DeletionDecision =
 
 /**
  * Pure decision: should the ABSENCE-based deletions (`plan.toDelete`) be applied
- * this cycle? Encapsulates the SPEC §8 safety invariants so they are unit-
+ * this cycle? Encapsulates the DESIGN.md §5 safety invariants so they are unit-
  * testable without live creds or git:
  *
  *   - `treeComplete === false` (a partial Docmost tree fetch) -> SUPPRESS. A page
- *     missing from a partial tree is NOT proof of deletion (SPEC §8); we must not
+ *     missing from a partial tree is NOT proof of deletion; we must not
  *     delete merely-absent files this cycle. (Writes/updates/moves still happen.)
  *   - The live fetch returned 0 pages while files are tracked -> SUPPRESS
  *     (almost always a failed fetch, never a real "delete everything").

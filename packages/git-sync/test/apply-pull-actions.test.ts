@@ -9,8 +9,8 @@ import type { DeletionDecision } from '../src/engine/reconcile';
 // R-Pull-2 (test-strategy report §5): `applyPullActions` is the THIN IO half of
 // the pull cycle. These tests drive it with FAKES that record every call — no
 // real git, fs, or network — so the ordering and the ⭐ move-on-success
-// data-loss guard are verifiable. SPEC §8 (delete suppression) + SPEC §5 (commit
-// subject reflects ACTUAL counts) are asserted here.
+// data-loss guard are verifiable. DESIGN.md §5 (delete suppression) + the commit
+// subject reflecting ACTUAL counts are asserted here.
 
 const VAULT = '/vault';
 
@@ -365,7 +365,7 @@ describe('applyPullActions — ⭐ data-loss guard (move-on-success)', () => {
   });
 });
 
-describe('applyPullActions — deletion suppression (SPEC §8)', () => {
+describe('applyPullActions — deletion suppression (DESIGN.md §5)', () => {
   it('skips deletions when the decision SUPPRESSES them (toDelete already empty)', async () => {
     // computePullActions empties toDelete when suppressed, but assert the applier
     // ALSO does no removals and the subject omits the deleted count.
@@ -449,7 +449,7 @@ describe('applyPullActions — merge result is surfaced, not swallowed', () => {
     // QA #119 round-2: a genuine same-block docmost -> main conflict must NOT be
     // committed with raw markers onto `main` (external clones would see them and
     // the body re-conflicts forever). It is auto-resolved per hunk (only the
-    // conflicting hunks take the git/main side, SPEC §9), the conflicted page is
+    // conflicting hunks take the git/main side, DESIGN.md §6), the conflicted page is
     // surfaced in `conflictedPaths`, and the merge is committed CLEAN (no wedge).
     const { client } = makeClient();
     const g = makeGit(
@@ -675,7 +675,7 @@ function makeFsWithRejectingRm(rejectFor: Set<string>) {
 
 describe('applyPullActions — suppression warning forks (empty-live / mass-delete)', () => {
   it('emits the empty-live warning (with existingCount) and performs no removals', async () => {
-    // SPEC §8 empty-live fork: live fetch returned 0 pages but files are
+    // DESIGN.md §5 empty-live fork: live fetch returned 0 pages but files are
     // tracked. Mirrors the incomplete-fetch suppression test, but the message
     // text + its `existingCount` interpolation are a DISTINCT branch.
     const { client } = makeClient();
@@ -707,7 +707,7 @@ describe('applyPullActions — suppression warning forks (empty-live / mass-dele
   });
 
   it('emits the mass-delete guard warning (with planned AND existing counts) and performs no removals', async () => {
-    // SPEC §8 mass-delete fork (the final else branch): the message
+    // DESIGN.md §5 mass-delete fork (the final else branch): the message
     // interpolates BOTH plannedDeleteCount and existingCount ("would delete N
     // of M"), distinct from the other two suppression messages.
     const { client } = makeClient();

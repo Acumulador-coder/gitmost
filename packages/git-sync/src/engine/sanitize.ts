@@ -1,5 +1,5 @@
 /**
- * Deterministic filename strategy (SPEC §12).
+ * Deterministic filename strategy (DESIGN.md §4).
  *
  * The file name is COSMETIC — the source of truth for the file<->page link is
  * `pageId` / `slugId` inside the meta block, so renaming a file is safe. These
@@ -102,7 +102,7 @@ export function sanitizeTitle(title: string): string {
 /**
  * Disambiguate a sanitized name when two siblings in the same folder collapse
  * to the same name. Appends a stable suffix built from the page's `slugId`, so
- * the result stays deterministic across runs (SPEC §12: `Title ~slugId`).
+ * the result stays deterministic across runs (DESIGN.md §4: `Title ~slugId`).
  */
 export function disambiguate(name: string, slugId: string): string {
   return `${name} ~${slugId}`;

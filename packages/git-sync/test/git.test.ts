@@ -1,5 +1,6 @@
+import './git-env';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, stat, writeFile, utimes } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -61,7 +62,7 @@ describe('buildCommitMessage (pure)', () => {
 describe('vaultGitEnv (pure)', () => {
   it('pins locale, pager and prompt, and strips GIT_DIR/GIT_WORK_TREE', () => {
     // Seed inputs that MUST be neutralized/stripped: a redirecting GIT_DIR and
-    // GIT_WORK_TREE would defeat the cwd-isolation guarantee (SPEC §12).
+    // GIT_WORK_TREE would defeat the cwd-isolation guarantee (DESIGN.md §12).
     process.env.GIT_DIR = '/somewhere/else/.git';
     process.env.GIT_WORK_TREE = '/somewhere/else';
     try {
@@ -273,7 +274,7 @@ describe('VaultGit (integration; temp repo)', () => {
     await git.ensureRepo();
 
     // These LOCAL values neutralize a hostile GLOBAL/system config that would
-    // otherwise change porcelain BEHAVIOR and corrupt the vault (SPEC §11 for
+    // otherwise change porcelain BEHAVIOR and corrupt the vault (DESIGN.md §12 for
     // core.autocrlf; gpgsign/safecrlf for the headless daemon).
     const localConfig = async (key: string): Promise<string> => {
       const { stdout } = await execFileAsync(
@@ -289,7 +290,7 @@ describe('VaultGit (integration; temp repo)', () => {
     expect(await localConfig('core.attributesFile')).toBe('/dev/null');
     // merge.conflictStyle=merge keeps conflict markers to the canonical three
     // (no diff3 `|||||||` base section) regardless of the operator's global
-    // config (bug #2 marker-leak determinism, SPEC §9).
+    // config (bug #2 marker-leak determinism, DESIGN.md §12).
     expect(await localConfig('merge.conflictStyle')).toBe('merge');
 
     // Idempotent: a second run leaves the same single values (no duplicates).
@@ -333,7 +334,7 @@ describe('VaultGit (integration; temp repo)', () => {
     expect(stdout.trim()).toBe('false');
   });
 
-  it('preserves LF bytes verbatim on commit (SPEC §11: autocrlf=false)', async () => {
+  it('preserves LF bytes verbatim on commit (DESIGN.md §12: autocrlf=false)', async () => {
     if (!available) return;
     const vault = await freshDir();
     const git = new VaultGit(vault);
@@ -638,7 +639,7 @@ describe('VaultGit (integration; temp repo)', () => {
     await expect(git.assertGitAvailable()).resolves.toBeUndefined();
   });
 
-  // --- Push-direction primitives (SPEC §6 "ФС → Docmost", FIRST increment) ---
+  // --- Push-direction primitives (DESIGN.md §7, FIRST increment) ---
 
   it('diffNameStatus parses A / M / D rows between two commits', async () => {
     if (!available) return;
@@ -724,8 +725,8 @@ describe('VaultGit (integration; temp repo)', () => {
     const head = await git.revParse('HEAD');
     expect(head).toMatch(/^[0-9a-f]{40}$/);
     // A non-existent ref resolves to null (not a throw).
-    expect(await git.revParse('refs/docmost/last-pushed')).toBeNull();
-    expect(await git.readRef('refs/docmost/last-pushed')).toBeNull();
+    expect(await git.revParse('refs/docmost/recording')).toBeNull();
+    expect(await git.readRef('refs/docmost/recording')).toBeNull();
   });
 
   it('updateRef / readRef round-trip a custom ref', async () => {
@@ -735,12 +736,12 @@ describe('VaultGit (integration; temp repo)', () => {
     await git.ensureRepo();
 
     const head = await git.revParse('HEAD');
-    expect(await git.readRef('refs/docmost/last-pushed')).toBeNull();
+    expect(await git.readRef('refs/docmost/recording')).toBeNull();
 
-    await git.updateRef('refs/docmost/last-pushed', head!);
+    await git.updateRef('refs/docmost/recording', head!);
     // It now resolves to the same SHA as HEAD.
-    expect(await git.readRef('refs/docmost/last-pushed')).toBe(head);
-    expect(await git.revParse('refs/docmost/last-pushed')).toBe(head);
+    expect(await git.readRef('refs/docmost/recording')).toBe(head);
+    expect(await git.revParse('refs/docmost/recording')).toBe(head);
   });
 
   it('showFileAtRef returns a committed file content and null for a missing path', async () => {
@@ -780,14 +781,14 @@ describe('VaultGit (integration; temp repo)', () => {
 
     // The pre-image (pageId) is recoverable at the earlier ref even though the
     // file is gone from HEAD — this is how the push direction recovers the
-    // pageId of a deleted file (SPEC §6/§8).
+    // pageId of a deleted file (DESIGN.md §7).
     expect(await git.showFileAtRef('HEAD', 'tracked.md')).toBeNull();
     const preImage = await git.showFileAtRef(beforeDelete!, 'tracked.md');
     expect(preImage).toBe(meta);
     expect(preImage).toContain('page-123');
   });
 
-  it('fastForwardBranch advances a true fast-forward (the loop-close, SPEC §6 step 3)', async () => {
+  it('fastForwardBranch advances a true fast-forward (the loop-close, DESIGN.md §7)', async () => {
     if (!available) return;
     const vault = await freshDir();
     const git = new VaultGit(vault);
@@ -870,5 +871,189 @@ describe('VaultGit (integration; temp repo)', () => {
     const noTarget = await git.fastForwardBranch('docmost', 'deadbeefdeadbeef');
     expect(noTarget.ok).toBe(false);
     expect(noTarget.reason).toContain('deadbeefdeadbeef');
+  });
+
+  /** The files of a tree-ish as path -> content. */
+  async function treeFiles(vault: string, treeish: string): Promise<Record<string, string>> {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['ls-tree', '-r', '-z', '--name-only', treeish],
+      { cwd: vault },
+    );
+    const out: Record<string, string> = {};
+    for (const path of stdout.split('\0').filter(Boolean)) {
+      const { stdout: text } = await execFileAsync(
+        'git',
+        ['cat-file', 'blob', `${treeish}:${path}`],
+        { cwd: vault },
+      );
+      out[path] = text;
+    }
+    return out;
+  }
+
+  const BOT = { authorName: BOT_AUTHOR_NAME, authorEmail: BOT_AUTHOR_EMAIL };
+
+  it('commitAddingPath takes a title with [ ] literally, not as a glob', async () => {
+    if (!available) return;
+    const vault = await freshDir();
+    const git = new VaultGit(vault);
+    await git.ensureRepo();
+    await writeFile(join(vault, 'Plan [draft].md'), 'draft\n', 'utf8');
+    await git.stageAll();
+    await git.commit('add the draft', BOT);
+    const draftCommit = await git.revParse('HEAD');
+    // `Plan d.md` matches the glob `Plan [draft].md`: as a glob, this newer
+    // commit would be the answer.
+    await writeFile(join(vault, 'Plan d.md'), 'd\n', 'utf8');
+    await git.stageAll();
+    await git.commit('add d', BOT);
+
+    expect(await git.commitAddingPath('main', 'Plan [draft].md')).toBe(draftCommit);
+    // A glob that only matches `Plan d.md` finds nothing as a literal path.
+    expect(await git.commitAddingPath('main', 'Plan [dr].md')).toBeNull();
+  });
+
+  it('treeWithPathsFrom takes paths with [ ] * literally', async () => {
+    if (!available) return;
+    const vault = await freshDir();
+    const git = new VaultGit(vault);
+    await git.ensureRepo();
+    // fromRef holds files a glob of the requested paths would match, and one
+    // requested path itself.
+    await writeFile(join(vault, 'Plan d.md'), 'd at from\n', 'utf8');
+    await writeFile(join(vault, 'axb.md'), 'axb at from\n', 'utf8');
+    await writeFile(join(vault, 'Notes ].md'), 'notes at from\n', 'utf8');
+    await git.stageAll();
+    await git.commit('from', BOT);
+    const from = await git.revParse('HEAD');
+    await writeFile(join(vault, 'Plan d.md'), 'd at ref\n', 'utf8');
+    await writeFile(join(vault, 'axb.md'), 'axb at ref\n', 'utf8');
+    await writeFile(join(vault, 'Notes ].md'), 'notes at ref\n', 'utf8');
+    await writeFile(join(vault, 'Plan [draft].md'), 'draft at ref\n', 'utf8');
+    await writeFile(join(vault, 'a*b.md'), 'star at ref\n', 'utf8');
+    await git.stageAll();
+    await git.commit('ref', BOT);
+
+    const tree = await git.treeWithPathsFrom('main', from!, [
+      'Plan [draft].md',
+      'a*b.md',
+      'Notes ].md',
+    ]);
+
+    // The paths fromRef lacks are left out, the one it has comes from it, and
+    // the files their globs would match stay as they are at ref.
+    expect(await treeFiles(vault, tree)).toEqual({
+      'Notes ].md': 'notes at from\n',
+      'Plan d.md': 'd at ref\n',
+      'axb.md': 'axb at ref\n',
+    });
+  });
+
+  it('pageIdsAtRef reads a 1 MB whitespace run inside an id line in linear time', async () => {
+    if (!available) return;
+    const vault = await freshDir();
+    const git = new VaultGit(vault);
+    await git.ensureRepo();
+    const run = ' '.repeat(1024 * 1024);
+    await writeFile(join(vault, 'Hostile.md'), `---\ngitmost_id: a${run}b\n---\n\nx\n`, 'utf8');
+    await writeFile(join(vault, 'Page.md'), '---\ngitmost_id: "page-1"\n---\n\nx\n', 'utf8');
+    await git.stageAll();
+    await git.commit('add', BOT);
+
+    const started = performance.now();
+    const ids = await git.pageIdsAtRef('main');
+    const elapsed = performance.now() - started;
+
+    expect(ids).toContainEqual({ path: 'Page.md', id: 'page-1' });
+    expect(ids).toContainEqual({ path: 'Hostile.md', id: `a${run}b` });
+    expect(elapsed).toBeLessThan(1000);
+  });
+
+  it("a .gitattributes in the vault does not change the engine's merge, checkout or grep", async () => {
+    if (!available) return;
+    const vault = await freshDir();
+    const git = new VaultGit(vault);
+    await git.ensureRepo();
+    // A pushed .gitattributes asking for a union merge (both sides kept, no
+    // conflict), longer conflict markers, binary grep and CRLF checkouts.
+    await writeFile(
+      join(vault, '.gitattributes'),
+      '*.md merge=union conflict-marker-size=12 -diff text eol=crlf\n',
+      'utf8',
+    );
+    await writeFile(join(vault, 'c.md'), '---\ngitmost_id: page-c\n---\n\nbase\n', 'utf8');
+    await git.stageAll();
+    await git.commit('attributes', { authorName: 'Human', authorEmail: 'human@local' });
+    await git.updateRef('refs/heads/docmost', (await git.revParse('HEAD'))!);
+
+    await git.checkout('docmost');
+    await writeFile(join(vault, 'c.md'), '---\ngitmost_id: page-c\n---\n\nfrom docmost\n', 'utf8');
+    await git.stageAll();
+    await git.commit('docmost edit', BOT);
+    await git.checkout('main');
+    // Checked out with LF, as stored.
+    expect(await readFile(join(vault, 'c.md'), 'utf8')).toBe(
+      '---\ngitmost_id: page-c\n---\n\nbase\n',
+    );
+    await writeFile(join(vault, 'c.md'), '---\ngitmost_id: page-c\n---\n\nfrom main\n', 'utf8');
+    await git.stageAll();
+    await git.commit('main edit', { authorName: 'Human', authorEmail: 'human@local' });
+
+    expect(await git.pageIdsAtRef('main')).toEqual([{ path: 'c.md', id: 'page-c' }]);
+    const res = await git.merge('docmost');
+    expect(res.conflict).toBe(true);
+    const merged = await readFile(join(vault, 'c.md'), 'utf8');
+    expect(merged).toContain('\n<<<<<<< ');
+    expect(merged).not.toContain('<<<<<<<<');
+    expect(merged).not.toContain('\r');
+  });
+
+  it('ensureServableConfig sets the five smart-HTTP keys and pins core.hooksPath, then writes nothing', async () => {
+    if (!available) return;
+    const vault = await freshDir();
+    const git = new VaultGit(vault);
+    await git.ensureRepo();
+    await execFileAsync('git', ['config', 'core.symlinks', 'true'], { cwd: vault });
+
+    await git.ensureServableConfig();
+
+    const localConfig = async (key: string): Promise<string> => {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['config', '--local', '--get', key],
+        { cwd: vault },
+      );
+      return stdout.trim();
+    };
+    expect(await localConfig('receive.denyCurrentBranch')).toBe('updateInstead');
+    expect(await localConfig('receive.denyNonFastForwards')).toBe('true');
+    expect(await localConfig('http.receivepack')).toBe('true');
+    expect(await localConfig('http.uploadpack')).toBe('true');
+    expect(await localConfig('core.symlinks')).toBe('false');
+    expect(await localConfig('core.hooksPath')).toBe(join(vault, '.git', 'hooks'));
+
+    // Steady state: read-only, no config.lock + rename.
+    const configPath = join(vault, '.git', 'config');
+    const before = await stat(configPath);
+    await Promise.all([git.ensureServableConfig(), git.ensureServableConfig()]);
+    const after = await stat(configPath);
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it('a git output over the output budget fails with that reason, not as an exit status', async () => {
+    if (!available) return;
+    const vault = await freshDir();
+    const git = new VaultGit(vault);
+    await git.ensureRepo();
+    await writeFile(join(vault, 'huge.md'), 'x'.repeat(65 * 1024 * 1024), 'utf8');
+    await git.stageAll();
+    await git.commit('huge', BOT);
+
+    // Read as an exit status, the cut-off `git show` would be "path absent".
+    await expect(git.showFileAtRef('main', 'huge.md')).rejects.toThrow(
+      /git show main:huge\.md printed more than its \d+-byte output budget and was stopped/,
+    );
   });
 });

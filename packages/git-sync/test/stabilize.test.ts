@@ -6,7 +6,7 @@ import { markdownToProseMirror } from '@docmost/prosemirror-markdown';
 import { parseDocmostMarkdown } from '@docmost/prosemirror-markdown';
 import { ConverterLossError } from '@docmost/prosemirror-markdown';
 
-// stabilize.ts (SPEC §11 normalize-on-write) was 0% covered (only the gated e2e
+// stabilize.ts (DESIGN.md §11 normalize-on-write) was 0% covered (only the gated e2e
 // touched it). stabilizePageFile is import-testable: build a small ProseMirror
 // content + meta and assert (1) the normalize-on-write pass reaches a fixpoint
 // (a SECOND pass over the written body is byte-identical), and (2) the meta is
@@ -21,7 +21,7 @@ const meta: PageMeta = {
   parentPageId: null,
 };
 
-describe('stabilizePageFile — normalize-on-write fixpoint (SPEC §11)', () => {
+describe('stabilizePageFile — normalize-on-write fixpoint (DESIGN.md §11)', () => {
   it('reaches a byte-identical fixpoint after one extra export/import/export pass', async () => {
     // A diagram inside a column is the canonical one-pass asymmetry: on the
     // raw-HTML/columns path a diagram's `align` default of "center" materializes
