@@ -157,3 +157,10 @@ read = fetch, Manage = push; a non-member gets the same 404 as a missing space.
   the review", "since the incident") goes into the commit message.
 - This file stays under ~150 lines: only what an agent would get wrong without it. No decision
   history, incident logs or retelling of the code.
+
+## FPF
+
+Read a pattern through the `fpf` MCP (`read_pattern <ID>`) before applying it.
+
+- Changing git sync, search, shares or MCP reads that serve views derived from the page in Postgres — KCAE.CHANGE "Keep Source Reading and Derived Views Coherent through Change": a search hit, an exported file and the page it points to must come from one version of that page, and deletions and permission changes must reach every derived view.
+- Bumping a dependency the fork patches (`ai`, `@hocuspocus/server`, `yjs`, `scimmy` under `pnpm.patchedDependencies`) — SYSE.19 "Revalidate Engineering Decisions When a Relied-on Source Changes": compare what the new version changes against the bug each patch relied on, and keep, narrow or drop each patch on its own.
