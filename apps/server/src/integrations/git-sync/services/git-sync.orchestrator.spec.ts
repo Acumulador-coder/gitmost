@@ -24,6 +24,7 @@ jest.mock('../git-sync.loader', () => ({
 jest.mock('../../metrics/metrics.registry', () => ({
   ...jest.requireActual('../../metrics/metrics.registry'),
   incGitSyncCycle: jest.fn(),
+  observeGitSyncCycle: jest.fn(),
   setGitSyncFailingSpaces: jest.fn(),
   setGitSyncPushFailingSpaces: jest.fn(),
 }));
@@ -31,6 +32,7 @@ jest.mock('../../metrics/metrics.registry', () => ({
 import { Logger } from '@nestjs/common';
 import {
   incGitSyncCycle,
+  observeGitSyncCycle,
   setGitSyncFailingSpaces,
   setGitSyncPushFailingSpaces,
 } from '../../metrics/metrics.registry';
@@ -841,6 +843,29 @@ describe('GitSyncOrchestrator', () => {
       // Metrics: three failed cycles, one failing space.
       expect(incCycle.mock.calls).toEqual([['failed'], ['failed'], ['failed']]);
       expect(setFailing).toHaveBeenLastCalledWith(1);
+    });
+
+    it('records every cycle duration by outcome, a failed cycle included', async () => {
+      const built = build();
+      spies();
+      const observe = observeGitSyncCycle as unknown as AnyMock;
+      observe.mockClear();
+      runCycleMock.mockImplementationOnce(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return OK_CYCLE;
+      });
+      runCycleMock.mockRejectedValueOnce(new Error('boom'));
+
+      await built.orchestrator.runOnce('space-1', 'ws-1');
+      await built.orchestrator.runOnce('space-1', 'ws-1');
+
+      expect(observe.mock.calls).toEqual([
+        ['ok', expect.any(Number)],
+        ['failed', expect.any(Number)],
+      ]);
+      // Seconds, not milliseconds: the 20 ms cycle reads as ~0.02.
+      expect(observe.mock.calls[0][1]).toBeGreaterThanOrEqual(0.015);
+      expect(observe.mock.calls[0][1]).toBeLessThan(5);
     });
 
     it('logs the recovery (INFO) once and resets the failure state', async () => {

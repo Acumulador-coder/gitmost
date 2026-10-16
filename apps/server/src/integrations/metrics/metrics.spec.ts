@@ -14,6 +14,7 @@ import {
   incGetPageCacheHit,
   incGetPageCacheMiss,
   incGitSyncCycle,
+  observeGitSyncCycle,
   setGitSyncFailingSpaces,
   setGitSyncPushFailingSpaces,
   incMcpRyowDbrow,
@@ -219,6 +220,7 @@ describe('metrics helpers are safe no-ops when METRICS_PORT is unset', () => {
       // git-sync health helpers.
       incGitSyncCycle('ok');
       incGitSyncCycle('failed');
+      observeGitSyncCycle('ok', 1.5);
       setGitSyncFailingSpaces(3);
       setGitSyncPushFailingSpaces(2);
       // Registering a source must not create the gauge or invoke the fn.
@@ -230,7 +232,7 @@ describe('metrics helpers are safe no-ops when METRICS_PORT is unset', () => {
 });
 
 describe('git-sync metrics on an ENABLED registry', () => {
-  it('exposes git_sync_cycles_total{result}, git_sync_failing_spaces and git_sync_push_failing_spaces with no per-space label', async () => {
+  it('exposes git_sync_cycles_total{result}, git_sync_cycle_duration_seconds{result}, git_sync_failing_spaces and git_sync_push_failing_spaces with no per-space label', async () => {
     const saved = process.env.METRICS_PORT;
     process.env.METRICS_PORT = '9464';
     try {
@@ -244,8 +246,19 @@ describe('git-sync metrics on an ENABLED registry', () => {
       reg.incGitSyncCycle('failed');
       reg.setGitSyncFailingSpaces(1);
       reg.setGitSyncPushFailingSpaces(2);
+      reg.observeGitSyncCycle('ok', 3);
+      reg.observeGitSyncCycle('failed', 0.2);
 
       const text = await reg.getMetricsRegistry()!.metrics();
+      expect(text).toContain(
+        'git_sync_cycle_duration_seconds_bucket{le="2.5",result="ok"} 0',
+      );
+      expect(text).toContain(
+        'git_sync_cycle_duration_seconds_bucket{le="5",result="ok"} 1',
+      );
+      expect(text).toContain(
+        'git_sync_cycle_duration_seconds_count{result="failed"} 1',
+      );
       expect(text).toContain('git_sync_cycles_total{result="ok"} 1');
       expect(text).toContain('git_sync_cycles_total{result="failed"} 2');
       expect(text).toMatch(/^git_sync_failing_spaces 1$/m);

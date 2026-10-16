@@ -209,7 +209,8 @@ git-коммита.
 Администраторы воркспейса видят состояние каждого синхронизируемого пространства через
 `POST /api/git-sync/status` (последний запуск, последняя ошибка, страницы, которые не удалось
 выгрузить или применить) и могут запустить синхронизацию сразу через `POST /api/git-sync/trigger`
-с `{"spaceId": "…"}`. Метрики `git_sync_cycles_total{result}`, `git_sync_failing_spaces` и
+с `{"spaceId": "…"}`. Метрики `git_sync_cycles_total{result}`,
+`git_sync_cycle_duration_seconds{result}`, `git_sync_failing_spaces` и
 `git_sync_push_failing_spaces` отдаются на порту метрик. Переход пространства в состояние ошибки
 пишется в лог один раз как ERROR, восстановление тоже логируется.
 

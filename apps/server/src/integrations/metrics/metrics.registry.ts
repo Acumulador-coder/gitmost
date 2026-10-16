@@ -8,6 +8,7 @@ import {
 import {
   COLLAB_BUCKETS,
   DB_BUCKETS,
+  GIT_SYNC_CYCLE_BUCKETS,
   HTTP_BUCKETS,
   JOB_BUCKETS,
   MCP_TOOL_BUCKETS,
@@ -34,6 +35,7 @@ import {
   METRIC_AI_CHAT_BIND_SKIPPED_TOTAL,
   METRIC_AI_EXTERNAL_MCP_CONNECT_FAILURES_TOTAL,
   METRIC_GIT_SYNC_CYCLES_TOTAL,
+  METRIC_GIT_SYNC_CYCLE_DURATION,
   METRIC_GIT_SYNC_FAILING_SPACES,
   METRIC_GIT_SYNC_PUSH_FAILING_SPACES,
   sizeBucket,
@@ -88,8 +90,10 @@ let apiKeyAuthDeniedCounter: Counter<'reason'> | null = null;
 let aiChatBindSkippedCounter: Counter<'reason'> | null = null;
 // #686 — external-MCP connect failures, by bounded ownership level (admin|personal).
 let externalMcpConnectFailuresCounter: Counter<'level'> | null = null;
-// git-sync — cycles by bounded result (ok|failed) + currently failing spaces.
+// git-sync — cycles and their duration by bounded result (ok|failed) + currently
+// failing spaces.
 let gitSyncCyclesCounter: Counter<'result'> | null = null;
+let gitSyncCycleHist: Histogram<'result'> | null = null;
 let gitSyncFailingSpacesGauge: Gauge | null = null;
 let gitSyncPushFailingSpacesGauge: Gauge | null = null;
 
@@ -271,6 +275,14 @@ function init(): void {
     registers: [registry],
   });
 
+  gitSyncCycleHist = new Histogram({
+    name: METRIC_GIT_SYNC_CYCLE_DURATION,
+    help: 'git-sync reconcile cycle duration in seconds, by result (ok|failed)',
+    labelNames: ['result'],
+    buckets: GIT_SYNC_CYCLE_BUCKETS,
+    registers: [registry],
+  });
+
   gitSyncFailingSpacesGauge = new Gauge({
     name: METRIC_GIT_SYNC_FAILING_SPACES,
     help: 'Number of git-sync spaces whose last reconcile cycle failed',
@@ -413,6 +425,14 @@ export type GitSyncCycleResult = 'ok' | 'failed';
 
 export function incGitSyncCycle(result: GitSyncCycleResult): void {
   gitSyncCyclesCounter?.inc({ result });
+}
+
+/** git-sync — record how long ONE reconcile cycle took, by its outcome. */
+export function observeGitSyncCycle(
+  result: GitSyncCycleResult,
+  seconds: number,
+): void {
+  gitSyncCycleHist?.observe({ result }, seconds);
 }
 
 /** git-sync — set the number of spaces whose last cycle failed. */

@@ -12,7 +12,9 @@ import type { PullFailure, PushFailure, Settings } from '@docmost/git-sync';
 import { loadGitSync } from '../git-sync.loader';
 import { EnvironmentService } from '../../environment/environment.service';
 import {
+  GitSyncCycleResult,
   incGitSyncCycle,
+  observeGitSyncCycle,
   setGitSyncFailingSpaces,
   setGitSyncPushFailingSpaces,
 } from '../../metrics/metrics.registry';
@@ -608,6 +610,29 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * shows in the space's status and is logged at ERROR.
    */
   private async driveCycle(
+    spaceId: string,
+    workspaceId: string,
+    serviceUserId: string,
+    signal?: AbortSignal,
+  ): Promise<GitSyncRunStatus> {
+    // Every path out of a cycle, a throw included, records its duration.
+    const startedAt = performance.now();
+    let outcome: GitSyncCycleResult = 'failed';
+    try {
+      const status = await this.runCycleBody(
+        spaceId,
+        workspaceId,
+        serviceUserId,
+        signal,
+      );
+      outcome = 'ok';
+      return status;
+    } finally {
+      observeGitSyncCycle(outcome, (performance.now() - startedAt) / 1000);
+    }
+  }
+
+  private async runCycleBody(
     spaceId: string,
     workspaceId: string,
     serviceUserId: string,

@@ -206,7 +206,8 @@ the git commit.
 Workspace admins can see the state of every synced space with `POST /api/git-sync/status` (last
 run, last error, pages that failed to export or to apply) and run a sync now with
 `POST /api/git-sync/trigger` and `{"spaceId": "…"}`. The metrics `git_sync_cycles_total{result}`,
-`git_sync_failing_spaces` and `git_sync_push_failing_spaces` are exported on the metrics port. A
+`git_sync_cycle_duration_seconds{result}`, `git_sync_failing_spaces` and
+`git_sync_push_failing_spaces` are exported on the metrics port. A
 space that starts failing is logged as an error once; its recovery is logged too.
 
 Repositories created by builds before 1.0 are upgraded on their first sync: they become bare
