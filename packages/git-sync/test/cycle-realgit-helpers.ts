@@ -144,9 +144,14 @@ export async function cleanupVaults(): Promise<void> {
  * false), and a fake Docmost that applies every write: an import merges with
  * `merge3` and stores, a create adds the page, a delete trashes it, a move or
  * rename changes it. Every write is recorded in `calls`; `failing` (import of a
- * page id) and `failOnce` (`<op>:<pageId|title>`) inject failures.
+ * page id) and `failOnce` (`<op>:<pageId|title>`) inject failures. With `idle`,
+ * the cycles share an idle memo (`RunCycleDeps.idle`) that a `human` push
+ * clears, as the server does before a push's receive-pack.
  */
-export async function setupVault(pages: FakePage[], opts: { firstCycle?: boolean } = {}) {
+export async function setupVault(
+  pages: FakePage[],
+  opts: { firstCycle?: boolean; idle?: boolean } = {},
+) {
   const dir = await mkdtemp(join(tmpdir(), "docmost-vault-"));
   dirs.push(dir);
   const root = join(dir, "vault");
@@ -158,6 +163,7 @@ export async function setupVault(pages: FakePage[], opts: { firstCycle?: boolean
   const failing = new Set<string>();
   const failOnce = new Set<string>();
   const exportKeys = new Map<string, string>();
+  const idle = opts.idle ? { fingerprint: null as string | null } : undefined;
   const fail = (op: string, key: string) => {
     if (failOnce.delete(`${op}:${key}`)) {
       throw new Error(`injected ${op} failure for ${key}`);
@@ -235,12 +241,14 @@ export async function setupVault(pages: FakePage[], opts: { firstCycle?: boolean
       log: () => undefined,
       warn: (line: string) => warnings.push(line),
       exportKeys,
+      idle,
     });
   };
 
   let cloned = false;
   /** In the clone: catch up with the vault, change files, commit, push. */
   const human = async (change: (work: string) => Promise<void>) => {
+    if (idle) idle.fingerprint = null;
     if (!cloned) {
       await git(dir, "clone", "-q", root, work);
       cloned = true;
@@ -292,6 +300,7 @@ export async function setupVault(pages: FakePage[], opts: { firstCycle?: boolean
     failing,
     failOnce,
     exportKeys,
+    idle,
     cycle,
     human,
     edit,

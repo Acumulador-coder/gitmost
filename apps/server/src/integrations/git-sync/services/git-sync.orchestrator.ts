@@ -190,6 +190,20 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * live page of its space. Empty after a restart -> one full pass per space.
    */
   private readonly exportKeysBySpace = new Map<string, Map<string, string>>();
+  /**
+   * Per-space idle memos, handed to the engine's `runCycle`: the fingerprint of
+   * the Docmost tree the space's last clean cycle exported. While the tree is
+   * unchanged a cycle runs no git at all (no helper round-trips, no vault reads).
+   * Sound because only cycles and a push's receive-pack move a vault's refs, and
+   * both run under the space lock of this single instance: the engine sets and
+   * clears the memo inside the cycle, this class clears it before every
+   * receive-pack, on a failed cycle and for a manual trigger. A restart starts
+   * with no memo (a full pass per space).
+   */
+  private readonly idleBySpace = new Map<
+    string,
+    { fingerprint: string | null }
+  >();
   /** Per-space health (+ the workspace it belongs to, for /status scoping). */
   private readonly spaceHealth = new Map<
     string,
@@ -266,10 +280,13 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * GIT_SYNC_ENABLED and GIT_SYNC_SERVICE_USER_ID need no check here: the module
    * is empty when the flag is off, and env validation requires the service user
    * when it is on.
+   *
+   * `force` (the manual trigger) runs a full pass even when the space is idle.
    */
   async runOnce(
     spaceId: string,
     workspaceId: string,
+    opts: { force?: boolean } = {},
   ): Promise<GitSyncRunStatus> {
     const serviceUserId = this.environmentService.getGitSyncServiceUserId();
     // Per-space opt-in gate (review #3). The global GIT_SYNC_ENABLED env switch is
@@ -293,8 +310,10 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     try {
       const result = await this.spaceLock.withSpaceLock(
         spaceId,
-        (signal) =>
-          this.driveCycle(spaceId, workspaceId, serviceUserId, signal),
+        (signal) => {
+          if (opts.force) this.idleFor(spaceId).fingerprint = null;
+          return this.driveCycle(spaceId, workspaceId, serviceUserId, signal);
+        },
         { deadlineMs: GIT_SYNC_CYCLE_DEADLINE_MS },
       );
       if ('skipped' in result && !('spaceId' in result)) {
@@ -387,7 +406,8 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
    * Record a failed cycle. ERROR (with the stack) only when the space goes from
    * healthy to failing; repeats are DEBUG so a broken space does not flood the
    * log every poll — its state stays visible in /status and the metrics. Also
-   * forgets the space's export keys so the next cycle is a full pass.
+   * forgets the space's export keys and idle memo so the next cycle is a full
+   * pass.
    */
   private recordCycleFailure(
     spaceId: string,
@@ -398,6 +418,8 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
     const consecutiveFailures =
       (this.spaceHealth.get(spaceId)?.status.consecutiveFailures ?? 0) + 1;
     this.exportKeysBySpace.get(spaceId)?.clear();
+    const idle = this.idleBySpace.get(spaceId);
+    if (idle) idle.fingerprint = null;
     this.patchStatus(spaceId, workspaceId, {
       lastRunAt: new Date().toISOString(),
       lastResult: 'failed',
@@ -467,14 +489,15 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Drop the health entry and export keys of spaces whose sync is no longer
-   * enabled (switched off, or the space deleted), so /status and the gauges
-   * stop reporting them; re-enabling starts with a full pass.
+   * Drop the health entry, export keys and idle memo of spaces whose sync is no
+   * longer enabled (switched off, or the space deleted), so /status and the
+   * gauges stop reporting them; re-enabling starts with a full pass.
    */
   private forgetSpaces(spaceIds: Iterable<string>): void {
     for (const spaceId of spaceIds) {
       this.spaceHealth.delete(spaceId);
       this.exportKeysBySpace.delete(spaceId);
+      this.idleBySpace.delete(spaceId);
     }
     this.publishFailingSpaces();
   }
@@ -531,6 +554,9 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
           ) {
             this.exportKeysFor(spaceId).clear();
           }
+          // The receive-pack moves `main` outside a cycle: the next cycle must
+          // not take the space for idle.
+          this.idleFor(spaceId).fingerprint = null;
 
           // 1) Stream the receive-pack to the client (durable commits land on
           // main). Pass the lost-lock signal so the receive-pack child is killed
@@ -677,6 +703,9 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
       // This space's export-key map: the export skips pages unchanged since
       // their last successful export (the engine rebuilds/clears it).
       exportKeys: this.exportKeysFor(spaceId),
+      // This space's idle memo: an unchanged space runs no git (the engine
+      // sets/clears it).
+      idle: this.idleFor(spaceId),
     });
 
     return { spaceId, ...result };
@@ -705,6 +734,16 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
       this.exportKeysBySpace.set(spaceId, keys);
     }
     return keys;
+  }
+
+  /** The (lazily created) idle memo of one space. */
+  private idleFor(spaceId: string): { fingerprint: string | null } {
+    let idle = this.idleBySpace.get(spaceId);
+    if (!idle) {
+      idle = { fingerprint: null };
+      this.idleBySpace.set(spaceId, idle);
+    }
+    return idle;
   }
 
   // --- poll-safety interval -------------------------------------
@@ -817,9 +856,11 @@ export class GitSyncOrchestrator implements OnModuleInit, OnModuleDestroy {
       // Forget spaces that are no longer enabled (the poll never runs them again).
       const enabled = new Set(spaces.map((s) => s.spaceId));
       this.forgetSpaces(
-        [...this.spaceHealth.keys(), ...this.exportKeysBySpace.keys()].filter(
-          (spaceId) => !enabled.has(spaceId),
-        ),
+        [
+          ...this.spaceHealth.keys(),
+          ...this.exportKeysBySpace.keys(),
+          ...this.idleBySpace.keys(),
+        ].filter((spaceId) => !enabled.has(spaceId)),
       );
       for (const spaceId of [...this.pollLaunchedAt.keys()]) {
         if (!enabled.has(spaceId)) this.pollLaunchedAt.delete(spaceId);

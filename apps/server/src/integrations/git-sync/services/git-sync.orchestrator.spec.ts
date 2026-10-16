@@ -1028,6 +1028,9 @@ describe('GitSyncOrchestrator', () => {
       expect((built.orchestrator as any).exportKeysBySpace.has('space-1')).toBe(
         false,
       );
+      expect((built.orchestrator as any).idleBySpace.has('space-1')).toBe(
+        false,
+      );
     });
 
     it('scopes getSpaceStatuses to the workspace', async () => {
@@ -1135,6 +1138,62 @@ describe('GitSyncOrchestrator', () => {
       await built.orchestrator.runOnce('space-1', 'ws-1');
 
       expect(map.size).toBe(0);
+    });
+
+    it('passes one idle memo per space; a manual trigger (force) clears it', async () => {
+      const built = build();
+      const seen: Array<string | null> = [];
+      // The engine leaves a clean space idle: it sets the memo.
+      runCycleMock.mockImplementation(async (deps) => {
+        seen.push(deps.idle.fingerprint);
+        deps.idle.fingerprint = 'fp';
+        return OK_CYCLE;
+      });
+
+      await built.orchestrator.runOnce('space-1', 'ws-1');
+      await built.orchestrator.runOnce('space-1', 'ws-1');
+      await built.orchestrator.runOnce('space-1', 'ws-1', { force: true });
+
+      expect(seen).toEqual([null, 'fp', null]);
+    });
+
+    it('clears the idle memo when a cycle fails', async () => {
+      const built = build();
+      jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      runCycleMock.mockImplementationOnce(async (deps) => {
+        deps.idle.fingerprint = 'fp';
+        return OK_CYCLE;
+      });
+      await built.orchestrator.runOnce('space-1', 'ws-1');
+      const idle = runCycleMock.mock.calls[0][0].idle;
+      expect(idle.fingerprint).toBe('fp');
+
+      runCycleMock.mockRejectedValueOnce(new Error('boom'));
+      await built.orchestrator.runOnce('space-1', 'ws-1');
+
+      expect(idle.fingerprint).toBeNull();
+    });
+
+    it("clears the idle memo before a push's receive-pack moves main", async () => {
+      const built = build();
+      runCycleMock.mockImplementationOnce(async (deps) => {
+        deps.idle.fingerprint = 'fp';
+        return OK_CYCLE;
+      });
+      await built.orchestrator.runOnce('space-1', 'ws-1');
+      const idle = runCycleMock.mock.calls[0][0].idle;
+
+      let atReceivePack: string | null | undefined;
+      await built.orchestrator.ingestExternalPush(
+        'space-1',
+        'ws-1',
+        async () => {
+          atReceivePack = idle.fingerprint;
+        },
+      );
+
+      expect(atReceivePack).toBeNull();
+      expect(runCycleMock.mock.calls[1][0].idle).toBe(idle);
     });
 
     it('routes the engine warn channel to a WARN log', async () => {

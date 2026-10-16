@@ -71,6 +71,10 @@ export {
 } from "./engine/git.js";
 export type { DiffEntry, CommitOptions, TreeEntry } from "./engine/git.js";
 
+// git, run by the helper process VaultGit uses, for the server's own git calls.
+export { runGit } from "./engine/git-runner.js";
+export type { RunGitOptions } from "./engine/git-runner.js";
+
 export {
   readExisting,
   computePullActions,

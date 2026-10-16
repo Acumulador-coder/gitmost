@@ -39,7 +39,8 @@ class TriggerGitSyncDto {
  * Ops/testing endpoints for the git-sync control plane. Admin-guarded
  * (workspace Manage/Settings, mirroring WorkspaceController) so only workspace
  * admins can force a cycle. Mounted under the global `/api` prefix:
- *   - POST /api/git-sync/trigger { spaceId } — run one cycle now (await result),
+ *   - POST /api/git-sync/trigger { spaceId } — run one full cycle now (await
+ *     result),
  *   - POST /api/git-sync/status — report the sync config and the per-space
  *     health of this workspace's spaces (POST, like the other JSON reads).
  *
@@ -83,8 +84,11 @@ export class GitSyncController {
     if (!space) {
       throw new NotFoundException('Space not found');
     }
-    // Use the workspace from the request context (never client-supplied).
-    return this.orchestrator.runOnce(dto.spaceId, workspace.id);
+    // Use the workspace from the request context (never client-supplied). A
+    // manual trigger is a full pass even when the space is idle.
+    return this.orchestrator.runOnce(dto.spaceId, workspace.id, {
+      force: true,
+    });
   }
 
   @HttpCode(HttpStatus.OK)

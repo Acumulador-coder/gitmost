@@ -3,6 +3,7 @@ import { esmImport } from '../../common/helpers/esm-import';
 import type {
   VaultGit as VaultGitClass,
   vaultGitEnv as vaultGitEnvFn,
+  runGit as runGitFn,
   runCycle as runCycleFn,
   prepareVault as prepareVaultFn,
   parseDocmostMarkdown as parseDocmostMarkdownFn,
@@ -20,6 +21,7 @@ import type {
 interface GitSyncModule {
   VaultGit: typeof VaultGitClass;
   vaultGitEnv: typeof vaultGitEnvFn;
+  runGit: typeof runGitFn;
   runCycle: typeof runCycleFn;
   prepareVault: typeof prepareVaultFn;
   parseDocmostMarkdown: typeof parseDocmostMarkdownFn;
