@@ -92,8 +92,8 @@ Some details of the layout:
 - Images and attachments stay in Gitmost. The Markdown links to them (`/api/files/…`); the files
   themselves are not in the repository.
 - Links to other pages are ordinary Markdown links to the page's address in the wiki.
-- Commits made by Gitmost are authored by `Docmost Sync <docmost-sync@local>` and titled
-  `docmost: export N page(s)`.
+- Commits made by Gitmost are authored by `Docmost Sync <docmost-sync@local>` and titled by what
+  changed in the wiki: `docmost: edit N page(s)`, `docmost: delete N page(s)` or both.
 
 ## Changing pages from git
 
@@ -128,9 +128,9 @@ Run `git pull` before you push again:
 ```console
 $ git pull
 $ git log --oneline
-ac4aef6 docmost: export 2 page(s)
+ac4aef6 docmost: edit 1 page(s)
 5573f53 On-call: week 43; add Deploys
-d7adef3 docmost: export 5 page(s)
+d7adef3 docmost: edit 5 page(s)
 b6f9a6b init vault
 $ head -3 Engineering/Deploys.md
 ---
@@ -151,7 +151,7 @@ is checked again at least every 15 seconds:
 $ git pull
 $ git log -1 --format='%an <%ae>%n%s'
 Docmost Sync <docmost-sync@local>
-docmost: export 1 page(s)
+docmost: edit 1 page(s)
 $ git diff HEAD~1 -- Welcome.md
 @@ -8,3 +8,5 @@
  - [Engineering](#) practices

@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Git sync names its commits by what changed in the wiki: `docmost: edit N page(s)`,
+  `docmost: delete N page(s)` or both, instead of `docmost: export N page(s)`.
+
 ## [1.0.1] - 2026-10-12
 
 The 1.0.0 code with release images: the `v1.0.0` tag was pushed, but a failing integration test

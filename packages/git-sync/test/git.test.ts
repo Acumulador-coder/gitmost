@@ -310,13 +310,13 @@ describe('VaultGit (integration; temp bare vault)', () => {
   it('commitTree writes the trailers and the identity; commitMessage reads them back', async () => {
     if (!available) return;
     const { vault, git, init } = await freshVault();
-    const sha = await git.commitTree(`${init}^{tree}`, [init], 'docmost: export 1 page(s)', {
+    const sha = await git.commitTree(`${init}^{tree}`, [init], 'docmost: edit 1 page(s)', {
       ...BOT,
       trailers: ['Docmost-Sync-Source: docmost'],
     });
 
     expect(await git.commitMessage(sha)).toBe(
-      'docmost: export 1 page(s)\n\nDocmost-Sync-Source: docmost',
+      'docmost: edit 1 page(s)\n\nDocmost-Sync-Source: docmost',
     );
     const { stdout } = await execFileAsync('git', ['log', '-1', '--format=%an <%ae>', sha], {
       cwd: vault,

@@ -95,8 +95,9 @@ describe("runCycle (composition)", () => {
     const res = await runCycle(deps);
     expect(res.ran).toBe(true);
     // There is exactly one runPush (the apply) — no separate dry-run pass.
-    // diffNameStatus is read once per runPush; assert a single planning pass.
-    expect(vault.diffNameStatus).toHaveBeenCalledTimes(1);
+    // runPush diffs from the last export once; the other diff, from `main`,
+    // counts the export commit's edits for its subject.
+    expect(vault.diffNameStatus.mock.calls.map(([from]) => from)).toEqual(["base0", "main0"]);
   });
 
   it("throws on a PRE-aborted signal BEFORE the apply (first write phase)", async () => {

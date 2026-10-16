@@ -204,7 +204,7 @@ describe('VaultGit integration gaps (temp repo)', () => {
     const tree = await git.buildTree(init, [
       { path: 'page.md', sha: await git.hashObject('hello\n') },
     ]);
-    const made = await git.commitTree(tree, [init], 'docmost: sync 1 page(s)', {
+    const made = await git.commitTree(tree, [init], 'docmost: edit 1 page(s)', {
       authorName: LOCAL_NAME,
       authorEmail: LOCAL_EMAIL,
     });

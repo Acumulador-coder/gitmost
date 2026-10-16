@@ -43,7 +43,7 @@ describe("upgradeLegacyVault (via prepareVault)", () => {
     await git(root, "init", "-q", "-b", "main");
     await writeFile(join(root, "Page.md"), `---\ngitmost_id: ${A}\n---\n\nalpha\n`, "utf8");
     await git(root, "add", "-A");
-    await git(root, "commit", "-q", "-m", "docmost: export");
+    await git(root, "commit", "-q", "-m", "docmost: edit 1 page(s)");
     const exported = await git(root, "rev-parse", "HEAD");
     if (!opts.noDocmost) await git(root, "branch", "docmost");
     await git(root, "update-ref", "refs/docmost/last-pushed", exported);

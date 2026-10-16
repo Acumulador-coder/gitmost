@@ -93,8 +93,8 @@ The on-call engineer answers pages within **15 minutes**.
 - Изображения и вложения остаются в Gitmost. Markdown ссылается на них (`/api/files/…`), самих
   файлов в репозитории нет.
 - Ссылки на другие страницы — обычные Markdown-ссылки на адрес страницы в вики.
-- Коммиты Gitmost делает от имени `Docmost Sync <docmost-sync@local>` с заголовком
-  `docmost: export N page(s)`.
+- Коммиты Gitmost делает от имени `Docmost Sync <docmost-sync@local>` с заголовком по тому, что
+  изменилось в вики: `docmost: edit N page(s)`, `docmost: delete N page(s)` или оба вместе.
 
 ## Изменение страниц из git
 
@@ -129,9 +129,9 @@ $ git push
 ```console
 $ git pull
 $ git log --oneline
-ac4aef6 docmost: export 2 page(s)
+ac4aef6 docmost: edit 1 page(s)
 5573f53 On-call: week 43; add Deploys
-d7adef3 docmost: export 5 page(s)
+d7adef3 docmost: edit 5 page(s)
 b6f9a6b init vault
 $ head -3 Engineering/Deploys.md
 ---
@@ -152,7 +152,7 @@ Push поверх устаревшего `main` отклоняется как no
 $ git pull
 $ git log -1 --format='%an <%ae>%n%s'
 Docmost Sync <docmost-sync@local>
-docmost: export 1 page(s)
+docmost: edit 1 page(s)
 $ git diff HEAD~1 -- Welcome.md
 @@ -8,3 +8,5 @@
  - [Engineering](#) practices

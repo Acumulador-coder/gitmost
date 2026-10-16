@@ -53,7 +53,7 @@ describe("pushes into the vault", () => {
     const tree = await vault.buildTree(main0, [
       { path: "B.md", sha: await vault.hashObject("docmost edit\n") },
     ]);
-    const exported = await vault.commitTree(tree, [main0], "docmost: export", {
+    const exported = await vault.commitTree(tree, [main0], "docmost: edit 1 page(s)", {
       authorName: BOT_AUTHOR_NAME,
       authorEmail: BOT_AUTHOR_EMAIL,
     });
@@ -108,7 +108,7 @@ async function commitOnMain(vault: VaultGit, files: Record<string, string>): Pro
   const commit = await vault.commitTree(
     await vault.buildTree(main0, changes),
     [main0],
-    "docmost: export",
+    `docmost: edit ${changes.length} page(s)`,
     { authorName: BOT_AUTHOR_NAME, authorEmail: BOT_AUTHOR_EMAIL },
   );
   await vault.updateRef("refs/heads/main", commit, main0);

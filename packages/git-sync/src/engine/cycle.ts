@@ -332,10 +332,20 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
   // Removed paths of pages Docmost no longer has (a created file's old path is
   // not one: its page is placed again).
   const deleted = plan.toDelete.filter((p) => !pinnedPaths.has(p)).length;
-  const subject =
-    deleted > 0
-      ? `docmost: export ${exported.written} page(s), ${deleted} deleted`
-      : `docmost: export ${exported.written} page(s)`;
+  // The subject names what happened in the wiki: pages whose file this commit
+  // adds, changes or moves (created, edited, renamed, moved), and pages deleted;
+  // a deletion-only commit says only that. Edits are counted on the commit's own
+  // diff, not `exported.written`: that counts every page fetched, which is the
+  // whole space after a restart or a failed cycle.
+  const edited =
+    exported.tree === mainTree
+      ? 0
+      : (await vault.diffNameStatus(main0, exported.tree)).filter((e) => e.status !== "D")
+          .length;
+  const actions: string[] = [];
+  if (edited > 0 || deleted === 0) actions.push(`edit ${edited} page(s)`);
+  if (deleted > 0) actions.push(`delete ${deleted} page(s)`);
+  const subject = `docmost: ${actions.join(", ")}`;
   // The last check before `main` moves: the export may have run long.
   throwIfAborted(signal, `before moving '${DEFAULT_BRANCH}'`);
   const newMain =
