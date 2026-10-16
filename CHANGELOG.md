@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Metric `git_sync_cycle_duration_seconds{result}`: how long each git sync cycle takes, ok or failed.
+
 ### Changed
 
 - Git sync names its commits by what changed in the wiki: `docmost: edit N page(s)`,

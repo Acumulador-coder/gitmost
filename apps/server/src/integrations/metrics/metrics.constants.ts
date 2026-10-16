@@ -93,6 +93,9 @@ export const METRIC_GIT_SYNC_CYCLES_TOTAL = 'git_sync_cycles_total';
 export const METRIC_GIT_SYNC_FAILING_SPACES = 'git_sync_failing_spaces';
 export const METRIC_GIT_SYNC_PUSH_FAILING_SPACES =
   'git_sync_push_failing_spaces';
+// Wall-clock duration of one reconcile cycle, by the same `result` label; the
+// cycle runs every poll interval per enabled space even when nothing changed.
+export const METRIC_GIT_SYNC_CYCLE_DURATION = 'git_sync_cycle_duration_seconds';
 
 // Histogram buckets (seconds). Chosen to give useful p50/p95/p99 resolution
 // for typical web/DB latencies without exploding series cardinality.
@@ -104,6 +107,11 @@ export const DB_BUCKETS = [
 ];
 export const COLLAB_BUCKETS = [
   0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5,
+];
+// git-sync cycle: an idle cycle is sub-second, the poll interval is 15 s and the
+// cycle deadline is 30 min (a cycle cut off by it settles after it).
+export const GIT_SYNC_CYCLE_BUCKETS = [
+  0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600,
 ];
 export const JOB_BUCKETS = [
   0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120,
