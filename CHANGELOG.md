@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Git sync names its commits by what changed in the wiki: `docmost: edit N page(s)`,
   `docmost: delete N page(s)` or both, instead of `docmost: export N page(s)`.
 
+### Fixed
+
+- Git sync no longer stalls the server's HTTP and MCP requests for seconds at a time: a check of a
+  space where nothing changed runs no git at all, and the sync's own git commands now run in a
+  small helper process instead of being started by the server process itself.
+  `POST /api/git-sync/trigger` always runs a full sync.
+
 ## [1.0.1] - 2026-10-12
 
 The 1.0.0 code with release images: the `v1.0.0` tag was pushed, but a failing integration test

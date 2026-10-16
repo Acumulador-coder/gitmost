@@ -8,24 +8,24 @@
  * plumbing (`hash-object`, a private index, `commit-tree`, `update-ref`).
  *
  * Implementation notes:
- *   - We shell out via `node:child_process` `execFile` (promisified), passing
- *     ARGS AS AN ARRAY — no shell, so there is no command injection surface even
- *     if a page title / branch name contains shell metacharacters.
+ *   - git runs through `runGit` (./git-runner.ts): `execFile` in a small helper
+ *     process, so this (large) process never spawns git itself. ARGS go AS AN
+ *     ARRAY — no shell, so there is no command injection surface even if a page
+ *     title / branch name contains shell metacharacters.
  *   - EVERY git invocation funnels through the single `runRaw` primitive, which
  *     ALWAYS prepends `--no-pager -c core.quotepath=false` to the argv (so git
  *     never blocks on a pager and always prints verbatim UTF-8 paths). There is
  *     no exception — even the `git --version` preflight goes through `runRaw`.
  */
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { parsePageFile } from "@docmost/prosemirror-markdown";
 import { MAX_MARKDOWN_BYTES } from "./convert-pool.js";
+import { GitStoppedError, runGit } from "./git-runner.js";
 
-const execFileAsync = promisify(execFile);
+export { GitStoppedError };
 
 // Safety net: kill a hung git subprocess. This engine performs only LOCAL git
 // operations (no network pushes), so a legitimate call never approaches this
@@ -43,13 +43,6 @@ const STALE_LOCK_MIN_AGE_MS = GIT_EXEC_TIMEOUT_MS * 3; // 6 min, >> max git-op d
 // The most stdout one git invocation may print (`maxBuffer`). Past it Node kills
 // git, and the output is unusable: `runRaw` throws instead of returning it.
 const GIT_OUTPUT_MAX_BYTES = 64 * 1024 * 1024;
-
-/**
- * git was stopped before it exited (killed by its timeout or a signal, or cut
- * off past the output budget), so it has no answer — not even "absent". A
- * reader that maps its own failures to "absent" must rethrow this one.
- */
-export class GitStoppedError extends Error {}
 
 // One `cat-file --batch` call of `readFilesAtRef` takes at most this many paths
 // and, unless a single file is bigger, this many bytes of blobs, so its answer
@@ -291,8 +284,8 @@ export class VaultGit {
    * maxBuffer, runs git, and returns the exit info so callers can treat a
    * non-zero exit as either an error (`run`) or a meaningful state (e.g. a grep
    * with no match). It throws when git has no exit status to report: killed by
-   * its timeout or a signal, or stopped because its output overran
-   * GIT_OUTPUT_MAX_BYTES.
+   * its timeout or a signal, stopped because its output overran
+   * GIT_OUTPUT_MAX_BYTES, or lost with the helper process that ran it.
    *
    *   - argv: ALWAYS prepends `--no-pager -c core.quotepath=false`, so git never
    *     blocks on a pager and always prints verbatim UTF-8 paths (no octal
@@ -319,8 +312,7 @@ export class VaultGit {
   ): Promise<{ code: number; stdout: string; stderr: string }> {
     const cwd = opts?.cwd === null ? undefined : (opts?.cwd ?? this.vaultPath);
     try {
-      const pending = execFileAsync(
-        "git",
+      const { stdout, stderr } = await runGit(
         ["--no-pager", "-c", "core.quotepath=false", ...args],
         {
           // Generous buffer: file listings / porcelain output on a large vault
@@ -332,17 +324,15 @@ export class VaultGit {
           timeout: GIT_EXEC_TIMEOUT_MS,
           env: vaultGitEnv(opts?.env),
           encoding: opts?.encoding ?? "utf8",
+          ...(opts?.input !== undefined ? { input: opts.input } : {}),
         },
       );
-      if (opts?.input !== undefined) {
-        // A child that exits early (or never spawned) closes the pipe; the
-        // exit status reports that failure, not an EPIPE on the write.
-        pending.child.stdin?.on("error", () => undefined);
-        pending.child.stdin?.end(opts.input);
-      }
-      const { stdout, stderr } = await pending;
       return { code: 0, stdout, stderr };
     } catch (err: unknown) {
+      // The helper process that ran git went down or missed its deadline.
+      if (err instanceof GitStoppedError) {
+        throw new GitStoppedError(`git ${args.join(" ")}: ${err.message}`, { cause: err });
+      }
       const e = err as {
         code?: number | string | null;
         killed?: boolean;

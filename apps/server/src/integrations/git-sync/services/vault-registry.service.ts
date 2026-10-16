@@ -1,12 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { mkdir } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { VaultGit } from '@docmost/git-sync';
 import { loadGitSync } from '../git-sync.loader';
 import { EnvironmentService } from '../../environment/environment.service';
-
-const execFileAsync = promisify(execFile);
 
 /**
  * Resolves the on-disk vault location per space and owns the (lazily created,
@@ -91,7 +87,9 @@ export class VaultRegistryService {
   }
 
   private async makeServable(spaceId: string): Promise<string> {
-    const { vaultGitEnv } = await loadGitSync();
+    // `runGit`: git runs in the engine's helper process, never spawned by
+    // this (large) process, whose event loop a spawn would block.
+    const { vaultGitEnv, runGit } = await loadGitSync();
     const vault = await this.getVault(spaceId);
     const path = this.vaultPath(spaceId);
 
@@ -121,8 +119,7 @@ export class VaultRegistryService {
       maxBuffer: 10 * 1024 * 1024,
     };
     for (const [key, value] of configs) {
-      const current = await execFileAsync(
-        'git',
+      const current = await runGit(
         ['config', '--local', '--get', key],
         opts,
       ).then(
@@ -134,7 +131,7 @@ export class VaultRegistryService {
         },
       );
       if (current === value) continue;
-      await execFileAsync('git', ['config', key, value], opts);
+      await runGit(['config', key, value], opts);
     }
 
     // The pre-receive hook that refuses a push to the engine's own refs (see

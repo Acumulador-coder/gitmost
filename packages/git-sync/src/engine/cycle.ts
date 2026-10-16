@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   VaultGit,
   DEFAULT_BRANCH,
@@ -5,7 +6,7 @@ import {
   BOT_AUTHOR_NAME,
   BOT_AUTHOR_EMAIL,
 } from "./git.js";
-import { GitSyncClient } from "./client.types.js";
+import { GitSyncClient, type GitSyncPageNodeLite } from "./client.types.js";
 import { Settings } from "./settings.js";
 import {
   readExisting,
@@ -53,6 +54,19 @@ export interface RunCycleDeps {
    */
   exportKeys?: Map<string, string>;
   /**
+   * The caller-owned idle memo of THIS space: the fingerprint (`treeFingerprint`)
+   * of the Docmost tree the last clean cycle exported. While it is set, the
+   * cycle first reads that tree alone (no git) and, when its fingerprint is
+   * unchanged, returns at once without running a single git command; otherwise
+   * it clears the memo and runs in full. The cycle SETS it only after a clean
+   * cycle (a complete tree, no apply or export failure, nothing kept back, the
+   * pointer at `main`) and CLEARS it when the cycle throws. The skip relies on
+   * nothing but the caller's own cycles moving the vault's refs: the caller
+   * clears the memo whenever something else may have (a push's receive-pack).
+   * Omitted -> every cycle is a full pass.
+   */
+  idle?: { fingerprint: string | null };
+  /**
    * Optional cooperative-abort signal. The caller (orchestrator) aborts it when
    * a heartbeat refresh cannot CONFIRM the per-space lock is still held, or
    * when the cycle's deadline passes. The cycle checks it before the apply,
@@ -89,6 +103,8 @@ export interface RunCycleResult {
  * one merge domain — the collaboration layer's block 3-way merge — and the
  * vault never runs `git merge`:
  *
+ *   -. IDLE: with `deps.idle` set and Docmost's tree unchanged since the last
+ *      clean cycle, the cycle ends here, before any git command.
  *   0. `prepareVault`: repo, stale locks, legacy upgrade, `main`, pointer.
  *   1. APPLY: when `main`'s tree differs from the last export's, the user's
  *      changes since that export reach Docmost by `gitmost_id` (`runPush`); an
@@ -103,16 +119,43 @@ export interface RunCycleResult {
  * Lock POLICY lives in the caller; this owns only the mechanics. Deletes are
  * soft (Trash, reversible) and always logged.
  *
- * Any throw clears `deps.exportKeys` (the next cycle is a full pass) and is
- * re-thrown unchanged.
+ * Any throw clears `deps.exportKeys` and `deps.idle` (the next cycle is a full
+ * pass) and is re-thrown unchanged.
  */
 export async function runCycle(deps: RunCycleDeps): Promise<RunCycleResult> {
   try {
     return await runCycleOnce(deps);
   } catch (err) {
     deps.exportKeys?.clear();
+    if (deps.idle) deps.idle.fingerprint = null;
     throw err;
   }
+}
+
+/**
+ * The fingerprint of what an export reads from Docmost: sha256 of the canonical
+ * JSON (object keys sorted) of the tree's `complete` flag, every page node with
+ * all its fields (sorted by id) and the engine settings.
+ */
+function treeFingerprint(
+  tree: { pages: GitSyncPageNodeLite[]; complete: boolean },
+  settings: Settings,
+): string {
+  const pages = [...tree.pages].sort((a, b) => {
+    const x = a?.id ?? "";
+    const y = b?.id ?? "";
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+  const json = JSON.stringify(
+    { complete: tree.complete, pages, settings },
+    (_key, value: unknown) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)),
+          )
+        : value,
+  );
+  return createHash("sha256").update(json).digest("hex");
 }
 
 /** IO for `prepareVault`. */
@@ -170,8 +213,22 @@ async function repairPointer(deps: PrepareVaultDeps): Promise<boolean> {
 }
 
 async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
-  const { spaceId, client, vault, settings, log, signal, exportKeys } = deps;
+  const { spaceId, client, vault, settings, log, signal, exportKeys, idle } = deps;
   const warn = deps.warn ?? log;
+
+  // An idle space: Docmost still holds the tree the last clean cycle exported,
+  // and (the caller's contract) nothing else moved the vault since, so there is
+  // nothing to apply and nothing to export.
+  if (idle?.fingerprint) {
+    if (treeFingerprint(await client.listSpaceTree(spaceId), settings) === idle.fingerprint) {
+      return {
+        ran: true,
+        pull: { written: 0, deleted: 0, failures: 0 },
+        push: { mode: "apply", failures: 0 },
+      };
+    }
+    idle.fingerprint = null;
+  }
 
   // 0. Any self-heal means the vault may not hold what the recorded export keys
   //    describe: forget them so this cycle re-exports every live page.
@@ -377,6 +434,18 @@ async function runCycleOnce(deps: RunCycleDeps): Promise<RunCycleResult> {
     for (const [pageId, key] of plan.liveExportKeys) {
       if (!skip.has(pageId)) exportKeys.set(pageId, key);
     }
+  }
+
+  // Remember the tree this export read only when the vault now holds exactly
+  // it: nothing failed, nothing was kept back, and the pointer is at `main`.
+  if (idle) {
+    const clean =
+      tree.complete &&
+      failures.length === 0 &&
+      exported.failed === 0 &&
+      pinnedPaths.size === 0 &&
+      pointer === newMain;
+    idle.fingerprint = clean ? treeFingerprint(tree, settings) : null;
   }
 
   return {

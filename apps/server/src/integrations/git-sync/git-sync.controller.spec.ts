@@ -100,7 +100,10 @@ describe('GitSyncController', () => {
 
       // The space is resolved workspace-scoped (context workspace, not the body).
       expect(spaceRepo.findById).toHaveBeenCalledWith('space-1', 'ctx-ws');
-      expect(orchestrator.runOnce).toHaveBeenCalledWith('space-1', 'ctx-ws');
+      // A manual trigger is a full pass even when the space is idle.
+      expect(orchestrator.runOnce).toHaveBeenCalledWith('space-1', 'ctx-ws', {
+        force: true,
+      });
       expect(res).toEqual({ spaceId: 'space-1', ran: true });
     });
 

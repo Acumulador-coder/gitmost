@@ -7,22 +7,20 @@
 // `loadGitSync()` bridge (the ESM `@docmost/git-sync` package cannot be
 // `require()`d under jest), so we mock that loader rather than the package.
 import { mkdir } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
 import { loadGitSync } from '../git-sync.loader';
 
 jest.mock('node:fs/promises', () => ({
   mkdir: jest.fn(async () => undefined),
 }));
 
-// ensureServable shells out via `promisify(execFile)`; mock execFile with a
-// callback-style fn so promisify resolves. Each `git config <key> <value>` call
-// is recorded so the config writes (incl. the security-critical
-// receive.denyNonFastForwards=true and core.symlinks=false) can be asserted.
-// By default a `git config --local --get` read returns '' (value differs).
-jest.mock('node:child_process', () => ({
-  execFile: jest.fn((_cmd: string, _args: string[], _opts: any, cb: any) =>
-    cb(null, { stdout: '', stderr: '' }),
-  ),
+// ensureServable runs git through the engine's `runGit`; each
+// `git config <key> <value>` call is recorded so the config writes (incl. the
+// security-critical receive.denyNonFastForwards=true and core.symlinks=false)
+// can be asserted. By default a `git config --local --get` read returns ''
+// (value differs).
+const mockRunGit = jest.fn(async (_args: string[], _opts: any) => ({
+  stdout: '',
+  stderr: '',
 }));
 
 // Cheap VaultGit stub: records the path it was constructed with; no shell-out.
@@ -43,6 +41,7 @@ jest.mock('../git-sync.loader', () => ({
   loadGitSync: jest.fn(async () => ({
     VaultGit: mockVaultGit,
     vaultGitEnv: jest.fn(() => ({})),
+    runGit: mockRunGit,
   })),
 }));
 
@@ -51,17 +50,15 @@ import { VaultRegistryService } from './vault-registry.service';
 type AnyMock = jest.Mock;
 
 const mkdirMock = mkdir as unknown as AnyMock;
-const execFileMock = execFile as unknown as AnyMock;
+const runGitMock = mockRunGit as unknown as AnyMock;
 const VaultGitMock = mockVaultGit;
 void loadGitSync;
 
 /** The `git config <key> <value>` writes (reads via `--local --get` excluded). */
 function configWrites(): string[][] {
-  return execFileMock.mock.calls
-    .filter(
-      ([cmd, args]) => cmd === 'git' && args[0] === 'config' && args[1] !== '--local',
-    )
-    .map(([, args]) => [args[1], args[2]]);
+  return runGitMock.mock.calls
+    .filter(([args]) => args[0] === 'config' && args[1] !== '--local')
+    .map(([args]) => [args[1], args[2]]);
 }
 
 const SERVABLE_CONFIG: Record<string, string> = {
@@ -83,9 +80,7 @@ function build(dataDir: string): { service: VaultRegistryService } {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: any, cb: any) =>
-    cb(null, { stdout: '', stderr: '' }),
-  );
+  runGitMock.mockImplementation(async () => ({ stdout: '', stderr: '' }));
 });
 
 describe('VaultRegistryService', () => {
@@ -148,8 +143,8 @@ describe('VaultRegistryService', () => {
 
       // Every config write targets THIS vault's cwd and is time-bounded so a
       // wedged git cannot hang the request path.
-      for (const [cmd, args, opts] of execFileMock.mock.calls) {
-        if (cmd === 'git' && args[0] === 'config') {
+      for (const [args, opts] of runGitMock.mock.calls) {
+        if (args[0] === 'config') {
           expect(opts.cwd).toBe('/vaults/space-1');
           expect(opts.timeout).toBe(120000);
         }
@@ -172,13 +167,10 @@ describe('VaultRegistryService', () => {
       const { service } = build('/vaults');
       const vault = await service.getVault('space-1');
       // The vault already carries every servable value.
-      execFileMock.mockImplementation(
-        (_cmd: string, args: string[], _opts: any, cb: any) =>
-          cb(null, {
-            stdout: args[1] === '--local' ? `${SERVABLE_CONFIG[args[3]]}\n` : '',
-            stderr: '',
-          }),
-      );
+      runGitMock.mockImplementation(async (args: string[]) => ({
+        stdout: args[1] === '--local' ? `${SERVABLE_CONFIG[args[3]]}\n` : '',
+        stderr: '',
+      }));
       let active = 0;
       let maxActive = 0;
       let release!: () => void;
@@ -221,16 +213,14 @@ describe('VaultRegistryService', () => {
 
     it('fails loudly when reading a config key fails for a reason other than "unset"', async () => {
       const { service } = build('/vaults');
-      execFileMock.mockImplementation(
-        (_cmd: string, args: string[], _opts: any, cb: any) => {
-          if (args[1] === '--local') {
-            const err: any = new Error('fatal: bad config file');
-            err.code = 128;
-            return cb(err);
-          }
-          return cb(null, { stdout: '', stderr: '' });
-        },
-      );
+      runGitMock.mockImplementation(async (args: string[]) => {
+        if (args[1] === '--local') {
+          const err: any = new Error('fatal: bad config file');
+          err.code = 128;
+          throw err;
+        }
+        return { stdout: '', stderr: '' };
+      });
 
       await expect(service.ensureServable('space-1')).rejects.toThrow(
         'bad config file',

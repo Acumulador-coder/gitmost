@@ -4,27 +4,24 @@ import { describe, expect, it, vi } from 'vitest';
 // by any signal), it must fail with that reason. Read as an exit status, a
 // killed `git show` would be "the path is absent" and a killed `git grep` "no
 // match" — wrong answers the engine would act on. Node's execFile reports such
-// a process with `killed`/`signal` set and `code: null`; this suite feeds that
-// report to the wrapper through a mocked execFile.
+// a process with `killed`/`signal` set and `code: null`; the git runner hands
+// that report on as it is, and this suite feeds it to the wrapper through a
+// mocked `runGit`.
 
 const failure = vi.hoisted(() => ({ error: null as unknown }));
 
-vi.mock('node:child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:child_process')>();
-  const execFile = Object.assign(
-    () => {
-      throw new Error('the callback form of execFile is not used by VaultGit');
+vi.mock('../src/engine/git-runner', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/git-runner')>();
+  return {
+    ...actual,
+    runGit: async () => {
+      throw failure.error;
     },
-    {
-      [Symbol.for('nodejs.util.promisify.custom')]: async () => {
-        throw failure.error;
-      },
-    },
-  );
-  return { ...actual, execFile };
+  };
 });
 
 const { VaultGit } = await import('../src/engine/git');
+const { GitStoppedError } = await import('../src/engine/git-runner');
 
 describe('VaultGit — a git process killed before it exited', () => {
   it('a git killed by its timeout fails with that reason, not as "path absent"', async () => {
@@ -52,6 +49,30 @@ describe('VaultGit — a git process killed before it exited', () => {
 
     await expect(new VaultGit('/vault').showFileAtRef('main', 'A.md')).rejects.toThrow(
       'git show main:A.md was killed by SIGKILL',
+    );
+  });
+
+  it('a git cut off past its output budget fails with that reason', async () => {
+    failure.error = Object.assign(new Error('stdout maxBuffer length exceeded'), {
+      code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+      stdout: 'x'.repeat(16),
+      stderr: '',
+    });
+
+    await expect(new VaultGit('/vault').showFileAtRef('main', 'A.md')).rejects.toThrow(
+      /^git show main:A\.md printed more than its \d+-byte output budget and was stopped$/,
+    );
+  });
+
+  it('a git lost with its helper process fails with the reason, naming the command', async () => {
+    failure.error = new GitStoppedError(
+      'the git helper process was killed by SIGKILL before git answered',
+    );
+
+    const read = new VaultGit('/vault').showFileAtRef('main', 'A.md');
+    await expect(read).rejects.toBeInstanceOf(GitStoppedError);
+    await expect(read).rejects.toThrow(
+      'git show main:A.md: the git helper process was killed by SIGKILL before git answered',
     );
   });
 
