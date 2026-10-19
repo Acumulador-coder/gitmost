@@ -475,7 +475,9 @@ export class SearchService {
           // When the COUNT fails, coverage is UNKNOWN, and the DTO defines `full`
           // as "the active generation covers every page" — so unknown coverage
           // reports `stale` (numbers omitted): a legacy workspace with 0 indexed
-          // pages must not report `full` because of a failed COUNT.
+          // pages must not report `full` because of a failed COUNT. Only a call
+          // that waits for the COUNT lands here: a failed BACKGROUND refresh in
+          // getCoverage keeps serving the last measured coverage (logged at ERROR).
           semanticStale = generation.swapping;
           try {
             const coverage = await this.embeddingGeneration.getCoverage(

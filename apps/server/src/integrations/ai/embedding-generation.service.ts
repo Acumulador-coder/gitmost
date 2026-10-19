@@ -114,12 +114,13 @@ export interface EmbeddingCoverage {
  * search response, and computing them costs 2-3 COUNT(DISTINCT) scans over
  * `page_embeddings` — far too expensive to run per keystroke on the interactive
  * search path. Coverage is a COSMETIC indicator (it never changes which rows are
- * served — that is the ACTIVE fingerprint's job, which is NEVER cached), so a few
- * seconds of staleness is harmless. 0 disables the cache.
+ * served — that is the ACTIVE fingerprint's job, which is NEVER cached), so
+ * staleness is harmless. 0 disables the cache.
  *
  * The cache is per PROCESS: a flip performed by the BullMQ worker is not seen by
- * the API process's cache until its entry expires, so "reindexing -> full" can lag
- * by up to one TTL in the UI.
+ * the API process's cache until its entry expires and the background refresh
+ * lands (see getCoverage), so "reindexing -> full" can lag by one TTL plus one
+ * search in the UI.
  */
 function coverageTtlMs(): number {
   const raw = Number(process.env.SEARCH_COVERAGE_TTL_MS);
@@ -287,7 +288,12 @@ export class EmbeddingGenerationService {
   // workspaceId -> { coverage, expiresAt }. Cosmetic; see coverageTtlMs().
   private readonly coverageCache = new Map<
     string,
-    { value: EmbeddingCoverage; fingerprint: string; expiresAt: number }
+    {
+      value: EmbeddingCoverage;
+      fingerprint: string;
+      expiresAt: number;
+      refreshing?: boolean;
+    }
   >();
 
   constructor(
@@ -620,6 +626,11 @@ export class EmbeddingGenerationService {
    * Coverage of the ACTIVE generation (TTL-cached; see coverageTtlMs). Costs two
    * COUNTs (indexed pages of the active fingerprint + the live embeddable count),
    * so it is only ever called on a search request that actually has a provider.
+   *
+   * An expired entry is still served while ONE refresh runs in the background:
+   * the COUNTs cost ~200 ms on a large workspace and searches are often further
+   * apart than the TTL, so waiting for them would add that to nearly every search.
+   * Only the first call, a fingerprint change and an invalidation wait.
    */
   async getCoverage(
     workspaceId: string,
@@ -627,15 +638,52 @@ export class EmbeddingGenerationService {
   ): Promise<EmbeddingCoverage> {
     const ttl = coverageTtlMs();
     const cached = this.coverageCache.get(workspaceId);
-    if (
-      ttl > 0 &&
-      cached &&
-      cached.fingerprint === activeFingerprint &&
-      cached.expiresAt > Date.now()
-    ) {
+    if (ttl > 0 && cached && cached.fingerprint === activeFingerprint) {
+      if (cached.expiresAt <= Date.now() && !cached.refreshing) {
+        cached.refreshing = true;
+        this.measureCoverage(workspaceId, activeFingerprint)
+          .then((value) => {
+            // An invalidation (flip / GC) during the refresh wins: its entry is gone.
+            if (this.coverageCache.get(workspaceId) === cached) {
+              this.cacheCoverage(workspaceId, activeFingerprint, value, ttl);
+            }
+          })
+          .catch((err) => {
+            cached.refreshing = false;
+            this.logger.error(
+              `embedding.coverage.refresh-failed workspace=${workspaceId}: ` +
+                `${err?.message ?? err}`,
+              err?.stack,
+            );
+          });
+      }
       return cached.value;
     }
 
+    const coverage = await this.measureCoverage(workspaceId, activeFingerprint);
+    if (ttl > 0) {
+      this.cacheCoverage(workspaceId, activeFingerprint, coverage, ttl);
+    }
+    return coverage;
+  }
+
+  private cacheCoverage(
+    workspaceId: string,
+    fingerprint: string,
+    value: EmbeddingCoverage,
+    ttl: number,
+  ): void {
+    this.coverageCache.set(workspaceId, {
+      value,
+      fingerprint,
+      expiresAt: Date.now() + ttl,
+    });
+  }
+
+  private async measureCoverage(
+    workspaceId: string,
+    activeFingerprint: string,
+  ): Promise<EmbeddingCoverage> {
     // The stored record decides WHICH counts we need, so it is read first. The
     // recorded denominator belongs to the generation the pointer names: if the
     // caller is asking about a DIFFERENT generation (it never should — readers pass
@@ -676,7 +724,7 @@ export class EmbeddingGenerationService {
           : Promise.resolve(0),
       ]);
 
-    const coverage = computeCoverage({
+    return computeCoverage({
       indexed,
       embeddable,
       completedTotal: forActive ? stored.coverageTotal : null,
@@ -684,15 +732,6 @@ export class EmbeddingGenerationService {
       changedSince,
       indexedChangedSince,
     });
-
-    if (ttl > 0) {
-      this.coverageCache.set(workspaceId, {
-        value: coverage,
-        fingerprint: activeFingerprint,
-        expiresAt: Date.now() + ttl,
-      });
-    }
-    return coverage;
   }
 
   /** Drop the cached coverage of a workspace (after a GC / flip). */

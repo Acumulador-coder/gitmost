@@ -580,6 +580,110 @@ describe('EmbeddingGenerationService.getCoverage', () => {
     await service.getCoverage(WS, 'fp-A');
     expect(pageEmbeddingRepo.countPagesByFingerprint).toHaveBeenCalledTimes(2);
   });
+
+  it('serves an expired entry without waiting and refreshes it once in the background', async () => {
+    process.env.SEARCH_COVERAGE_TTL_MS = '60000';
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const { service, pageEmbeddingRepo, pageRepo } = makeService({
+        active: 'fp-A',
+        indexed: 5,
+        embeddable: 5,
+      });
+      const first = await service.getCoverage(WS, 'fp-A');
+      expect(first).toEqual({ indexed: 5, total: 5, state: 'full' });
+
+      // The refresh's COUNT hangs until released: a search that waited for it
+      // would lose the race below.
+      let release: (n: number) => void;
+      pageEmbeddingRepo.countPagesByFingerprint.mockImplementationOnce(
+        () => new Promise<number>((r) => (release = r)),
+      );
+      pageRepo.countEmbeddablePages.mockResolvedValueOnce(7);
+      now.mockReturnValue(1_000 + 60_000);
+
+      const waited = new Promise((r) => setTimeout(() => r('waited'), 200));
+      await expect(
+        Promise.race([service.getCoverage(WS, 'fp-A'), waited]),
+      ).resolves.toEqual(first);
+      // A second expired read while the refresh is in flight starts no other one.
+      await expect(service.getCoverage(WS, 'fp-A')).resolves.toEqual(first);
+      expect(pageEmbeddingRepo.countPagesByFingerprint).toHaveBeenCalledTimes(2);
+
+      release!(7);
+      await new Promise((r) => setImmediate(r));
+      await expect(service.getCoverage(WS, 'fp-A')).resolves.toEqual({
+        indexed: 7,
+        total: 7,
+        state: 'full',
+      });
+      expect(pageEmbeddingRepo.countPagesByFingerprint).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('a failed background refresh is logged and the next expired read retries it', async () => {
+    process.env.SEARCH_COVERAGE_TTL_MS = '60000';
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const { service, pageEmbeddingRepo } = makeService({
+        active: 'fp-A',
+        indexed: 5,
+        embeddable: 5,
+      });
+      const logError = jest
+        .spyOn((service as any).logger, 'error')
+        .mockImplementation(() => undefined);
+      const first = await service.getCoverage(WS, 'fp-A');
+
+      pageEmbeddingRepo.countPagesByFingerprint.mockRejectedValueOnce(
+        new Error('db gone'),
+      );
+      now.mockReturnValue(1_000 + 60_000);
+      await expect(service.getCoverage(WS, 'fp-A')).resolves.toEqual(first);
+      await new Promise((r) => setImmediate(r));
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringContaining('embedding.coverage.refresh-failed'),
+        expect.anything(),
+      );
+
+      await expect(service.getCoverage(WS, 'fp-A')).resolves.toEqual(first);
+      expect(pageEmbeddingRepo.countPagesByFingerprint).toHaveBeenCalledTimes(3);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('a refresh that lands after an invalidation does not overwrite the fresh entry', async () => {
+    process.env.SEARCH_COVERAGE_TTL_MS = '60000';
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const { service, pageEmbeddingRepo } = makeService({
+        active: 'fp-A',
+        indexed: 5,
+        embeddable: 5,
+      });
+      await service.getCoverage(WS, 'fp-A');
+
+      let release: (n: number) => void;
+      pageEmbeddingRepo.countPagesByFingerprint.mockImplementationOnce(
+        () => new Promise<number>((r) => (release = r)),
+      );
+      now.mockReturnValue(1_000 + 60_000);
+      await service.getCoverage(WS, 'fp-A'); // starts the hanging refresh
+
+      service.invalidateCoverage(WS);
+      const fresh = await service.getCoverage(WS, 'fp-A');
+      expect(fresh).toEqual({ indexed: 5, total: 5, state: 'full' });
+
+      release!(1);
+      await new Promise((r) => setImmediate(r));
+      await expect(service.getCoverage(WS, 'fp-A')).resolves.toEqual(fresh);
+    } finally {
+      now.mockRestore();
+    }
+  });
 });
 
 describe('EmbeddingGenerationService.resolveGeneration', () => {

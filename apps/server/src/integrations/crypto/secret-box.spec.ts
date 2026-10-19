@@ -67,6 +67,16 @@ describe('SecretBoxService', () => {
     expect(() => box.decryptSecret(tampered)).toThrow(/APP_SECRET may have changed/);
   });
 
+  it('derives the key of a blob once: a repeated decrypt runs no scrypt', () => {
+    const box = makeBox(SECRET_A);
+    const blob = box.encryptSecret('sk-hot-path');
+    const derive = jest.spyOn(box as any, 'deriveKey');
+
+    expect(box.decryptSecret(blob)).toBe('sk-hot-path');
+    expect(box.decryptSecret(blob)).toBe('sk-hot-path');
+    expect(derive).toHaveBeenCalledTimes(1);
+  });
+
   it('throws when decrypting under a different APP_SECRET', () => {
     const boxA = makeBox(SECRET_A);
     const boxB = makeBox(SECRET_B);
