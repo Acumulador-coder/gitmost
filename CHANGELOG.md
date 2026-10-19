@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   space where nothing changed runs no git at all, and the sync's own git commands now run in a
   small helper process instead of being started by the server process itself.
   `POST /api/git-sync/trigger` always runs a full sync.
+- MCP clients that stay connected for hours no longer lose the wiki tools: a request on a session
+  the server has dropped (idle for 30 minutes, or opened before a restart) now gets `404 Session not
+  found`, as the MCP spec requires, so the client opens a new session. It used to get `400`, and
+  clients such as ZeroClaw then failed every tool call until restarted.
 
 ## [1.0.1] - 2026-10-12
 

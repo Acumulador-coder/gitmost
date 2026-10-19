@@ -212,9 +212,10 @@ test("subsequent request: SAME identity routes through, DIFFERENT identity is 40
   }
 });
 
-test("unknown existing session id (non-init, with session header) is 400", async () => {
+test("unknown existing session id (non-init, with session header) is 404", async () => {
   // A request carrying a session id that was never established must not consult
-  // the resolver or identify hook — it is a plain 400 (no valid session).
+  // the resolver or identify hook — it is a 404 (session not found), the status
+  // the MCP spec uses to make the client re-initialize.
   let calls = 0;
   const handler = createMcpHttpHandler(
     () => {
@@ -229,6 +230,6 @@ test("unknown existing session id (non-init, with session header) is 400", async
   });
   const res = makeRes();
   await handler.handleRequest(req, res, { jsonrpc: "2.0", method: "ping", id: 3 });
-  assert.equal(res.statusCode, 400);
+  assert.equal(res.statusCode, 404);
   assert.equal(calls, 0);
 });

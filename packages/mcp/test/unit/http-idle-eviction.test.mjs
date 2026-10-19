@@ -10,9 +10,10 @@
 // boundary (the clock starts at 0; sweeps fire at SWEEP, 2*SWEEP, ...).
 //
 // Sessions are established over a real loopback http server, like
-// http-resolver.test.mjs. Eviction is observed as a 400 ("no valid session ID")
+// http-resolver.test.mjs. Eviction is observed as a 404 ("Session not found")
 // on a later non-init request replaying the evicted session id; an active
-// session's request is NOT a 400.
+// session's request is NOT a 404. 404 is what the MCP spec mandates for an
+// unknown session id: it makes the client re-initialize instead of failing.
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 
@@ -132,7 +133,7 @@ test("idle session is evicted by the sweep; an active session is retained", asyn
       { "mcp-session-id": b.sessionId },
       { jsonrpc: "2.0", method: "ping", id: 5 },
     );
-    assert.notEqual(touchB.statusCode, 400, "B alive right before the sweep");
+    assert.notEqual(touchB.statusCode, 404, "B alive right before the sweep");
 
     // Land EXACTLY on the sweep boundary (clock = SWEEP). Inside the sweep
     // Date.now() == SWEEP, so:
@@ -142,13 +143,13 @@ test("idle session is evicted by the sweep; an active session is retained", asyn
     await settle();
 
     // OBSERVABLE EFFECT 1 — A evicted: replaying its session id on a non-init
-    // request is now treated as unknown (400, no valid session).
+    // request is now treated as unknown (404, session not found).
     const aAfter = await lb.call(
       { "mcp-session-id": a.sessionId },
       { jsonrpc: "2.0", method: "ping", id: 10 },
     );
-    assert.equal(aAfter.statusCode, 400, "evicted session id is unknown -> 400");
-    assert.match(aAfter.body, /no valid session ID/);
+    assert.equal(aAfter.statusCode, 404, "evicted session id is unknown -> 404");
+    assert.match(aAfter.body, /Session not found/);
 
     // OBSERVABLE EFFECT 2 — B retained: a subsequent request on its session id
     // is routed to the live transport, NOT rejected as an unknown session.
@@ -158,8 +159,8 @@ test("idle session is evicted by the sweep; an active session is retained", asyn
     );
     assert.notEqual(
       bAfter.statusCode,
-      400,
-      "active session must survive the sweep (not 400)",
+      404,
+      "active session must survive the sweep (not 404)",
     );
   } finally {
     await lb.close();
@@ -170,7 +171,7 @@ test("idle session is evicted by the sweep; an active session is retained", asyn
 test("a session left idle past the TTL is dropped so its id becomes unknown", async () => {
   // Simplest single-session eviction: establish a session, let it go idle past
   // the TTL, fire the sweep on its boundary, and confirm its id is now unknown
-  // (400). Pins the core "lastSeen older than TTL -> closed and dropped" path.
+  // (404). Pins the core "lastSeen older than TTL -> closed and dropped" path.
   const idleMs = 1000;
   const restore = withMockedTimers(idleMs);
 
@@ -194,8 +195,8 @@ test("a session left idle past the TTL is dropped so its id becomes unknown", as
       { "mcp-session-id": s.sessionId },
       { jsonrpc: "2.0", method: "ping", id: 30 },
     );
-    assert.equal(after.statusCode, 400, "idle session id is unknown -> 400");
-    assert.match(after.body, /no valid session ID/);
+    assert.equal(after.statusCode, 404, "idle session id is unknown -> 404");
+    assert.match(after.body, /Session not found/);
   } finally {
     await lb.close();
     restore();
@@ -229,7 +230,7 @@ test("activity refreshes lastSeen so a busy session is never evicted", async () 
       { "mcp-session-id": s.sessionId },
       { jsonrpc: "2.0", method: "ping", id: 40 },
     );
-    assert.notEqual(touch.statusCode, 400, "session still alive before sweep");
+    assert.notEqual(touch.statusCode, 404, "session still alive before sweep");
 
     // Land exactly on the sweep boundary: idle = SWEEP - (SWEEP-1) = 1ms < TTL,
     // so the busy session is retained.
@@ -242,7 +243,7 @@ test("activity refreshes lastSeen so a busy session is never evicted", async () 
     );
     assert.notEqual(
       after.statusCode,
-      400,
+      404,
       "a session touched just before the sweep must not be evicted",
     );
   } finally {
