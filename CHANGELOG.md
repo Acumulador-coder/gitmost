@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server has dropped (idle for 30 minutes, or opened before a restart) now gets `404 Session not
   found`, as the MCP spec requires, so the client opens a new session. It used to get `400`, and
   clients such as ZeroClaw then failed every tool call until restarted.
+- Search answers about half a second sooner, and AI requests no longer stall the server: a stored
+  provider API key is decrypted once per process instead of on every request (each decryption
+  blocked the server for ~120 ms, up to three per search), and the semantic-search coverage numbers are
+  refreshed in the background instead of making a search wait for them.
 
 ## [1.0.1] - 2026-10-12
 

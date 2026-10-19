@@ -20,9 +20,19 @@ const KEY_LENGTH = 32; // 256-bit key for aes-256-gcm
  * derived from APP_SECRET via scrypt using a per-record random salt, so two
  * encryptions of the same plaintext produce different blobs. The output layout
  * is base64( salt | iv | authTag | ciphertext ).
+ *
+ * Decryptions are memoized by blob: scryptSync blocks the event loop for
+ * ~120 ms per call, and every AI request (search included) resolves up to three
+ * keys. A blob never changes — a re-entered key is a new blob — so each
+ * key-sized one is derived once per process.
  */
 @Injectable()
 export class SecretBoxService {
+  private static readonly MAX_DECRYPTED = 64;
+  private static readonly MAX_CACHED_BLOB_CHARS = 4096;
+  // blob -> plaintext, in insertion order; the oldest entry goes first at the cap.
+  private readonly decrypted = new Map<string, string>();
+
   constructor(private readonly environmentService: EnvironmentService) {}
 
   private deriveKey(salt: Buffer): Buffer {
@@ -49,6 +59,21 @@ export class SecretBoxService {
   }
 
   decryptSecret(blob: string): string {
+    const known = this.decrypted.get(blob);
+    if (known !== undefined) return known;
+
+    const plain = this.decryptUncached(blob);
+    // Byte budget: only key-sized blobs are kept; a large one (an external MCP
+    // server's header set) is decrypted on every call.
+    if (blob.length > SecretBoxService.MAX_CACHED_BLOB_CHARS) return plain;
+    if (this.decrypted.size >= SecretBoxService.MAX_DECRYPTED) {
+      this.decrypted.delete(this.decrypted.keys().next().value);
+    }
+    this.decrypted.set(blob, plain);
+    return plain;
+  }
+
+  private decryptUncached(blob: string): string {
     try {
       const data = Buffer.from(blob, 'base64');
 
