@@ -51,8 +51,8 @@ export function createMcpHttpHandler(
   // initialize. A later request for that session whose key differs is rejected.
   const sessionIdentity: Record<string, string> = {};
 
-  // Write a JSON-RPC error and end the response. Used for the 400/401 paths so
-  // every early rejection is a well-formed JSON-RPC error, not a torn response.
+  // Write a JSON-RPC error and end the response. Used for the 400/401/404 paths
+  // so every early rejection is a well-formed JSON-RPC error, not a torn response.
   const sendJsonRpcError = (
     res: ServerResponse,
     statusCode: number,
@@ -102,10 +102,18 @@ export function createMcpHttpHandler(
     const method = (req.method || "GET").toUpperCase();
     let transport = sessionId ? transports[sessionId] : undefined;
 
+    // A session id we do not hold was evicted as idle or predates a restart.
+    // The MCP spec requires 404 here: it is the signal that makes a client
+    // re-initialize, while a 400 leaves it failing every call on the dead id.
+    if (sessionId && !transport) {
+      sendJsonRpcError(res, 404, -32001, "Session not found");
+      return;
+    }
+
     if (method === "POST" && !transport) {
       // A new session may only be created by an initialize request without a
       // session id.
-      if (sessionId || !isInitializeRequest(parsedBody)) {
+      if (!isInitializeRequest(parsedBody)) {
         sendJsonRpcError(
           res,
           400,
