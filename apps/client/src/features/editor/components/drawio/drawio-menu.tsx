@@ -22,9 +22,11 @@ import {
   IconLayoutAlignLeft,
   IconLayoutAlignRight,
   IconDownload,
+  IconZoomIn,
   IconEdit,
   IconTrash,
 } from "@tabler/icons-react";
+import { useSetAtom } from "jotai";
 import { useTranslation } from "react-i18next";
 import { getDrawioUrl, getFileUrl, isDrawioRasterEnabled } from "@/lib/config.ts";
 import {
@@ -38,6 +40,7 @@ import { decodeBase64ToSvgString } from "@/lib/utils";
 import { modals } from "@mantine/modals";
 import { useAltTextControl } from "@/features/editor/components/common/use-alt-text-control.tsx";
 import { useDrawioRasterSave } from "./use-drawio-raster-save.ts";
+import { lightboxRequestAtom } from "@/features/editor/atoms/editor-atoms";
 import classes from "../common/toolbar-menu.module.css";
 
 // The write target captured at the START of a save so the eventual node write
@@ -47,6 +50,7 @@ type DrawioMenuTarget = { pos: number | null; attachmentId: string | undefined }
 
 export function DrawioMenu({ editor }: EditorMenuProps) {
   const { t } = useTranslation();
+  const setLightboxRequest = useSetAtom(lightboxRequestAtom);
   const [opened, { open, close }] = useDisclosure(false);
   const [initialXML, setInitialXML] = useState<string>("");
   const drawioRef = useRef<DrawIoEmbedRef>(null);
@@ -405,6 +409,23 @@ export function DrawioMenu({ editor }: EditorMenuProps) {
           {altTextButton}
 
           <div className={classes.divider} />
+
+        <Tooltip position="top" label={t("Expand")} withinPortal={false}>
+          <ActionIcon
+            onClick={() =>
+              editorState?.src &&
+              setLightboxRequest({
+                src: getFileUrl(editorState.src),
+                type: "image",
+              })
+            }
+            size="lg"
+            aria-label={t("Expand")}
+            variant="subtle"
+          >
+            <IconZoomIn size={18} />
+          </ActionIcon>
+        </Tooltip>
 
           <Tooltip position="top" label={t("Edit")} withinPortal={false}>
             <ActionIcon

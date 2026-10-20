@@ -14,15 +14,19 @@ import {
   IconLayoutAlignLeft,
   IconLayoutAlignRight,
   IconDownload,
+  IconZoomIn,
   IconTrash,
 } from "@tabler/icons-react";
+import { useSetAtom } from "jotai";
 import { useTranslation } from "react-i18next";
 import { getFileUrl } from "@/lib/config.ts";
 import { useAltTextControl } from "@/features/editor/components/common/use-alt-text-control.tsx";
+import { lightboxRequestAtom } from "@/features/editor/atoms/editor-atoms";
 import classes from "../common/toolbar-menu.module.css";
 
 export function VideoMenu({ editor }: EditorMenuProps) {
   const { t } = useTranslation();
+  const setLightboxRequest = useSetAtom(lightboxRequestAtom);
 
   const editorState = useEditorState({
     editor,
@@ -189,6 +193,23 @@ export function VideoMenu({ editor }: EditorMenuProps) {
         {altTextButton}
 
         <div className={classes.divider} />
+
+        <Tooltip position="top" label={t("Expand")} withinPortal={false}>
+          <ActionIcon
+            onClick={() =>
+              editorState?.src &&
+              setLightboxRequest({
+                src: getFileUrl(editorState.src),
+                type: "video",
+              })
+            }
+            size="lg"
+            aria-label={t("Expand")}
+            variant="subtle"
+          >
+            <IconZoomIn size={18} />
+          </ActionIcon>
+        </Tooltip>
 
         <Tooltip position="top" label={t("Download")} withinPortal={false}>
           <ActionIcon

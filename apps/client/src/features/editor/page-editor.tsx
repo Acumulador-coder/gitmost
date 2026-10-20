@@ -28,6 +28,7 @@ import {
   collabProviderAtom,
   currentPageEditModeAtom,
   dictationAvailabilityAtom,
+  lightboxRequestAtom,
   pageEditorAtom,
   yjsConnectionStatusAtom,
 } from "@/features/editor/atoms/editor-atoms";
@@ -56,6 +57,9 @@ import {
 } from "@/features/editor/components/common/editor-paste-handler.tsx";
 import ExcalidrawMenu from "./components/excalidraw/excalidraw-menu-lazy";
 import DrawioMenu from "./components/drawio/drawio-menu-lazy";
+import LightboxView, {
+  getLightboxClickRequest,
+} from "@/features/editor/components/common/lightbox-view";
 import { useCollabToken } from "@/features/auth/queries/auth-query.tsx";
 import SearchAndReplaceDialog from "@/features/editor/components/search-and-replace/search-and-replace-dialog.tsx";
 import { useDocumentVisibility } from "@mantine/hooks";
@@ -244,6 +248,7 @@ export default function PageEditor({
   const { pageSlug } = useParams();
   const slugId = extractPageSlugId(pageSlug);
   const currentPageEditMode = useAtomValue(currentPageEditModeAtom);
+  const [lightboxRequest, setLightboxRequest] = useAtom(lightboxRequestAtom);
   const setDictationAvailability = useSetAtom(dictationAvailabilityAtom);
   const canScroll = useCallback(
     () => Boolean(isComponentMounted.current && editorRef.current),
@@ -419,6 +424,22 @@ export default function PageEditor({
           if (!editorRef.current) return false;
 
           return handleFileDrop(editorRef.current, event, moved, pageId);
+        },
+        handleClickOn: (view, _pos, node) => {
+          if (view.editable) return false;
+
+          const request = getLightboxClickRequest(node);
+          if (!request) return false;
+
+          setLightboxRequest(request);
+          return true;
+        },
+        handleDoubleClickOn: (_view, _pos, node) => {
+          const request = getLightboxClickRequest(node);
+          if (!request) return false;
+
+          setLightboxRequest(request);
+          return true;
         },
       },
       onCreate({ editor }) {
@@ -943,6 +964,16 @@ export default function PageEditor({
                 {connectingBadge}
                 <div ref={menuContainerRef}>
                   <EditorContent editor={editor} />
+
+                  {editor && (
+                    <LightboxView
+                      editor={editor}
+                      open={!!lightboxRequest}
+                      src={lightboxRequest?.src ?? ""}
+                      type={lightboxRequest?.type ?? "image"}
+                      onClose={() => setLightboxRequest(null)}
+                    />
+                  )}
 
                   <CommentHoverPreview
                     pageId={pageId}

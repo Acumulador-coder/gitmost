@@ -1,5 +1,6 @@
 import "@/features/editor/styles/index.css";
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Editor } from "@tiptap/react";
 import { EditorProvider } from "@tiptap/react";
 import { mainExtensions } from "@/features/editor/extensions/extensions";
 import { Document } from "@tiptap/extension-document";
@@ -7,9 +8,12 @@ import { Heading, UniqueID } from "@docmost/editor-ext";
 import { Text } from "@tiptap/extension-text";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { useAtom } from "jotai";
-import { readOnlyEditorAtom } from "@/features/editor/atoms/editor-atoms.ts";
+import { lightboxRequestAtom, readOnlyEditorAtom } from "@/features/editor/atoms/editor-atoms.ts";
 import { useEditorScroll } from "./hooks/use-editor-scroll";
 import { TransclusionLookupProvider } from "@/features/editor/components/transclusion/transclusion-lookup-context";
+import LightboxView, {
+  getLightboxClickRequest,
+} from "@/features/editor/components/common/lightbox-view";
 
 interface PageEditorProps {
   title: string;
@@ -31,6 +35,8 @@ export default function ReadonlyPageEditor({
   shareId,
 }: PageEditorProps) {
   const [, setReadOnlyEditor] = useAtom(readOnlyEditorAtom);
+  const [lightboxRequest, setLightboxRequest] = useAtom(lightboxRequestAtom);
+  const [contentEditor, setContentEditor] = useState<Editor | null>(null);
   const isComponentMounted = useRef(false);
   const editorCreated = useRef(false);
 
@@ -96,6 +102,15 @@ export default function ReadonlyPageEditor({
         immediatelyRender={true}
         extensions={extensions}
         content={content}
+        editorProps={{
+          handleClickOn: (_view, _pos, node) => {
+            const request = getLightboxClickRequest(node);
+            if (!request) return false;
+
+            setLightboxRequest(request);
+            return true;
+          },
+        }}
         onCreate={({ editor }) => {
           if (editor) {
             if (pageId) {
@@ -104,12 +119,22 @@ export default function ReadonlyPageEditor({
             }
             // @ts-ignore
             setReadOnlyEditor(editor);
+            setContentEditor(editor);
 
             handleScrollTo(editor);
             editorCreated.current = true;
           }
         }}
       ></EditorProvider>
+      {contentEditor && (
+        <LightboxView
+          editor={contentEditor}
+          open={!!lightboxRequest}
+          src={lightboxRequest?.src ?? ""}
+          type={lightboxRequest?.type ?? "image"}
+          onClose={() => setLightboxRequest(null)}
+        />
+      )}
       <div style={{ paddingBottom: "20vh" }}></div>
     </TransclusionLookupProvider>
   );
