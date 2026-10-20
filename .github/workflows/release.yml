@@ -16,6 +16,8 @@ permissions:
 
 env:
   VERSION: ${{ inputs.version || github.ref_name }}
+  # Fallback only: GHCR rejects mixed-case names, so the build/release jobs
+  # override this from $GITHUB_REPOSITORY_OWNER (lowercased) in their first step.
   IMAGE: ghcr.io/${{ github.repository_owner }}/gitmost
   AI_AGENT_ROLES_CATALOG_URL: https://raw.githubusercontent.com/vvzvlad/gitmost/main/agent-roles-catalog
 
@@ -37,6 +39,8 @@ jobs:
             suffix: arm64
     runs-on: ${{ matrix.runner }}
     steps:
+      - name: Normalize image name for GHCR (lowercase)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/gitmost" >> "$GITHUB_ENV"
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -109,6 +113,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Normalize image name for GHCR (lowercase)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/gitmost" >> "$GITHUB_ENV"
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
