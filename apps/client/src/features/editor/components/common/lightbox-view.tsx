@@ -114,7 +114,7 @@ export default function LightboxView({
 
   const selectedSlide = useMemo(
     () => getMedia(src, type),
-    [src, type, i18nInstance.language]
+    [src, type, i18nInstance?.language]
   );
 
   const [pageSlides, setPageSlides] = useState<Slide[]>([]);
